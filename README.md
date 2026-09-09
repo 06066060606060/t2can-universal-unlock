@@ -6,21 +6,10 @@
 
 ---
 
-## T2CAN Universal Unlock v3.1 by LP_YL
+# T2CAN Universal Unlock v3.1 by LP_YL
 
 **Major Universal Release**  
 **Release date:** September 2026
-
-# What changed from v3.0  
-• Added Party + Chassis support for Standard Model 3/Y  
-• Added Nag Killer support on Standard 3/Y using Party + Chassis  
-• Added optional Pause NAG at 0 km/h — default OFF  
-• Added proper Pedal Map / Acceleration Mode Toggle routing for Standard 3/Y on Body + Chassis  
-• S3XY Acceleration Mode Toggle is now hidden/blocked when Pedal Map is unavailable  
-• Added topology-aware feature gating for Advanced EAP, Body controls, NAG and EU Unlock  
-• Improved CAN routing and recovery handling across YL / Body+Chassis / Party+Chassis  
-• Simplified the Vehicle Setup UI and removed the redundant setup summary  
-
 
 ## Release Highlights  
 
@@ -39,6 +28,8 @@
 - **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB.
 - **Configurable Wi-Fi AP**, tiered reset behavior, and expanded CAN/BLE diagnostics.
 - **Stronger CAN recovery safety** through the new TX recovery barrier / epoch model.
+- **Added optional Pause NAG at 0 km/h** — default OFF   
+- **Added topology-aware feature gating** for Advanced EAP, Body controls, NAG and EU Unlock  
 
 ---
 
