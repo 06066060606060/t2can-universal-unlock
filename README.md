@@ -1,7 +1,8 @@
 # ⚠️ IMPORTANT UPGRADE WARNING
 
-> **UPGRADING FROM THE PRE-UNIVERSAL v2.x FIRMWARE TO T2CAN UNIVERSAL v3.0 ERASES ALL PREVIOUSLY STORED NVS SETTINGS AND CONFIGURATION.**
-> Until a valid Vehicle Profile is selected, **CAN TX, CAN injection, the CAN recovery supervisor, and Bluetooth remain disabled**. Only the Wi-Fi/Web Profile Setup interface is available.
+> **UPGRADING FROM THE PRE-UNIVERSAL v2.x FIRMWARE TO T2CAN UNIVERSAL v3.0 ERASES ALL PREVIOUSLY STORED NVS SETTINGS AND CONFIGURATION.**  
+> Until a valid Vehicle Profile is selected, **CAN TX, CAN injection, the CAN recovery supervisor, and Bluetooth remain disabled**.
+>  Only the Wi-Fi/Web Profile Setup interface is available.    
 
 ---
 
@@ -10,18 +11,18 @@
 **Major Universal Release**  
 **Release date:** September 2026
 
-# What changed from v3.0
-• Added Party + Chassis support for Standard Model 3/Y
-• Added Nag Killer support on Standard 3/Y using Party + Chassis
-• Added optional Pause NAG at 0 km/h — default OFF
-• Added proper Pedal Map / Acceleration Mode Toggle routing for Standard 3/Y on Body + Chassis
-• S3XY Acceleration Mode Toggle is now hidden/blocked when Pedal Map is unavailable
-• Added topology-aware feature gating for Advanced EAP, Body controls, NAG and EU Unlock
-• Improved CAN routing and recovery handling across YL / Body+Chassis / Party+Chassis
-• Simplified the Vehicle Setup UI and removed the redundant setup summary
+# What changed from v3.0  
+• Added Party + Chassis support for Standard Model 3/Y  
+• Added Nag Killer support on Standard 3/Y using Party + Chassis  
+• Added optional Pause NAG at 0 km/h — default OFF  
+• Added proper Pedal Map / Acceleration Mode Toggle routing for Standard 3/Y on Body + Chassis  
+• S3XY Acceleration Mode Toggle is now hidden/blocked when Pedal Map is unavailable  
+• Added topology-aware feature gating for Advanced EAP, Body controls, NAG and EU Unlock  
+• Improved CAN routing and recovery handling across YL / Body+Chassis / Party+Chassis  
+• Simplified the Vehicle Setup UI and removed the redundant setup summary  
 
 
-## Release Highlights
+## Release Highlights  
 
 - **One Universal firmware** supporting five Model 3/Y vehicle profiles.
 - **Two CAN topology** Body + Chassis or Party + Chassis.
