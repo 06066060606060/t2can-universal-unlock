@@ -12,7 +12,7 @@
 
 **Major Universal Release**  
 **Release date:** September 2026
-- 
+**code entirely rewritten by LP_YL**
 
 ## 📋 Release Highlights  
 
