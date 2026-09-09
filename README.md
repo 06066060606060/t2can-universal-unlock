@@ -1,17 +1,20 @@
-# ⚠️ IMPORTANT UPGRADE WARNING
+> ⚠️ **Research / educational firmware only**
+>
+> This project interacts with a Tesla vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.
+>
+> It sends signals directly to the controller, not a physical command to the steering wheel. **Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk.**
+>
+> You are responsible for your own testing, wiring, configuration, and compliance with local laws.
 
-> **UPGRADING FROM THE PRE-UNIVERSAL v2.x FIRMWARE TO T2CAN UNIVERSAL v3.0 ERASES ALL PREVIOUSLY STORED NVS SETTINGS AND CONFIGURATION.**  
-> Until a valid Vehicle Profile is selected, **CAN TX, CAN injection, the CAN recovery supervisor, and Bluetooth remain disabled**.
->  Only the Wi-Fi/Web Profile Setup interface is available.    
-
----
+--- 
 
 # T2CAN Universal Unlock v3.1 by LP_YL
 
 **Major Universal Release**  
 **Release date:** September 2026
+- 
 
-## Release Highlights  
+## 📋 Release Highlights  
 
 - **One Universal firmware** supporting five Model 3/Y vehicle profiles.
 - **Two CAN topology** Body + Chassis or Party + Chassis.
@@ -33,8 +36,7 @@
 
 ---
 
-# 1. Universal Vehicle Architecture
-
+# 🚙 1. Universal Vehicle Architecture
 
 ### Universal v3.0
 Universal v3.0 replaces both separate branches with a persistent **Vehicle Profile** system.
@@ -49,7 +51,7 @@ The selected profile determines:
 - TLSSC Restore capability.
 - Profile-specific safety restrictions.
 
-## Supported Profiles
+## ✅ Supported Profiles
 
 | Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
 |---|:---:|:---:|:---:|:---:|
@@ -61,7 +63,7 @@ Model 3 Highland requires the user to select the physically installed turn-contr
 
 ---
 
-# 2. Safe Profile Setup and Migration
+# 🔧 2. Safe Profile Setup and Migration
 
 Universal v3.0 adds a fail-closed setup state for first boot and major migration.
 
@@ -79,7 +81,7 @@ The one-time migration from the pre-Universal v2.x architecture intentionally pe
 
 ---
 
-# 3. CAN Runtime Safety and Recovery
+# 🛠️ 3. CAN Runtime Safety and Recovery
 
 Universal v3.0 introduces a stricter **CAN TX Recovery Barrier / Epoch Model**.
 
