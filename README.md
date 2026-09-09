@@ -60,23 +60,11 @@ The selected profile determines:
 
 ## Supported Profiles
 
-**Model 3/Y · Body + Chassis**
-X NAG Killer
-/ Advanced EAP
-/ Pedal Map
-/ EU Unlock
-
-**Model 3/Y · Party + Chassis**
-/ NAG Killer
-X Advanced EAP
-X Pedal Map
-/ EU Unlock
-
-**Model YL · Party + VH**
-/ NAG Killer
-/ Advanced EAP
-/ Pedal Map
-/ EU Unlock
+| Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
+|---|:---:|:---:|:---:|:---:|
+| **YL · Party + VH** | ✅ | ✅ | ✅ | ✅ |
+| **Standard 3/Y · Body + Chassis** | ❌ | ✅ | ✅ | ✅ |
+| **Standard 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
 
 Model 3 Highland requires the user to select the physically installed turn-control type during profile setup. Other profiles resolve to Stalk automatically.
 
