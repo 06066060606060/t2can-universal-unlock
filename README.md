@@ -403,7 +403,7 @@ The main dashboard branding remains:
 
 # 11. Configurable Wi-Fi
 
-Universal v3.0 adds persistent Wi-Fi AP configuration.
+Universal v3.0 adds persistent Wi-Fi AP configuration.  
 Default:
 - SSID: T2CAN-****
 - Password: 12345678
