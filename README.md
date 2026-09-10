@@ -16,8 +16,11 @@
 
 ## 📋 Release Highlights  
 
-- **One Universal firmware** supporting five Model 3/Y vehicle profiles.
-- **Two CAN topology** Body + Chassis or Party + Chassis.
+- **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
+- **multiple operating modes:**  
+  - Nag-killer + Eu-Unlock  
+  - Advanced EAP + Eu-Unlock 
+  - Nag-killer + Advanced EAP + Eu-Unlock (Model YL only)
 - **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.
 - **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.
 - **Runtime Bluetooth Master ON/OFF without MCU reboot**, while preserving saved devices, bonds, mappings, and Auto Connect settings.
@@ -33,6 +36,26 @@
 - **Stronger CAN recovery safety** through the new TX recovery barrier / epoch model.
 - **Added optional Pause NAG at 0 km/h** — default OFF   
 - **Added topology-aware feature gating** for Advanced EAP, Body controls, NAG and EU Unlock  
+
+**Advanced EAP**
+- Automatically activates the turn signal.
+- Delay can be configured from the dashboard.
+- All lane-change safety features are maintained.
+- The turn signal starts only when the vehicle requests a lane change.
+- Lane changes can always be cancelled: On screen, using the open-door button or using s3xy button.
+
+**EU Unlock**
+- Bypass R79 EU restriction in AP.
+- Expand Summon range to ±85 m.
+- Expanded lateral acceleration limits.  
+- Lane changes near forks are not disabled (EAP).  
+- Instantaneous lane change on blinker (EAP).  
+- No lane-change timeout once initiated (EAP).  
+- Automatically takes forks and exits (EAP).  
+- Toggle to activate TLSSC (EAP).  
+
+**NAG-Killer**
+- eliminate the "hands on the wheel" prompt while using Autopilot/FSD*
 
 ---
 
