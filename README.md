@@ -13,6 +13,7 @@
 **Major Universal Release**  
 **Release date:** September 2026  
 **code entirely rewritten by LP_YL**  
+**[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
 ## 📋 Release Highlights  
 
