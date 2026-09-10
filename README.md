@@ -431,27 +431,14 @@ Erases all stored configuration and returns T-2CAN to Vehicle Profile Setup Mode
 
 ---
 
+### ⚠️ Important: 120 Ω resistors
 
-## What Changed from Advanced EAP & EU-Unlock V2.6.0 for T-2Can
+Don't forget to remove the two **120-ohm resistors**, as they can cause signal errors.
 
-For users upgrading from **Advanced EAP & EU-Unlock V2.6.0 for T-2Can**, the largest changes are:
-
-1. Separate Standard 3/Y firmware is replaced by the Universal Vehicle Profile system.
-2. Manual Auto Blinker Stalk / Stalkless transport selection moves into the Vehicle Profile.
-3. Model 3 Highland explicitly supports either Stalk or Stalkless hardware configuration.
-4. Direct S3XY Bluetooth is entirely new.
-5. Up to 3 S3XY Buttons can be registered.
-6. Runtime Bluetooth Master ON/OFF no longer requires reboot.
-7. Blind Spot configuration moves into LAB research tooling.
-8. ACC Follow Distance research control is new.
-9. R79 is restructured into an independent engine.
-10. TLSSC gains optional Highway / Controlled-Access OFF logic.
-11. TLSSC Restore gains explicit profile capability checks and the Banned Car safety gate.
-12. CAN Research Capture is new.
-13. The dashboard, wireless configuration, reset architecture, and CAN/BLE diagnostics are substantially expanded.
-14. CAN recovery now invalidates stale authorization and reusable transient state across recovery epochs.
+<img width="407" height="180" alt="LILYGO-T-2CAN_9" src="https://github.com/user-attachments/assets/0d272b7e-bd82-408f-9ca1-239e6dab44d5" />
 
 ---
+
 
 ## Source Basis and Scope
 
