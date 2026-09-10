@@ -412,6 +412,7 @@ Universal v3.0 adds persistent Wi-Fi AP configuration.
 Default:
 - SSID: T2CAN-****
 - Password: 12345678
+- dashboard: http://192.168.4.1  
 
 Users can change:
 
