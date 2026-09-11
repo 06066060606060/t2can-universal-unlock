@@ -8,18 +8,27 @@ enum ResearchAlcTransitionKind : uint8_t {
   RESEARCH_ALC_OPEN = 2
 };
 
-// LEFT research event semantics: state 7 means RIGHT-only in the legacy/YL
-// mapping under study; a transition to 6 (LEFT-only) or 8 (BOTH) opens LEFT.
+// LEFT research event semantics: LEFT is planner-available only in
+// ALC_AVAILABLE_ONLY_L (6) or ALC_AVAILABLE_BOTH (8). Every other valid
+// DAS_autoLaneChangeState is treated as LEFT blocked/unavailable for research.
+// This intentionally captures explicit reasons such as LANE_TYPE_LEFT (26),
+// SIDE_OBSTACLE_PRESENT_L (15), POOR_VIEW_RANGE (17), NO_LANES (1), etc.
+static inline bool researchAlcLeftOpenPure(uint8_t alc) {
+  return alc == 6 || alc == 8;
+}
+
 static inline ResearchAlcTransitionKind researchAlcTransitionKindPure(uint8_t previousAlc, uint8_t currentAlc) {
-  if (previousAlc == 7 && (currentAlc == 6 || currentAlc == 8)) return RESEARCH_ALC_OPEN;
-  if ((previousAlc == 6 || previousAlc == 8) && currentAlc == 7) return RESEARCH_ALC_CLOSE;
+  const bool wasOpen = researchAlcLeftOpenPure(previousAlc);
+  const bool isOpen = researchAlcLeftOpenPure(currentAlc);
+  if (wasOpen && !isOpen) return RESEARCH_ALC_CLOSE;
+  if (!wasOpen && isOpen) return RESEARCH_ALC_OPEN;
   return RESEARCH_ALC_NONE;
 }
 
 // AUTO ALC persistence filter. `stableAlc` is the last committed planner state.
 // A candidate LEFT open/close transition must remain semantically open/closed
-// for persistenceMs before it is emitted. 6 <-> 8 changes keep the same OPEN
-// candidate and therefore do not restart the timer.
+// for persistenceMs before it is emitted. Changes within the same semantic
+// class (for example BLOCKED 26 -> 15 or OPEN 8 -> 6) do not restart the timer.
 struct ResearchAlcPersistenceState {
   uint8_t stableAlc;
   uint8_t candidateKind;

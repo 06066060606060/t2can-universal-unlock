@@ -1,4 +1,4 @@
-// T2CAN Universal v3.1 hotfix - Model 3/Y firmware
+// T2CAN Universal v3.2 hotfix - Model 3/Y firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -31,7 +31,7 @@
 #include "can_research_capture_pure.h"
 #include "runtime_gate_pure.h"
 
-#define FW_VERSION "v3.1 hotfix"
+#define FW_VERSION "v3.2 hotfix"
 
 #include "t2can_core_state.h"
 #include "t2can_forward.h"

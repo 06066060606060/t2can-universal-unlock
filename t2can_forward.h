@@ -132,7 +132,7 @@ static inline uint8_t readDASState4(const uint8_t *data);
 static inline uint8_t readDASAutoLaneChangeState(const uint8_t *data);
 static bool r79LabApGateOpen(uint32_t now);
 static bool autoBlinkerNOAGateOpen(uint32_t now, uint32_t* ageOut);
-static bool autoBlinkerALCAllowsDirection(uint8_t reqDir, uint8_t *alcOut);
+static bool autoBlinkerALCAllowsDirection(uint8_t reqDir, uint32_t now, uint8_t *alcOut);
 static uint8_t autoBlinkerEligibleRequestDir(uint32_t now, uint8_t *alcOut);
 static void ulcSnoozeSetResult(const char *text, uint8_t dir, bool accepted);
 static bool ulcSnoozeRequestActive(uint32_t now);

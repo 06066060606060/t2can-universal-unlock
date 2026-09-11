@@ -115,7 +115,7 @@ static volatile uint32_t runtimeStatsResetCount = 0;
 static volatile uint32_t runtimeStatsLastResetMs = 0;
 RTC_DATA_ATTR uint32_t rtcBootCount = 0;
 static Preferences prefs;
-// v3.1 hotfix top-level feature switches loaded before CAN/BLE runtime starts.
+// v3.2 hotfix top-level feature switches loaded before CAN/BLE runtime starts.
 static volatile bool labMenuEnabled = false;
 static volatile bool bannedCar = false;
 static volatile bool tlsscRestoreEnabled = false;

@@ -157,8 +157,9 @@ static bool r79LabApplySelectedBits(uint8_t *data) {
   setBit(data, R79LAB_APPLY_ECE_BIT, R79_POLICY_APPLY_ECE_VALUE);
   setBit(data, R79LAB_HARD_CORE_SUMMON_BIT, R79_POLICY_HARD_CORE_VALUE);
 
-  // bit18 remains experimental and is the only user-selectable R79 bit.
-  if (smartMode != R79LAB_STOCK) {
+  // bit18 remains experimental and LAB-only. Fixed production bit19/47 policy
+  // continues to run even when the LAB menu is disabled.
+  if (r79SmartOverrideActivePure(labMenuEnabled, smartMode)) {
     setBit(data, R79LAB_SMART_SUMMON_CANDIDATE_BIT, smartMode == R79LAB_FORCE_1);
   }
   return true;
@@ -373,6 +374,23 @@ static volatile uint32_t doorCancelAccepted = 0;
 static volatile uint32_t doorCancelBlocked = 0;
 
 
+// 0x238 UI_driverAssistMapData road-context telemetry (VH/Chassis CAN).
+// Public Tesla DBC layout is used as a reference interpretation and is monitored
+// independently from the existing ALC geometry investigation.
+static portMUX_TYPE roadContextMux = portMUX_INITIALIZER_UNLOCKED;
+static constexpr uint32_t ROAD_CONTEXT_FRESH_MS = 2000;
+static volatile bool roadContextValid = false;
+static volatile uint8_t roadContextRoadClass = 0;
+static volatile bool roadContextGpsRoadMatch = false;
+static volatile bool roadContextNavRouteActive = false;
+static volatile bool roadContextControlledAccess = false;
+static volatile bool roadContextLeftOffRamp = false;
+static volatile bool roadContextRightOffRamp = false;
+static volatile uint32_t roadContextLastRxMs = 0;
+static TlsscHighwayHysteresisPure tlsscHighwayHysteresis = {};
+static volatile uint32_t tlsscHighwayGateBlockedCount = 0;
+static volatile uint32_t tlsscHighwayTransitions = 0;
+
 // Auto blinker state.
 static volatile bool blinkAEnabled = false;
 static volatile uint8_t activeTurn = STALK_IDLE;
@@ -395,14 +413,13 @@ static volatile uint8_t visualBehaviorType = 0;
 static volatile uint32_t visualDebugRxCount = 0;
 static volatile uint32_t visualDebugLastMs = 0;
 
-// Auto Blinker requires the current 0x24A planner request to remain fresh
-// through both ARM and FIRE. 0x399 ALC availability is also direction-gated:
-//   LEFT  -> ALC_AVAILABLE_ONLY_L (6) or ALC_AVAILABLE_BOTH (8)
-//   RIGHT -> ALC_AVAILABLE_ONLY_R (7) or ALC_AVAILABLE_BOTH (8)
-// ALC_IN_PROGRESS / WAITING / BLOCKED / UNAVAILABLE states are fail-closed.
+// Auto Blinker arms only from a fresh 0x24A LEFT/RIGHT planner request. Once
+// armed, the request is latched through the regulatory delay; a transient
+// behaviorType drop no longer expires the pending action. FIRE still fails
+// closed on NOA loss or ALC direction eligibility.
 static constexpr uint32_t BLINKA_REQUEST_FRESH_MS = 2000;
 
-static bool autoBlinkerALCAllowsDirection(uint8_t reqDir, uint8_t *alcOut = nullptr) {
+static bool autoBlinkerALCAllowsDirection(uint8_t reqDir, uint32_t now, uint8_t *alcOut = nullptr) {
   uint8_t alc;
   bool valid;
   portENTER_CRITICAL(&stateMux);
@@ -412,14 +429,27 @@ static bool autoBlinkerALCAllowsDirection(uint8_t reqDir, uint8_t *alcOut = null
 
   if (alcOut) *alcOut = alc;
   if (!valid) return false;
-  if (reqDir == 1) return (alc == 6 || alc == 8); // LEFT
-  if (reqDir == 2) return (alc == 7 || alc == 8); // RIGHT
-  return false;
+
+  bool roadValid, navRoute, leftOffRamp, rightOffRamp;
+  uint32_t roadLast;
+  portENTER_CRITICAL(&roadContextMux);
+  roadValid = roadContextValid;
+  navRoute = roadContextNavRouteActive;
+  leftOffRamp = roadContextLeftOffRamp;
+  rightOffRamp = roadContextRightOffRamp;
+  roadLast = roadContextLastRxMs;
+  portEXIT_CRITICAL(&roadContextMux);
+  const bool roadFresh = roadValid && roadLast != 0 &&
+                         (uint32_t)(now - roadLast) <= ROAD_CONTEXT_FRESH_MS;
+
+  return autoBlinkerAlcAllowsDirectionPure(reqDir, alc, roadFresh, navRoute,
+                                           leftOffRamp, rightOffRamp);
 }
 
-// Returns the currently eligible LEFT(1)/RIGHT(2) Auto Blinker request.
-// This is the single source of truth for both ARM and delayed FIRE.
-static uint8_t autoBlinkerEligibleRequestDir(uint32_t now, uint8_t *alcOut = nullptr) {
+// Returns the fresh LEFT(1)/RIGHT(2) planner request without applying ALC
+// eligibility. Used to ARM, detect an explicit opposite request, and preserve
+// a pending request across temporary 0x24A IN_LANE/stale gaps.
+static uint8_t autoBlinkerCurrentRequestDir(uint32_t now) {
   if (!activeProfileAdvancedEapSupported()) return 0;
   bool en;
   uint8_t behavior;
@@ -430,16 +460,17 @@ static uint8_t autoBlinkerEligibleRequestDir(uint32_t now, uint8_t *alcOut = nul
   visualLast = visualDebugLastMs;
   portEXIT_CRITICAL(&blinkAMux);
 
-  if (!en) return 0;
-  if (!autoBlinkerNOAGateOpen(now)) return 0;
+  if (!en || !autoBlinkerNOAGateOpen(now)) return 0;
   if (visualLast == 0 || (uint32_t)(now - visualLast) > BLINKA_REQUEST_FRESH_MS) return 0;
+  if (behavior == 2) return 1;
+  if (behavior == 3) return 2;
+  return 0;
+}
 
-  uint8_t reqDir = 0;
-  if (behavior == 2) reqDir = 1;      // LEFT
-  else if (behavior == 3) reqDir = 2; // RIGHT
+static uint8_t autoBlinkerEligibleRequestDir(uint32_t now, uint8_t *alcOut = nullptr) {
+  const uint8_t reqDir = autoBlinkerCurrentRequestDir(now);
   if (reqDir == 0) return 0;
-
-  return autoBlinkerALCAllowsDirection(reqDir, alcOut) ? reqDir : 0;
+  return autoBlinkerALCAllowsDirection(reqDir, now, alcOut) ? reqDir : 0;
 }
 
 // S3XY single-click NOA-cancel gate. A retained/stale 0x24A behaviorType must
@@ -563,32 +594,35 @@ static volatile uint8_t lab3f8LastTxSelectedBlind = LAB3F8_STOCK;
 static volatile bool lab3f8LastTxBlindChanged = false;
 static volatile uint8_t lab3f8LastTxResult = 0; // 0=NONE, 1=QUEUED, 2=FAILED
 static volatile uint32_t lab3f8LastTxMs = 0;
+static volatile bool lab3f8LastTxBit56 = false;
 
-// 0x238 UI_driverAssistMapData road-context telemetry (VH CAN).
-// Public Tesla DBC layout is used as a reference interpretation and is monitored
-// independently from the existing ALC geometry investigation.
-static portMUX_TYPE roadContextMux = portMUX_INITIALIZER_UNLOCKED;
-static constexpr uint32_t ROAD_CONTEXT_FRESH_MS = 2000;
-static volatile bool roadContextValid = false;
-static volatile uint8_t roadContextRoadClass = 0;
-static volatile bool roadContextGpsRoadMatch = false;
-static volatile bool roadContextNavRouteActive = false;
-static volatile bool roadContextControlledAccess = false;
-static volatile bool roadContextLeftOffRamp = false;
-static volatile bool roadContextRightOffRamp = false;
-static volatile uint32_t roadContextLastRxMs = 0;
-static TlsscHighwayHysteresisPure tlsscHighwayHysteresis = {};
-static volatile uint32_t tlsscHighwayGateBlockedCount = 0;
-static volatile uint32_t tlsscHighwayTransitions = 0;
 
 static const char *pedalMapName(uint8_t v) {
   switch (v) { case 0: return "CHILL"; case 1: return "SPORT"; case 2: return "PERFORMANCE"; default: return "UNKNOWN"; }
 }
 static const char *alcStateName(uint8_t v) {
   switch (v) {
+    case 0: return "DISABLED";
+    case 1: return "NO LANES";
+    case 2: return "SONICS INVALID";
+    case 3: return "TP FOLLOW";
+    case 4: return "EXITING HIGHWAY";
+    case 5: return "VEHICLE SPEED";
     case 6: return "AVAILABLE LEFT";
     case 7: return "AVAILABLE RIGHT";
     case 8: return "AVAILABLE BOTH";
+    case 9: return "IN PROGRESS LEFT";
+    case 10: return "IN PROGRESS RIGHT";
+    case 11: return "WAIT SIDE OBST LEFT";
+    case 12: return "WAIT SIDE OBST RIGHT";
+    case 13: return "WAIT FWD OBST LEFT";
+    case 14: return "WAIT FWD OBST RIGHT";
+    case 15: return "SIDE OBSTACLE LEFT";
+    case 16: return "SIDE OBSTACLE RIGHT";
+    case 17: return "POOR VIEW RANGE";
+    case 18: return "LC HEALTH BAD";
+    case 19: return "BLINKER OFF";
+    case 20: return "OTHER ABORT";
     case 21: return "SOLID LANE";
     case 22: return "TTC LEFT";
     case 23: return "TTC+USS LEFT";
@@ -596,7 +630,11 @@ static const char *alcStateName(uint8_t v) {
     case 25: return "TTC+USS RIGHT";
     case 26: return "LANE TYPE LEFT";
     case 27: return "LANE TYPE RIGHT";
-    default: return "OTHER/UNAVAILABLE";
+    case 28: return "WAIT HANDS ON";
+    case 29: return "TIMEOUT";
+    case 30: return "MISSION PLAN INVALID";
+    case 31: return "SNA";
+    default: return "UNKNOWN";
   }
 }
 
@@ -1173,29 +1211,52 @@ static void handle102LaneChangeCancel(const uint8_t *data, uint8_t dlc) {
 }
 
 
-// Arm a delayed trigger when behaviorType becomes LEFT/RIGHT.
+// Arm a delayed trigger when behaviorType becomes LEFT/RIGHT. Once armed, keep
+// the request latched through the regulatory delay. A temporary planner drop to
+// IN_LANE/stale no longer expires it; NOA loss, ALC blocking, or an explicit
+// opposite request still cancels fail-closed.
 static void evaluateAutoBlinker() {
   const uint32_t now = (uint32_t)millis();
-  const uint8_t reqDir = autoBlinkerEligibleRequestDir(now);
+  const uint8_t currentReqDir = autoBlinkerCurrentRequestDir(now);
+  const uint8_t eligibleDir = (currentReqDir != 0 && autoBlinkerALCAllowsDirection(currentReqDir, now))
+                                ? currentReqDir : 0;
+
+  bool armed;
+  uint8_t pending;
+  portENTER_CRITICAL(&blinkAMux);
+  armed = autoArmed;
+  pending = autoPendingDir;
+  portEXIT_CRITICAL(&blinkAMux);
+
+  if (!armed && eligibleDir != 0) {
+    portENTER_CRITICAL(&blinkAMux);
+    if (eligibleDir != lastReqDir && !autoArmed) {
+      autoPendingDir = eligibleDir;
+      autoFireAt = now + blinkADelayMs;
+      autoArmed = true;
+    }
+    lastReqDir = currentReqDir;
+    portEXIT_CRITICAL(&blinkAMux);
+    return;
+  }
+
+  if (armed) {
+    const bool noaOpen = autoBlinkerNOAGateOpen(now);
+    const bool alcAllowed = autoBlinkerALCAllowsDirection(pending, now);
+    const bool cancel = autoBlinkerPendingShouldCancelPure(noaOpen, pending, currentReqDir, alcAllowed);
+    portENTER_CRITICAL(&blinkAMux);
+    if (cancel && autoArmed && autoPendingDir == pending) {
+      autoArmed = false;
+      autoPendingDir = 0;
+      autoFireAt = 0;
+    }
+    lastReqDir = currentReqDir;
+    portEXIT_CRITICAL(&blinkAMux);
+    return;
+  }
 
   portENTER_CRITICAL(&blinkAMux);
-
-  if (reqDir != 0 && reqDir != lastReqDir && !autoArmed) {
-    autoPendingDir = reqDir;
-    autoFireAt = now + blinkADelayMs;
-    autoArmed = true;
-  }
-
-  // Any loss of valid NOA state, 0x24A freshness, direction availability,
-  // or request direction cancels only the pending delayed trigger.
-  // A pulse that has already started keeps its original 350 ms lifetime.
-  if (reqDir == 0) {
-    autoArmed = false;
-    autoPendingDir = 0;
-    autoFireAt = 0;
-  }
-
-  lastReqDir = reqDir;
+  lastReqDir = currentReqDir;
   portEXIT_CRITICAL(&blinkAMux);
 }
 
@@ -1217,26 +1278,28 @@ static void blinkATxTick() {
   const uint32_t txEpoch = canTxEpochSnapshot();
   uint8_t turn = STALK_IDLE;
 
-  // Re-evaluate the full gate immediately before a delayed request is allowed
-  // to fire. This prevents a request armed while ALC was available from
-  // transmitting after the lane becomes blocked/unavailable during the delay.
-  const uint8_t eligibleDirNow = autoBlinkerEligibleRequestDir(now);
+  // Re-evaluate only the safety gates immediately before FIRE. The original
+  // planner direction is intentionally latched through the delay, so a brief
+  // 0x24A IN_LANE/stale gap cannot expire an otherwise valid lane-change request.
+  uint8_t pendingSnapshot = 0;
+  portENTER_CRITICAL(&blinkAMux);
+  pendingSnapshot = autoPendingDir;
+  portEXIT_CRITICAL(&blinkAMux);
+  const bool fireGateOpen = pendingSnapshot != 0 &&
+                            autoBlinkerNOAGateOpen(now) &&
+                            autoBlinkerALCAllowsDirection(pendingSnapshot, now);
 
   portENTER_CRITICAL(&blinkAMux);
 
-  if (autoArmed && eligibleDirNow != autoPendingDir) {
+  if (autoArmed && (!fireGateOpen || autoPendingDir != pendingSnapshot)) {
     autoArmed = false;
     autoPendingDir = 0;
     autoFireAt = 0;
-    lastReqDir = eligibleDirNow;
   }
 
   // Delayed trigger reached its deadline -> start an independent pulse only
-  // if the exact LEFT/RIGHT request is still eligible now.
-  if (autoArmed &&
-      eligibleDirNow != 0 &&
-      eligibleDirNow == autoPendingDir &&
-      (int32_t)(now - autoFireAt) >= 0) {
+  // if NOA and the pending lane direction are still eligible now.
+  if (autoArmed && fireGateOpen && (int32_t)(now - autoFireAt) >= 0) {
     oneShotTurn = dirToTurn(autoPendingDir);
     if (oneShotTurn != STALK_IDLE && activeTurnSignalVariant == TURN_SIGNAL_STALKLESS) {
       oneShotReleaseAt = now + BLINKA_STALKLESS_PRESS_MS;
@@ -1574,7 +1637,6 @@ static void injectDriverAssistControl(const twai_message_t &src) {
       blind = LAB3F8_STOCK;
       acc = LAB3F8_STOCK;
     }
-
     // All STOCK = guaranteed RX-only.  No 0x3F8 TX at all.
     if (alc == LAB3F8_ALC_STOCK && blind == LAB3F8_STOCK && acc == LAB3F8_STOCK)
         return;
@@ -1597,6 +1659,7 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     bool changed = false;
     bool blindChanged = false;
     const uint8_t stockBlindBefore = (uint8_t)readBitsLE(out.data, 52, 2);
+
 
     if (alc == LAB3F8_ALC_FORCE_OFF) {
         if (getBit(out.data, 56)) {
@@ -1650,6 +1713,7 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     lab3f8LastTxBlindChanged = blindChanged;
     lab3f8LastTxResult = (err == ESP_OK) ? 1 : 2;
     lab3f8LastTxMs = now;
+    lab3f8LastTxBit56 = getBit(out.data, 56);
     if (err == ESP_OK) lab3f8TxOk++;
     else               lab3f8TxFail++;
     portEXIT_CRITICAL(&lab3f8Mux);
@@ -1792,7 +1856,7 @@ static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now,
 }
 
 static void r79LabImmediateFromStock(const uint8_t *data, uint8_t dlc, uint32_t now) {
-  if (!labMenuEnabled || !data || dlc < 8 || readMuxID(data) != 1) return;
+  if (!data || dlc < 8 || readMuxID(data) != 1) return;
   const uint32_t txEpoch = canTxEpochSnapshot();
 
   const uint8_t gateReason = r79LabGateReason(now);
@@ -1811,7 +1875,6 @@ static void r79LabImmediateFromStock(const uint8_t *data, uint8_t dlc, uint32_t 
 }
 
 static void r79LabPeriodicTick() {
-  if (!labMenuEnabled) return;
   const uint32_t now = (uint32_t)millis();
   uint16_t period;
   uint32_t lastAttempt;
@@ -2001,7 +2064,7 @@ static void featureCfgLoad() {
       prefs.putBool("doorCancel", false);
     }
     if (!activeProfileBannedCarSupported()) {
-      // Model Y L does not expose Banned Car in v3.1 hotfix. Fail closed if an older
+      // Model Y L does not expose Banned Car in v3.2 hotfix. Fail closed if an older
       // profile/settings combination left either flag persisted. Avoid writing
       // unchanged false values on every YL boot.
       const bool persistedBanned = bannedCar;

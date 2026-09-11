@@ -101,7 +101,7 @@ static inline bool vehicleProfileAdvancedEapSupported(uint8_t id, uint8_t topolo
 }
 
 static inline bool vehicleProfileEuUnlockSupported(uint8_t id, uint8_t topology) {
-  // Current Universal v3.1 hotfix EU Unlock/Summon-R79 path is available on the
+  // Current Universal v3.2 hotfix EU Unlock/Summon-R79 path is available on the
   // supported YL Party+VH layout and on both Standard 3/Y Chassis layouts.
   return vehicleProfileTopologyValid(id, topology);
 }
@@ -122,6 +122,7 @@ static inline bool vehicleProfilePedalMapSupported(uint8_t id, uint8_t topology)
 }
 
 
+
 // On Standard Party+Chassis, NAG injection is on CAN A but the AP gate is
 // supplied by Chassis CAN B (0x399/921). A CAN B recovery therefore must
 // invalidate the latched NAG AP authorization before TX can resume.
@@ -135,7 +136,7 @@ static inline bool vehicleProfileTlsscRestoreSupported(uint8_t id) {
   return s && s->tlsscRestoreSupported;
 }
 
-// Banned Car is intentionally hidden/blocked on Model Y L in v3.1 hotfix.
+// Banned Car is intentionally hidden/blocked on Model Y L in v3.2 hotfix.
 // Keep this separate from TLSSC Restore capability so it can be re-enabled
 // deliberately later without weakening the current backend guard.
 static inline bool vehicleProfileBannedCarSupported(uint8_t id) {
@@ -246,6 +247,7 @@ static inline bool activeProfileBodyControlsSupported() {
 static inline bool activeProfilePedalMapSupported() {
   return vehicleProfilePedalMapSupported(activeVehicleProfile, activeVehicleTopology);
 }
+
 
 
 static inline bool activeProfileNagGateDependsOnCanB() {

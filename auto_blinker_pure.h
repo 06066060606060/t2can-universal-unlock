@@ -34,3 +34,26 @@ static inline void vcleftSetRightButtonPure(uint8_t data[8], uint8_t state) {
 static inline bool doorOpenButtonPressedPure(const uint8_t *data, uint8_t dlc) {
   return data && dlc >= 4 && ((data[3] & 0x80u) != 0);
 }
+
+// v3.2 hotfix: common Advanced EAP lane-change eligibility helpers.
+// reqDir: 1=LEFT, 2=RIGHT. ALC state 4 (EXITING_HIGHWAY) is accepted only
+// when fresh map context confirms an active route and a direction-matching off-ramp.
+static inline bool autoBlinkerAlcAllowsDirectionPure(
+    uint8_t reqDir, uint8_t alcState, bool roadContextFresh, bool navRouteActive,
+    bool leftOffRamp, bool rightOffRamp) {
+  if (reqDir == 1 && (alcState == 6 || alcState == 8)) return true;
+  if (reqDir == 2 && (alcState == 7 || alcState == 8)) return true;
+  if (alcState != 4 || !roadContextFresh || !navRouteActive) return false;
+  if (reqDir == 1) return leftOffRamp;
+  if (reqDir == 2) return rightOffRamp;
+  return false;
+}
+
+// Once a valid planner request has armed the regulatory delay, a transient
+// 0x24A drop/IN_LANE observation does not erase the pending request. Fail closed
+// on NOA loss, lane eligibility loss, or an explicit opposite-direction request.
+static inline bool autoBlinkerPendingShouldCancelPure(
+    bool noaGateOpen, uint8_t pendingDir, uint8_t currentReqDir, bool pendingAlcAllowed) {
+  if (!noaGateOpen || pendingDir == 0 || !pendingAlcAllowed) return true;
+  return currentReqDir != 0 && currentReqDir != pendingDir;
+}

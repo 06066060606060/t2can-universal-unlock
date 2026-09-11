@@ -223,7 +223,6 @@ static void canTaskMcp(void* arg) {
       if (partyId == 0x7FF) r79LabObserve7ff(T2CAN_BUS_PARTY, rxf.can_dlc, rxf.data);
       bootCaptureObservePartyFrame(partyId, rxf.can_dlc, rxf.data);
       researchCaptureObserveParty(partyId, rxf.can_dlc, rxf.data);
-
       if (activeCanAIsParty()) {
         // Party CAN on CAN A: Nag Killer is topology-gated. Keep YL-only
         // DAS/Summon/visual-debug behavior explicitly model-gated so selecting
@@ -367,8 +366,7 @@ static void canTaskTwai(void* arg) {
 
         // 1016 (SPR) is read on CAN B for both models.
         case DRIVER_ASSIST_ID:
-          // Always retain stock telemetry first. LAB overlay may transmit
-          // only when a non-STOCK field is selected AND fresh DAS state == 3.
+          // Always retain stock telemetry before applying the production/research overlay.
           handle1016(f.data, f.data_length_code);
           injectDriverAssistControl(f);
           break;

@@ -97,3 +97,9 @@ static inline McpTxResultReason mcpTxResultReasonPure(
   if (!sendOk) return MCP_TX_SEND_ERROR;
   return MCP_TX_OK;
 }
+
+// R79 bit18 is experimental and remains LAB-only. Fixed production bit19/47
+// policy is intentionally independent of the LAB menu.
+static inline bool r79SmartOverrideActivePure(bool labMenuEnabled, uint8_t smartMode) {
+  return labMenuEnabled && smartMode != 0u;
+}

@@ -395,7 +395,7 @@ static String lab3f8StatsToJson() {
   const uint32_t now = (uint32_t)millis();
   uint8_t alcMode, blindMode, accMode;
   uint8_t lastTxBlind, lastTxStockBlind, lastTxSelectedBlind, lastTxResult;
-  bool lastTxValid, lastTxBlindChanged;
+  bool lastTxValid, lastTxBlindChanged, lastTxBit56;
   uint32_t lastTxMs, txOk, txFail, blocked, driverAssistLast;
   portENTER_CRITICAL(&lab3f8Mux);
   alcMode = lab3f8AlcMode;
@@ -411,6 +411,7 @@ static String lab3f8StatsToJson() {
   lastTxBlindChanged = lab3f8LastTxBlindChanged;
   lastTxResult = lab3f8LastTxResult;
   lastTxMs = lab3f8LastTxMs;
+  lastTxBit56 = lab3f8LastTxBit56;
   driverAssistLast = uiDriverAssistLastRxMs;
   portEXIT_CRITICAL(&lab3f8Mux);
 
@@ -454,6 +455,7 @@ static String lab3f8StatsToJson() {
   s += ",\"lastTxSelectedBlind\":" + String((int)lastTxSelectedBlind);
   s += ",\"lastTxBlindChanged\":" + String(lastTxBlindChanged ? "true" : "false");
   s += ",\"lastTxResult\":" + String((int)lastTxResult);
+  s += ",\"lastTxBit56\":" + String(lastTxBit56 ? "true" : "false");
   s += ",\"lastTxAgeMs\":" + String((unsigned long)lastTxAge);
   s += "}";
   return s;
@@ -1458,7 +1460,7 @@ static String researchCaptureStatsToJson() {
   uint32_t rawPreStartIndex, rawPreFrameCount, rawArchiveCount, rawTriggerMs, rawPostDeadlineMs, rawEvicted, rawPreCoverageMs;
   uint32_t autoQualifiedTransitions, autoTriggerCount, autoRejectLane, autoRejectWarmup, autoRejectBusy, autoMergedEvents;
   uint32_t autoOpenCount, autoBlockedCount, autoLastTriggerMs;
-  uint8_t autoLastEvent;
+  uint8_t autoLastEvent, autoLastFrom, autoLastTo;
   bool rawTriggered;
   bool exporting;
   bool psram;
@@ -1509,6 +1511,8 @@ static String researchCaptureStatsToJson() {
   autoBlockedCount = researchCaptureAutoBlockedCount;
   autoLastTriggerMs = researchCaptureAutoLastTriggerMs;
   autoLastEvent = researchCaptureAutoLastEvent;
+  autoLastFrom = researchCaptureAutoLastFrom;
+  autoLastTo = researchCaptureAutoLastTo;
   psram = researchCaptureUsingPsram;
   memcpy(labels, researchCaptureLabels, sizeof(labels));
   if (researchCaptureLatest) {
@@ -1642,6 +1646,10 @@ static String researchCaptureStatsToJson() {
   j += ",\"autoBlockedCount\":" + String((unsigned long)autoBlockedCount);
   j += ",\"autoLastTriggerAgeMs\":" + String((unsigned long)(autoLastTriggerMs ? now - autoLastTriggerMs : 999999UL));
   j += ",\"autoLastEvent\":\"" + String(researchCaptureAutoEventName(autoLastEvent)) + "\"";
+  j += ",\"autoLastFrom\":" + String((unsigned)autoLastFrom);
+  j += ",\"autoLastTo\":" + String((unsigned)autoLastTo);
+  j += ",\"autoLastFromName\":\"" + String(autoLastFrom == 0xFF ? "NONE" : alcStateName(autoLastFrom)) + "\"";
+  j += ",\"autoLastToName\":\"" + String(autoLastTo == 0xFF ? "NONE" : alcStateName(autoLastTo)) + "\"";
   j += ",\"rawPreMs\":" + String((unsigned long)rawRequiredPreMs);
   j += ",\"rawPostMs\":" + String((unsigned long)RESEARCH_CAPTURE_RAW_POST_MS);
   j += ",\"usingPsram\":" + String(psram ? "true" : "false");
@@ -1649,7 +1657,7 @@ static String researchCaptureStatsToJson() {
   j += ",\"psramTotalBytes\":" + String((unsigned long)psramTotalBytes);
   j += ",\"psramFreeBytes\":" + String((unsigned long)psramFreeBytes);
   j += ",\"snapshotPlan\":\"" + String(rawMode
-      ? (mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC ? "RAW AUTO LEFT 7↔6/8 PRE 2s + LEFT-qualified trigger + POST 2s · manual C/D PRE 5s + POST 2s" : "RAW RX ring PRE 5s + trigger + POST 2s · auto re-arm")
+      ? (mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC ? "RAW AUTO LEFT OPEN 6/8 ↔ BLOCKED other state · PRE 2s + POST 2s · manual C/D PRE 5s + POST 2s" : "RAW RX ring PRE 5s + trigger + POST 2s · auto re-arm")
       : "rolling snapshot PRE + trigger + selected POST") + "\"";
   j += ",\"alcValid\":" + String(alcValid ? "true" : "false");
   j += ",\"alcRaw\":" + String((unsigned)alcRaw);
@@ -1970,7 +1978,7 @@ static void httpSystemStats() { server.send(200, "application/json", systemStats
 
 
 
-// ─── Universal v3.1 hotfix profile / feature policy APIs ─────────────
+// ─── Universal v3.2 hotfix profile / feature policy APIs ─────────────
 static String vehicleProfileStatusJson() {
   String j;
   j.reserve(420);
@@ -2472,7 +2480,6 @@ static void httpLab3f8Update() {
       acc = (uint8_t)v;
     }
   }
-
   portENTER_CRITICAL(&lab3f8Mux);
   lab3f8AlcMode = alc;
   lab3f8UlcBlindMode = blind;

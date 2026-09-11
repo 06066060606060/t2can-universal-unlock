@@ -8,10 +8,12 @@
 // In RAW_AUTO_ALC mode, manual C/D captures remain available between AUTO episodes
 // and use the full 5 s manual PRE window; A/B stay reserved for automatic OPEN/BLOCKED labels.
 // Completed RAW segments auto re-arm without Reset, up to 8 archived segments.
-// Qualified LEFT availability events (7->6/8 and 6/8->7) require 300 ms
-// persistence. Events inside an active AUTO episode extend POST instead of consuming
-// another segment. Only the LEFT 0x239
-// lane must still exist and be FUSED; the RIGHT lane is intentionally not required.
+// Qualified LEFT availability events use semantic state classes:
+// OPEN = 6/8, BLOCKED = every other valid DAS_autoLaneChangeState. A transition
+// must persist for 300 ms. Events inside an active AUTO episode extend POST instead
+// of consuming another segment. OPEN events require a fresh LEFT 0x239 lane with
+// FUSED line usage; BLOCKED events intentionally do not, so the recorder can capture
+// the very lane/topology loss that may be causing the block. The RIGHT lane is not required.
 // Existing 0x3F8 VH and 0x399 Party overlay attempts are observable metadata;
 // this module never transmits or replays CAN.
 
@@ -192,6 +194,8 @@ static volatile uint8_t researchCaptureRawLabelSlot = RESEARCH_CAPTURE_LABEL_NON
 static volatile uint32_t researchCaptureRawFirstFrameMs = 0;
 static ResearchAlcPersistenceState researchCaptureAutoPersistence = researchAlcPersistenceInitialPure();
 static volatile uint8_t researchCaptureAutoLastEvent = 0; // 1=AUTO_CLOSE, 2=AUTO_OPEN
+static volatile uint8_t researchCaptureAutoLastFrom = 0xFF;
+static volatile uint8_t researchCaptureAutoLastTo = 0xFF;
 static volatile uint32_t researchCaptureAutoQualifiedTransitions = 0;
 static volatile uint32_t researchCaptureAutoTriggerCount = 0;
 static volatile uint32_t researchCaptureAutoRejectLane = 0;
@@ -736,12 +740,19 @@ static void researchCaptureAutoMaybeTriggerLocked(uint8_t bus, uint16_t id, uint
   const uint32_t confirmationDelayMs = (uint32_t)(now - transitionMs);
   const bool closeEvent = transition == RESEARCH_ALC_CLOSE;
 
-  if (!researchCaptureAutoLaneQualifiedLocked(now)) {
+  // OPEN must be corroborated by the current 0x239 LEFT lane. BLOCKED events
+  // deliberately bypass this current-lane qualification: if 0x239 drops or changes
+  // line usage at the same moment as the ALC block, rejecting here would hide the
+  // transition we are trying to diagnose. The previous stable ALC state being 6/8
+  // already proves LEFT was planner-available before a CLOSE event.
+  if (!closeEvent && !researchCaptureAutoLaneQualifiedLocked(now)) {
     researchCaptureAutoRejectLane++;
     return;
   }
   researchCaptureAutoQualifiedTransitions++;
   researchCaptureAutoLastEvent = closeEvent ? 1 : 2;
+  researchCaptureAutoLastFrom = previousStableAlc;
+  researchCaptureAutoLastTo = alc;
 
   // A second qualified LEFT open/close event inside the same episode extends POST instead
   // of consuming another segment. The raw 0x399 frame itself is the event marker.
@@ -1174,6 +1185,8 @@ static void researchCaptureReset() {
   researchCaptureRawFirstFrameMs = 0;
   researchCaptureAutoPersistence = researchAlcPersistenceInitialPure();
   researchCaptureAutoLastEvent = 0;
+  researchCaptureAutoLastFrom = 0xFF;
+  researchCaptureAutoLastTo = 0xFF;
   researchCaptureAutoQualifiedTransitions = 0;
   researchCaptureAutoTriggerCount = 0;
   researchCaptureAutoRejectLane = 0;
