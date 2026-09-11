@@ -8,12 +8,24 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.1 by LP_YL
+# T2CAN Universal Unlock v3.2 by LP_YL
 
 **Major Universal Release**  
 **Release date:** September 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
+
+**Changes from v3.1**
+**Auto Blinker
+- Fixed some ignored highway exits
+- EXITING_HIGHWAY is now accepted when the navigation route and off-ramp direction match
+- Improved lane-change request latching during the Auto Blinker delay
+- Brief IN_LANE / stale planner states no longer immediately cancel a valid pending request
+
+**R79
+- Fixed R79 runtime being unintentionally dependent on the LAB menu
+- Production R79 handling now works independently of LAB
+- Experimental R79 controls remain LAB-only
 
 ## 📋 Release Highlights  
 
