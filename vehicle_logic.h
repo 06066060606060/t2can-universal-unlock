@@ -8,8 +8,9 @@
 // 0x3FD mux1 bit19 (UI_applyEceR79) is now a fixed policy value of 0.
 // 0x3FD mux1 bit47 (UI_hardCoreSummon) is now a fixed policy value of 1.
 // bit18 remains an independent live-test candidate for UI_applyEceR79SmartSummonOnly.
-// Injection is allowed only for a valid latched AP ACTIVE state, confirmed Summon, or fresh Park.
-// Park is a fixed production gate source; it is not a LAB option. Manual driving fails closed.
+// R79 gate policy intentionally follows the proven Summon-Unlock V2.6
+// compatibility semantics: PARK-open at boot, 0x118 P/D/R/N updates, PARK-open
+// after 5 s without 0x118, sticky ACA+SPR Summon, and independent AP override.
 // // ═══════════════════════════════════════════════════════════════
 static constexpr uint8_t R79LAB_STOCK = 0;
 static constexpr uint8_t R79LAB_FORCE_0 = 1;
@@ -24,13 +25,24 @@ static constexpr uint8_t R79LAB_GATE_BLOCKED = 0;
 static constexpr uint8_t R79LAB_GATE_AP = 1;
 static constexpr uint8_t R79LAB_GATE_SUMMON = 2;
 static constexpr uint8_t R79LAB_GATE_PARK = 3;
+static constexpr uint8_t R79LAB_GATE_PARK_LATCHED = 4;
+static constexpr uint8_t R79LAB_GATE_REMOTE_STANDBY = 5;
 static constexpr uint8_t R79LAB_TX_NONE = 0;
 static constexpr uint8_t R79LAB_TX_IMMEDIATE = 1;
 static constexpr uint8_t R79LAB_TX_PERIODIC = 2;
+static constexpr uint8_t R79LAB_BLOCK_NONE = 0;
+static constexpr uint8_t R79LAB_BLOCK_AUTH = 1;
+static constexpr uint8_t R79LAB_BLOCK_TEMPLATE = 2;
+static constexpr uint8_t R79LAB_BLOCK_FRESH_MASK = 3;
+static constexpr uint8_t R79LAB_BLOCK_QUEUE = 4;
+static constexpr uint8_t R79LAB_BLOCK_TX = 5;
+static constexpr uint8_t R79LAB_BLOCK_ROUTE = 6;
 static portMUX_TYPE r79LabMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t r79LabSmartMode = R79LAB_STOCK;
 static volatile uint16_t r79LabPeriodMs = R79LAB_DEFAULT_PERIOD_MS;
 static volatile uint32_t r79LabLastAttemptMs = 0;
+static volatile uint32_t r79LabLastPeriodicRequestMs = 0; // legacy API field
+static volatile uint32_t r79LabLastPeriodicTxMs = 0;
 static volatile uint32_t r79LabLastTxMs = 0;
 static volatile uint32_t r79LabNoTemplateSkip = 0;
 static volatile uint32_t r79LabQueueSkip = 0;
@@ -63,6 +75,18 @@ static volatile uint32_t r79LabTxOk = 0;
 static volatile uint32_t r79LabTxFail = 0;
 static volatile uint32_t r79LabGateBlocked = 0;
 static volatile uint32_t r79LabAppliedFrames = 0;
+static constexpr uint32_t R79_REASSERT_RETRY_MS = 25;
+static R79PendingPure r79LabPending = {};
+static volatile uint32_t r79LabPendingRequestCount = 0;
+static volatile uint32_t r79LabPendingCoalesceCount = 0;
+static volatile uint32_t r79LabPendingRetryCount = 0;
+static volatile uint32_t r79LabLastReassertLatencyMs = 0;
+static volatile uint32_t r79LabMaxReassertLatencyMs = 0;
+static volatile uint32_t r79LabFreshMaskWaitCount = 0;
+static volatile uint8_t r79LabLastBlockReason = R79LAB_BLOCK_NONE;
+static volatile uint32_t r79LabLastBlockMs = 0;
+static volatile uint8_t r79LabLastRequiredFreshMask = SUMMON_BUS_NONE;
+static volatile uint8_t r79LabLastObservedFreshMask = SUMMON_BUS_NONE;
 static uint8_t r79LabLastStockRaw[8] = {0};
 static uint8_t r79LabLastEffectiveRaw[8] = {0};
 static volatile bool r79Lab7ffSeen = false;
@@ -75,8 +99,7 @@ static uint8_t r79Lab7ffRaw[8] = {0};
 // Arduino .ino auto-prototype generation can place callers ahead of later
 // definitions. Keep the R79 gate/immediate path explicit and deterministic.
 static uint8_t r79LabGateReason(uint32_t now);
-static void r79LabImmediateFromStock(const uint8_t *data, uint8_t dlc, uint32_t now);
-
+static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now, uint8_t gateReason, uint8_t txKind, uint32_t txEpoch, uint8_t requiredFreshMask);
 
 // ═══════════════════════════════════════════════════════════════
 // SUMMON MONITOR / VH OVERLAYS (CAN B - TWAI)
@@ -85,6 +108,7 @@ static void r79LabImmediateFromStock(const uint8_t *data, uint8_t dlc, uint32_t 
 static inline uint8_t readMuxID(const uint8_t *data) {
     return data[0] & 0x07;
 }
+
 static inline bool getBit(const uint8_t *data, int bit) {
     return (data[bit / 8] >> (bit % 8)) & 0x01;
 }
@@ -97,7 +121,6 @@ static inline void setBit(uint8_t *data, int bit, bool val) {
 
 
 
-static bool r79LabApGateOpen(uint32_t now);
 
 static bool r79LabPeriodValid(uint16_t ms) {
   return ms == 20 || ms == 100 || ms == 250 || ms == 500 || ms == 1000;
@@ -108,7 +131,21 @@ static const char* r79LabGateReasonName(uint8_t reason) {
     case R79LAB_GATE_AP: return "AP";
     case R79LAB_GATE_SUMMON: return "SUMMON";
     case R79LAB_GATE_PARK: return "PARK";
+    case R79LAB_GATE_PARK_LATCHED: return "PARK_LATCHED";
+    case R79LAB_GATE_REMOTE_STANDBY: return "REMOTE_STANDBY";
     default: return "BLOCKED";
+  }
+}
+
+static const char* r79LabBlockReasonName(uint8_t reason) {
+  switch (reason) {
+    case R79LAB_BLOCK_AUTH: return "NO_AUTHORIZATION";
+    case R79LAB_BLOCK_TEMPLATE: return "NO_TEMPLATE";
+    case R79LAB_BLOCK_FRESH_MASK: return "WAIT_FRESH_MASK";
+    case R79LAB_BLOCK_QUEUE: return "TX_QUEUE_BUSY";
+    case R79LAB_BLOCK_TX: return "TX_ERROR";
+    case R79LAB_BLOCK_ROUTE: return "INVALID_ROUTE";
+    default: return "NONE";
   }
 }
 
@@ -139,11 +176,26 @@ static void r79LabObserve3fdMux1(const uint8_t *data, uint8_t dlc) {
   // between successful reassertions.
   portEXIT_CRITICAL(&r79LabMux);
 
-  // Event-driven reassertion: while an AP/Summon/Park gate is open, every fresh
-  // stock mux1 frame is immediately copied, fixed bit19/47 policy is applied,
-  // optional bit18 LAB override is applied, and the frame is transmitted once. The periodic
-  // scheduler then fills the interval until the next stock frame.
-  r79LabImmediateFromStock(data, dlc, now);
+  // v3.5a1 / V2.6 transport rollback: every real stock mux1 is followed by
+  // one direct R79 enqueue when the existing authorization gate is open.
+  const uint8_t gateReason = r79LabGateReason(now);
+  const uint8_t requiredFreshMask = activeSummonRequiredTxFreshMask();
+  portENTER_CRITICAL(&r79LabMux);
+  r79LabLastAttemptMs = now;
+  r79LabLastGateReason = gateReason;
+  r79LabLastRequiredFreshMask = requiredFreshMask;
+  r79LabLastObservedFreshMask = canTxFreshMaskSnapshot();
+  portEXIT_CRITICAL(&r79LabMux);
+  if (gateReason == R79LAB_GATE_BLOCKED) {
+    portENTER_CRITICAL(&r79LabMux);
+    r79LabGateBlocked++;
+    r79LabLastBlockReason = R79LAB_BLOCK_AUTH;
+    r79LabLastBlockMs = now;
+    portEXIT_CRITICAL(&r79LabMux);
+    return;
+  }
+  (void)r79LabTransmitShadow(data, now, gateReason, R79LAB_TX_IMMEDIATE,
+                             canTxEpochSnapshot(), requiredFreshMask);
 }
 
 static bool r79LabApplySelectedBits(uint8_t *data) {
@@ -237,17 +289,6 @@ static volatile uint32_t dasAutoLaneChangeChangeCount = 0;
 static volatile bool dasAutoLaneChangeStateValid = false;
 static volatile uint32_t lastDASStatusMillis = 0;  // diagnostic age only; not a functional AP timeout
 
-static bool r79LabApGateOpen(uint32_t now) {
-  (void)now;
-  uint8_t state4;
-  bool valid;
-  portENTER_CRITICAL(&stateMux);
-  state4 = dasAutopilotState4;
-  valid = dasAutopilotStateValid;
-  portEXIT_CRITICAL(&stateMux);
-  return dasStateApActivePure(valid, state4);
-}
-
 // AP/NOA is a latched state, not a periodic command. Keep the last valid Party
 // 0x399 state until CAN A itself crosses a recovery boundary. The timestamp is
 // retained for diagnostics only; transient planner requests keep their own
@@ -266,18 +307,39 @@ static bool autoBlinkerNOAGateOpen(uint32_t now, uint32_t* ageOut = nullptr) {
   if (ageOut) *ageOut = age;
   return dasStateNoaPure(valid, state4);
 }
-static volatile bool gateParked    = false;
+static volatile bool gateParked    = true;
 static volatile bool gateSummoning = false;
 static volatile bool sprSeen  = false;
 static volatile bool lastAca  = false;
-#define PARKED_TIMEOUT_MS  5000
+static volatile bool acaValid = false;
+static volatile uint32_t lastAcaMillis = 0;
+static volatile bool sprValid = false;
+static volatile uint32_t lastSprMillis = 0;
+static volatile uint8_t lastSprRaw = 0;
 static volatile uint32_t last280Millis = 0;
+static constexpr uint32_t PARKED_TIMEOUT_MS = 5000;
+static volatile uint8_t summonGearSource = SUMMON_GEAR_NONE;
+static volatile uint32_t summonGearObservedMs = 0;
+// Confirmed gear is RAM-only and scoped to the current MCU boot/profile. A real
+// decoded P or D/R/N updates it; source silence and local CAN recovery do not.
+// This preserves remote wake compatibility without ever letting timeout turn a
+// confirmed D/R/N back into PARK.
+static SummonConfirmedGearLatchPure summonConfirmedGearLatch = {};
+static volatile uint32_t summonConfirmedGearTransitions = 0;
+static volatile uint8_t summonAuthorization = SUMMON_AUTH_NONE;
+static volatile uint32_t summonAuthorizationSinceMs = 0;
+static volatile uint32_t summonAuthorizationTransitions = 0;
 
-// Brief, conditional continuity grace for an already-open Summon gate.
-// This does NOT create a Summon session. It only keeps the effective injection
-// gate open for a short period after a confirmed gateSummoning session loses ACA.
-// Repeated ACA-low frames never extend the deadline.
-static constexpr uint32_t SUMMON_GATE_DROPOUT_GRACE_MS = 300;
+// Fresh source observations remain explicit. An old ACA/SPR pair cannot
+// authorize a later wake cycle. 0x3F8 is approximately 1 Hz on YL, so its
+// timeout is intentionally longer than the high-rate 0x118 source.
+static constexpr uint32_t SUMMON_GEAR_FRESH_MS = 3000;
+static constexpr uint32_t SUMMON_ACA_FRESH_MS = 750;
+static constexpr uint32_t SUMMON_SPR_FRESH_MS = 2500;
+
+// Brief, non-extending continuity grace for an already-confirmed moving Summon
+// session. It never creates a session and is cleared at any relevant recovery.
+static constexpr uint32_t SUMMON_GATE_DROPOUT_GRACE_MS = 1500;
 static volatile uint32_t summonGateGraceUntilMs = 0;
 static volatile uint32_t summonGateGraceEnterCount = 0;
 static volatile uint32_t summonGateGraceRecoverCount = 0;
@@ -306,7 +368,6 @@ static volatile uint32_t summonPriorityTransitions = 0;
 static volatile uint32_t summonPriorityFullEnterCount = 0;
 static volatile uint32_t summonPriorityFullExitCount = 0;
 static volatile uint32_t summonPriorityFullInactiveSinceMs = 0;
-static constexpr uint32_t SUMMON_PRIORITY_PARK_FRESH_MS = 3000;
 static constexpr uint32_t SUMMON_PRIORITY_FULL_EXIT_GRACE_MS = 1500;
 
 static volatile uint32_t sumRxMux1   = 0;
@@ -345,6 +406,7 @@ static char gateBlockReason[48] = "boot";
 #define BLINKA_TX_PERIOD_MS         20
 #define BLINKA_PULSE_MS             350
 #define BLINKA_AUTO_DELAY_DEFAULT_MS 2000
+#define BLINKA_RETRY_PERIOD_MS      250
 #define BLINKA_STALKLESS_PRESS_MS 300
 #define BLINKA_STALKLESS_RELEASE_MS 200
 
@@ -404,7 +466,10 @@ static volatile uint32_t oneShotReleaseAt = 0;
 static volatile uint8_t autoPendingDir = 0;
 static volatile uint32_t blinkADelayMs = BLINKA_AUTO_DELAY_DEFAULT_MS;
 static volatile uint32_t autoFireAt = 0;
+static volatile uint32_t autoRetryAt = 0;
+static volatile uint32_t autoRequestLastSeenMs = 0;
 static volatile bool autoArmed = false;
+static volatile uint32_t autoRetryCount = 0;
 static volatile uint32_t blkATxOk = 0;
 static volatile uint32_t blkATxFail = 0;
 
@@ -413,11 +478,21 @@ static volatile uint8_t visualBehaviorType = 0;
 static volatile uint32_t visualDebugRxCount = 0;
 static volatile uint32_t visualDebugLastMs = 0;
 
-// Auto Blinker arms only from a fresh 0x24A LEFT/RIGHT planner request. Once
-// armed, the request is latched through the regulatory delay; a transient
-// behaviorType drop no longer expires the pending action. FIRE still fails
-// closed on NOA loss or ALC direction eligibility.
+// Auto Blinker request-session tracking. A fresh 0x24A LEFT/RIGHT request is
+// latched even when its lane is temporarily ineligible. NOA loss, an opposite
+// request, CAN reset, or a sustained request absence ends the session; ALC
+// blocking merely defers FIRE and is retried at a bounded cadence.
 static constexpr uint32_t BLINKA_REQUEST_FRESH_MS = 2000;
+
+// Caller must hold blinkAMux. This clears only the not-yet-fired request
+// session; it deliberately does not touch oneShotTurn or the request-history
+// latch used to prevent duplicate pulses for one continuous planner request.
+static inline void autoBlinkerClearPendingLocked() {
+  autoArmed = false;
+  autoPendingDir = 0;
+  autoFireAt = 0;
+  autoRetryAt = 0;
+}
 
 static bool autoBlinkerALCAllowsDirection(uint8_t reqDir, uint32_t now, uint8_t *alcOut = nullptr) {
   uint8_t alc;
@@ -449,7 +524,8 @@ static bool autoBlinkerALCAllowsDirection(uint8_t reqDir, uint32_t now, uint8_t 
 // Returns the fresh LEFT(1)/RIGHT(2) planner request without applying ALC
 // eligibility. Used to ARM, detect an explicit opposite request, and preserve
 // a pending request across temporary 0x24A IN_LANE/stale gaps.
-static uint8_t autoBlinkerCurrentRequestDir(uint32_t now) {
+static uint8_t autoBlinkerCurrentRequestDir(
+    uint32_t now, uint32_t *requestLastRxOut = nullptr) {
   if (!activeProfileAdvancedEapSupported()) return 0;
   bool en;
   uint8_t behavior;
@@ -460,6 +536,7 @@ static uint8_t autoBlinkerCurrentRequestDir(uint32_t now) {
   visualLast = visualDebugLastMs;
   portEXIT_CRITICAL(&blinkAMux);
 
+  if (requestLastRxOut) *requestLastRxOut = visualLast;
   if (!en || !autoBlinkerNOAGateOpen(now)) return 0;
   if (visualLast == 0 || (uint32_t)(now - visualLast) > BLINKA_REQUEST_FRESH_MS) return 0;
   if (behavior == 2) return 1;
@@ -541,13 +618,13 @@ static void handleS3xySingleAction() {
   // request. lastReqDir remains equal to the current proposal direction so a
   // retained 0x24A request cannot immediately re-arm. behavior=0 resets it.
   portENTER_CRITICAL(&blinkAMux);
-  autoArmed = false;
-  autoPendingDir = 0;
-  autoFireAt = 0;
+  autoBlinkerClearPendingLocked();
   oneShotTurn = STALK_IDLE;
   oneShotUntil = 0;
+  oneShotReleaseAt = 0;
   activeTurn = STALK_IDLE;
   lastReqDir = dir;
+  autoRequestLastSeenMs = now;
   portEXIT_CRITICAL(&blinkAMux);
 
   portENTER_CRITICAL(&ulcSnoozeMux);
@@ -680,69 +757,101 @@ static const char* twaiStateName(int state) {
   }
 }
 
-// stateMux must already be held when calling this helper.
-// The most recently received *fresh* valid gear source wins. This prevents
-// Prevent the legacy 280-stale => gateParked=true fallback from enabling
-// the new priority layer while the vehicle is actually driving.
-static bool summonPriorityFreshParkedLocked(uint32_t now) {
-  const bool fresh280 = priorityGear280State >= 0 && priorityGear280Ms != 0 &&
-                        (uint32_t)(now - priorityGear280Ms) <= SUMMON_PRIORITY_PARK_FRESH_MS;
-  const bool fresh390 = priorityGear390State >= 0 && priorityGear390Ms != 0 &&
-                        (uint32_t)(now - priorityGear390Ms) <= SUMMON_PRIORITY_PARK_FRESH_MS;
-  if (!fresh280 && !fresh390) return false;
+static SummonRoutePure activeSummonRoute() {
+  return summonRoutePure(activeVehicleProfile, activeVehicleTopology);
+}
 
-  if (fresh280 && (!fresh390 || (int32_t)(priorityGear280Ms - priorityGear390Ms) >= 0))
-    return priorityGear280State == 1;
-  return priorityGear390State == 1;
+static uint8_t activeSummonRequiredTxFreshMask() {
+  // Summon-Unlock V2.6 was single-CAN. Universal keeps profile-aware source
+  // routing, but R79 transport depends only on the bus carrying stock 0x3FD.
+  return summonV26CompatRequiredTxFreshMaskPure(activeSummonRoute());
+}
+
+// stateMux must already be held when calling this helper. 0x118 is primary;
+// 0x186 is a profile-gated fallback only after 0x118 becomes invalid/stale.
+static SummonGearDecisionPure summonFreshGearDecisionLocked(uint32_t now) {
+  const SummonRoutePure route = activeSummonRoute();
+  const SummonGearObservationPure gear118 = {
+      priorityGear280State, priorityGear280Ms, priorityGear280State >= 0};
+  const SummonGearObservationPure gear186 = {
+      priorityGear390State, priorityGear390Ms, priorityGear390State >= 0};
+  return summonFreshGearPure(now, gear118, gear186,
+                             route.valid && route.allow186Fallback,
+                             SUMMON_GEAR_FRESH_MS);
+}
+
+static bool summonPriorityFreshParkedLocked(uint32_t now) {
+  const SummonGearDecisionPure gear = summonFreshGearDecisionLocked(now);
+  return gear.valid && gear.parked;
 }
 
 // stateMux must already be held when calling this helper.
-// FULL can only be entered from a fresh confirmed Park context. Once FULL has
-// started, it is allowed to remain FULL while the vehicle physically moves
-// under Summon. A short exit grace prevents a single ACA/SPR state dropout from
-// tearing down Summon priority in the middle of an otherwise active session.
+// V2.6 compatibility exposes only the three live priority states:
+// PARK_STANDBY while the permissive PARK gate is open, SUMMON_FULL while the
+// sticky ACA+SPR Summon gate is open, and NORMAL otherwise.
 static void recomputeSummonPriorityStateLocked(uint32_t now) {
-  const bool freshParked = summonPriorityFreshParkedLocked(now);
-  const bool sessionActive = gateSummoning;
   const uint8_t oldState = summonPriorityState;
-  uint8_t nextState = oldState;
+  const uint8_t nextState = gateSummoning
+      ? SUMMON_PRIORITY_FULL
+      : (gateParked ? SUMMON_PRIORITY_PARK_STANDBY
+                    : SUMMON_PRIORITY_NORMAL);
 
-  if (oldState == SUMMON_PRIORITY_FULL) {
-    if (sessionActive) {
-      summonPriorityFullInactiveSinceMs = 0;
-    } else {
-      if (summonPriorityFullInactiveSinceMs == 0)
-        summonPriorityFullInactiveSinceMs = now;
-      if ((uint32_t)(now - summonPriorityFullInactiveSinceMs) >= SUMMON_PRIORITY_FULL_EXIT_GRACE_MS)
-        nextState = freshParked ? SUMMON_PRIORITY_PARK_STANDBY : SUMMON_PRIORITY_NORMAL;
-    }
-  } else {
-    summonPriorityFullInactiveSinceMs = 0;
-    if (sessionActive && (oldState == SUMMON_PRIORITY_PARK_STANDBY || freshParked))
-      nextState = SUMMON_PRIORITY_FULL;
-    else
-      nextState = freshParked ? SUMMON_PRIORITY_PARK_STANDBY : SUMMON_PRIORITY_NORMAL;
+  summonPriorityFullInactiveSinceMs = 0;
+  if (nextState == oldState) return;
+
+  summonPriorityState = nextState;
+  summonPriorityStateSinceMs = now;
+  summonPriorityTransitions++;
+  if (nextState == SUMMON_PRIORITY_FULL) summonPriorityFullEnterCount++;
+  if (oldState == SUMMON_PRIORITY_FULL) summonPriorityFullExitCount++;
+}
+
+// Recompute all derived Summon state from source observations. Returns true
+// when a newly usable authorization should wake the one-deep R79 reassert queue.
+// stateMux must already be held.
+static bool refreshSummonDerivedStateLocked(uint32_t now) {
+  const uint8_t oldAuthorization = summonAuthorization;
+
+  // Apply the exact permissive V2.6 timeout rule to the live compatibility
+  // gate. Source silence is therefore PARK-open after five seconds.
+  SummonV26CompatStatePure compat = {
+      gateParked, gateSummoning, lastAca, sprSeen, last280Millis};
+  summonV26CompatTickPure(compat, now, PARKED_TIMEOUT_MS);
+  gateParked = compat.parked;
+  gateSummoning = compat.summoning;
+  lastAca = compat.acaActive;
+  sprSeen = compat.sprSeen;
+  last280Millis = compat.last118Ms;
+
+  // Fresh/confirmed gear remains diagnostic only in V2.6 compatibility mode.
+  const SummonGearDecisionPure gear = summonFreshGearDecisionLocked(now);
+  summonGearSource = gear.valid ? gear.source : SUMMON_GEAR_NONE;
+  summonGearObservedMs = gear.valid ? gear.observedMs : 0;
+  if (summonGearLatchApplyDecisionPure(summonConfirmedGearLatch, gear))
+    summonConfirmedGearTransitions++;
+
+  summonGateGraceUntilMs = 0;
+  recomputeSummonPriorityStateLocked(now);
+
+  const bool apAuthorized = dasStateApActivePure(
+      dasAutopilotStateValid, dasAutopilotState4);
+  const uint8_t nextAuthorization = summonV26CompatAuthorizationPure(
+      compat, apAuthorized);
+  if (nextAuthorization != oldAuthorization) {
+    summonAuthorization = nextAuthorization;
+    summonAuthorizationSinceMs = now;
+    summonAuthorizationTransitions++;
   }
 
-  if (nextState != oldState) {
-    summonPriorityState = nextState;
-    summonPriorityStateSinceMs = now;
-    summonPriorityTransitions++;
-    if (nextState == SUMMON_PRIORITY_FULL) {
-      summonPriorityFullEnterCount++;
-      summonPriorityFullInactiveSinceMs = 0;
-    }
-    if (oldState == SUMMON_PRIORITY_FULL) {
-      summonPriorityFullExitCount++;
-      summonPriorityFullInactiveSinceMs = 0;
-    }
-  }
+  return nextAuthorization != oldAuthorization &&
+         nextAuthorization != SUMMON_AUTH_NONE;
 }
 
 static void refreshSummonPriorityState() {
   const uint32_t now = (uint32_t)millis();
+  bool requestReassert = false;
   portENTER_CRITICAL(&stateMux);
-  recomputeSummonPriorityStateLocked(now);
+  requestReassert = refreshSummonDerivedStateLocked(now);
   portEXIT_CRITICAL(&stateMux);
 }
 
@@ -945,50 +1054,17 @@ static String pedalMapStatsJson(){
 // PARK_STANDBY: queue headroom is reserved by non-Summon admission control.
 // SUMMON_FULL: stale pending T-2CAN TX may be flushed to protect the newest
 //              Summon mux1 injection. Queue clear is NEVER used outside FULL.
-static esp_err_t twaiTransmitSummonPriority(const twai_message_t *msg, uint32_t txEpoch) {
+static esp_err_t twaiTransmitSummonPriority(
+    const twai_message_t *msg, uint32_t txEpoch, uint8_t requiredFreshMask) {
+  if (requiredFreshMask == SUMMON_BUS_NONE) return ESP_ERR_INVALID_STATE;
   const uint8_t priorityState = getSummonPriorityState();
-
-  if (priorityState == SUMMON_PRIORITY_NORMAL) {
-    const esp_err_t err = canTxTwaiTransmit(msg, txEpoch);
-    if (err == ESP_OK) twaiSummonTxNormal++;
-    return err;
-  }
-
-  if (priorityState == SUMMON_PRIORITY_PARK_STANDBY) {
-    const esp_err_t err = canTxTwaiTransmit(msg, txEpoch);
-    if (err == ESP_OK) twaiSummonTxStandby++;
-    return err;
-  }
-
-  // SUMMON_FULL only: keep stale pending injections from delaying the newest
-  // unlock frame. The currently transmitting hardware frame is not cleared.
-  twai_status_info_t st = {};
-  if (twaiReadQueueStatus(&st) && st.msgs_to_tx >= (TWAI_TX_QUEUE_LEN - 2)) {
-    if (canTxTwaiClearQueue(txEpoch) == ESP_OK) twaiSummonQueueFlush++;
-  }
-
-  esp_err_t err = canTxTwaiTransmit(msg, txEpoch);
+  const esp_err_t err = canTxTwaiTransmitWithMask(msg, txEpoch, requiredFreshMask);
   if (err == ESP_OK) {
-    twaiSummonTxFull++;
-    return ESP_OK;
+    if (priorityState == SUMMON_PRIORITY_FULL) twaiSummonTxFull++;
+    else if (priorityState == SUMMON_PRIORITY_PARK_STANDBY) twaiSummonTxStandby++;
+    else twaiSummonTxNormal++;
   }
-
-  // Only queue saturation gets a destructive retry. Driver/bus state errors
-  // are left to the existing recovery supervisor.
-  if (err != ESP_ERR_TIMEOUT) {
-    twaiSummonRetryFail++;
-    return err;
-  }
-
-  if (canTxTwaiClearQueue(txEpoch) == ESP_OK) twaiSummonQueueFlush++;
-  err = canTxTwaiTransmit(msg, txEpoch);
-  if (err == ESP_OK) {
-    twaiSummonRetryOk++;
-    twaiSummonTxFull++;
-  } else {
-    twaiSummonRetryFail++;
-  }
-  return err;
+  return err; // v3.5a1: never destructively clear/retry the TX queue.
 }
 
 static inline uint32_t readBitsLE(const uint8_t *data, int startBit, int len) {
@@ -1152,7 +1228,7 @@ static void handle3C2OnCanA(const struct can_frame &incoming) {
   real3C2RightButton = right;
   // A physical steering-wheel button press wins over an automatic pulse.
   if ((left == VCLEFT_SWITCH_ON || right == VCLEFT_SWITCH_ON) && oneShotTurn != STALK_IDLE) {
-    autoArmed = false; autoPendingDir = 0; autoFireAt = 0;
+    autoBlinkerClearPendingLocked();
     oneShotTurn = STALK_IDLE; oneShotUntil = 0; oneShotReleaseAt = 0; activeTurn = STALK_IDLE;
   } else if (activeTurnSignalVariant == TURN_SIGNAL_STALKLESS &&
              oneShotTurn != STALK_IDLE && (int32_t)(oneShotUntil - now) > 0) {
@@ -1199,9 +1275,9 @@ static void handle102LaneChangeCancel(const uint8_t *data, uint8_t dlc) {
 
   const uint8_t dir = visualBehaviorType == 2 ? 1 : 2;
   portENTER_CRITICAL(&blinkAMux);
-  autoArmed = false; autoPendingDir = 0; autoFireAt = 0;
+  autoBlinkerClearPendingLocked();
   oneShotTurn = STALK_IDLE; oneShotUntil = 0; oneShotReleaseAt = 0;
-  activeTurn = STALK_IDLE; lastReqDir = dir; doorCancelAccepted++;
+  activeTurn = STALK_IDLE; lastReqDir = dir; autoRequestLastSeenMs = now; doorCancelAccepted++;
   portEXIT_CRITICAL(&blinkAMux);
   portENTER_CRITICAL(&ulcSnoozeMux);
   ulcSnoozePending = true;
@@ -1211,123 +1287,158 @@ static void handle102LaneChangeCancel(const uint8_t *data, uint8_t dlc) {
 }
 
 
-// Arm a delayed trigger when behaviorType becomes LEFT/RIGHT. Once armed, keep
-// the request latched through the regulatory delay. A temporary planner drop to
-// IN_LANE/stale no longer expires it; NOA loss, ALC blocking, or an explicit
-// opposite request still cancels fail-closed.
+// Request-session Auto Blinker. A fresh LEFT/RIGHT planner request arms the
+// configured delay even when the requested lane is temporarily unavailable.
+// After the delay, blocked ALC eligibility keeps the request pending and the
+// TX task retries at BLINKA_RETRY_PERIOD_MS. One continuous planner request can
+// fire at most once; an opposite request restarts the session, while NOA loss
+// or a sustained request absence ends it.
 static void evaluateAutoBlinker() {
   const uint32_t now = (uint32_t)millis();
-  const uint8_t currentReqDir = autoBlinkerCurrentRequestDir(now);
-  const uint8_t eligibleDir = (currentReqDir != 0 && autoBlinkerALCAllowsDirection(currentReqDir, now))
-                                ? currentReqDir : 0;
+  const bool noaOpen = autoBlinkerNOAGateOpen(now);
+  uint32_t requestFrameMs = 0;
+  const uint8_t currentReqDir = autoBlinkerCurrentRequestDir(now, &requestFrameMs);
+  const bool currentAlcAllowed = currentReqDir != 0 &&
+      autoBlinkerALCAllowsDirection(currentReqDir, now);
 
-  bool armed;
-  uint8_t pending;
   portENTER_CRITICAL(&blinkAMux);
-  armed = autoArmed;
-  pending = autoPendingDir;
-  portEXIT_CRITICAL(&blinkAMux);
+  if (!blinkAEnabled || !noaOpen) {
+    autoBlinkerClearPendingLocked();
+    lastReqDir = 0;
+    autoRequestLastSeenMs = 0;
+    portEXIT_CRITICAL(&blinkAMux);
+    return;
+  }
 
-  if (!armed && eligibleDir != 0) {
-    portENTER_CRITICAL(&blinkAMux);
-    if (eligibleDir != lastReqDir && !autoArmed) {
-      autoPendingDir = eligibleDir;
+  const bool pulseActive = oneShotTurn != STALK_IDLE &&
+      (int32_t)(oneShotUntil - now) > 0;
+
+  if (currentReqDir != 0) {
+    if (autoArmed && autoPendingDir != currentReqDir) {
+      // Explicit opposite-direction planner request: replace the old session
+      // and apply the full configured delay to the new direction.
+      autoPendingDir = currentReqDir;
       autoFireAt = now + blinkADelayMs;
+      autoRetryAt = autoFireAt;
+      autoRequestLastSeenMs = requestFrameMs;
+      lastReqDir = currentReqDir;
+    } else if (autoArmed) {
+      autoRequestLastSeenMs = requestFrameMs;
+      lastReqDir = currentReqDir;
+      // 0x399 and 0x24A updates call this function directly. If the delay has
+      // elapsed and the lane just became available, wake the next TX tick
+      // immediately instead of waiting for the fallback retry deadline.
+      if (currentAlcAllowed && (int32_t)(now - autoFireAt) >= 0)
+        autoRetryAt = now;
+    } else if (autoBlinkerShouldStartSessionPure(
+                   currentReqDir, lastReqDir, false, pulseActive)) {
+      autoPendingDir = currentReqDir;
+      autoFireAt = now + blinkADelayMs;
+      autoRetryAt = autoFireAt;
+      autoRequestLastSeenMs = requestFrameMs;
       autoArmed = true;
+      lastReqDir = currentReqDir;
+    } else {
+      // Same request after a successful pulse: keep the session-history latch
+      // fresh so the request cannot fire twice until it genuinely ends.
+      autoRequestLastSeenMs = requestFrameMs;
+      lastReqDir = currentReqDir;
     }
-    lastReqDir = currentReqDir;
-    portEXIT_CRITICAL(&blinkAMux);
-    return;
-  }
-
-  if (armed) {
-    const bool noaOpen = autoBlinkerNOAGateOpen(now);
-    const bool alcAllowed = autoBlinkerALCAllowsDirection(pending, now);
-    const bool cancel = autoBlinkerPendingShouldCancelPure(noaOpen, pending, currentReqDir, alcAllowed);
-    portENTER_CRITICAL(&blinkAMux);
-    if (cancel && autoArmed && autoPendingDir == pending) {
-      autoArmed = false;
-      autoPendingDir = 0;
-      autoFireAt = 0;
+  } else {
+    const bool requestRecent = autoRequestLastSeenMs != 0 &&
+        (uint32_t)(now - autoRequestLastSeenMs) <= BLINKA_REQUEST_FRESH_MS;
+    if (!requestRecent) {
+      autoBlinkerClearPendingLocked();
+      lastReqDir = 0;
+      autoRequestLastSeenMs = 0;
     }
-    lastReqDir = currentReqDir;
-    portEXIT_CRITICAL(&blinkAMux);
-    return;
   }
-
-  portENTER_CRITICAL(&blinkAMux);
-  lastReqDir = currentReqDir;
   portEXIT_CRITICAL(&blinkAMux);
 }
 
-// Generate the one-shot 350 ms CAN B pulse.
-// Advanced EAP state model:
-//   autoFireAt   = delayed-trigger deadline only
-//   oneShotUntil = active-pulse deadline only
-// This prevents a later 0x24A behavior change from shortening or extending
-// an SCCM pulse that has already started.
+// Generate one independent turn-signal pulse. A request that has reached its
+// delay but remains ALC-blocked is retained and checked every 250 ms. This is
+// a pre-fire retry only: after one pulse has started, the firmware does not
+// repeatedly toggle the stalk because no verified lamp-state signal is used.
 static void blinkATxTick() {
   if (!activeProfileAdvancedEapSupported()) return;
   static uint32_t lastTxMs = 0;
-  const uint32_t now = millis();
-  bool workPending;
+  const uint32_t now = (uint32_t)millis();
+
+  bool armed;
+  uint8_t pendingSnapshot;
+  uint32_t fireAtSnapshot, retryAtSnapshot, requestLastSeenSnapshot;
+  bool pulsePending;
   portENTER_CRITICAL(&blinkAMux);
-  workPending = autoArmed || oneShotTurn != STALK_IDLE;
+  armed = autoArmed;
+  pendingSnapshot = autoPendingDir;
+  fireAtSnapshot = autoFireAt;
+  retryAtSnapshot = autoRetryAt;
+  requestLastSeenSnapshot = autoRequestLastSeenMs;
+  pulsePending = oneShotTurn != STALK_IDLE;
   portEXIT_CRITICAL(&blinkAMux);
-  if (!workPending) return;
+  if (!armed && !pulsePending) return;
+
   const uint32_t txEpoch = canTxEpochSnapshot();
   uint8_t turn = STALK_IDLE;
 
-  // Re-evaluate only the safety gates immediately before FIRE. The original
-  // planner direction is intentionally latched through the delay, so a brief
-  // 0x24A IN_LANE/stale gap cannot expire an otherwise valid lane-change request.
-  uint8_t pendingSnapshot = 0;
-  portENTER_CRITICAL(&blinkAMux);
-  pendingSnapshot = autoPendingDir;
-  portEXIT_CRITICAL(&blinkAMux);
-  const bool fireGateOpen = pendingSnapshot != 0 &&
-                            autoBlinkerNOAGateOpen(now) &&
-                            autoBlinkerALCAllowsDirection(pendingSnapshot, now);
+  if (armed) {
+    const bool noaOpen = autoBlinkerNOAGateOpen(now);
+    const uint8_t currentReqDir = autoBlinkerCurrentRequestDir(now);
+    const bool requestSeenRecently = requestLastSeenSnapshot != 0 &&
+        (uint32_t)(now - requestLastSeenSnapshot) <= BLINKA_REQUEST_FRESH_MS;
+    const bool delayElapsed = (int32_t)(now - fireAtSnapshot) >= 0;
+    const bool retryDue = retryAtSnapshot == 0 ||
+        (int32_t)(now - retryAtSnapshot) >= 0;
+    const bool alcAllowed = pendingSnapshot != 0 &&
+        autoBlinkerALCAllowsDirection(pendingSnapshot, now);
+    const AutoBlinkerSessionDecisionPure decision = autoBlinkerSessionDecisionPure(
+        noaOpen, pendingSnapshot, currentReqDir, requestSeenRecently,
+        delayElapsed, alcAllowed, retryDue);
 
-  portENTER_CRITICAL(&blinkAMux);
-
-  if (autoArmed && (!fireGateOpen || autoPendingDir != pendingSnapshot)) {
-    autoArmed = false;
-    autoPendingDir = 0;
-    autoFireAt = 0;
-  }
-
-  // Delayed trigger reached its deadline -> start an independent pulse only
-  // if NOA and the pending lane direction are still eligible now.
-  if (autoArmed && fireGateOpen && (int32_t)(now - autoFireAt) >= 0) {
-    oneShotTurn = dirToTurn(autoPendingDir);
-    if (oneShotTurn != STALK_IDLE && activeTurnSignalVariant == TURN_SIGNAL_STALKLESS) {
-      oneShotReleaseAt = now + BLINKA_STALKLESS_PRESS_MS;
-      oneShotUntil = oneShotReleaseAt + BLINKA_STALKLESS_RELEASE_MS;
-    } else {
-      oneShotReleaseAt = 0;
-      oneShotUntil = (oneShotTurn != STALK_IDLE) ? (now + BLINKA_PULSE_MS) : 0;
+    portENTER_CRITICAL(&blinkAMux);
+    // Do not apply a stale decision if a newer 0x24A/0x399 frame replaced the
+    // request session while the gate checks above were running.
+    const bool sameSession = autoArmed && autoPendingDir == pendingSnapshot &&
+        autoFireAt == fireAtSnapshot && autoRetryAt == retryAtSnapshot &&
+        autoRequestLastSeenMs == requestLastSeenSnapshot;
+    if (sameSession && decision.cancel) {
+      autoBlinkerClearPendingLocked();
+      lastReqDir = 0;
+      autoRequestLastSeenMs = 0;
+    } else if (sameSession && decision.retry) {
+      autoRetryAt = now + BLINKA_RETRY_PERIOD_MS;
+      autoRetryCount++;
+    } else if (sameSession && decision.fire) {
+      oneShotTurn = dirToTurn(autoPendingDir);
+      if (oneShotTurn != STALK_IDLE && activeTurnSignalVariant == TURN_SIGNAL_STALKLESS) {
+        oneShotReleaseAt = now + BLINKA_STALKLESS_PRESS_MS;
+        oneShotUntil = oneShotReleaseAt + BLINKA_STALKLESS_RELEASE_MS;
+      } else {
+        oneShotReleaseAt = 0;
+        oneShotUntil = (oneShotTurn != STALK_IDLE) ? (now + BLINKA_PULSE_MS) : 0;
+      }
+      autoBlinkerClearPendingLocked();
     }
-    autoArmed = false;
-    autoPendingDir = 0;
-    autoFireAt = 0;
+    portEXIT_CRITICAL(&blinkAMux);
   }
 
-  // Once started, preserve the established pulse behavior: the pulse lifetime is
-  // independent of later planner/state changes and may finish its 350 ms window.
+  // Once started, preserve the established pulse behavior: later planner or
+  // ALC changes do not truncate the 350 ms stalk pulse / stalkless press cycle.
+  portENTER_CRITICAL(&blinkAMux);
   if (oneShotTurn != STALK_IDLE && (int32_t)(oneShotUntil - now) > 0) {
     turn = oneShotTurn;
   } else {
     oneShotTurn = STALK_IDLE;
     oneShotUntil = 0;
+    oneShotReleaseAt = 0;
   }
-
   activeTurn = turn;
   portEXIT_CRITICAL(&blinkAMux);
 
   if (turn == STALK_IDLE) return;
   if (activeTurnSignalVariant == TURN_SIGNAL_STALKLESS) return; // 0x3C2 echoes on each live mux1 RX
-  if (now - lastTxMs < BLINKA_TX_PERIOD_MS) return;
+  if ((uint32_t)(now - lastTxMs) < BLINKA_TX_PERIOD_MS) return;
   lastTxMs = now;
   if (activeProfileIsYl()) sendStalkFrameCanB(turn, txEpoch);
   else if (activeCanAIsBody()) sendStalkFrameCanA(turn, txEpoch);
@@ -1412,72 +1523,66 @@ static inline void recoverSummonGateGraceLocked() {
 
 static inline bool summonInjectionGateOpen() {
     const uint32_t now = (uint32_t)millis();
-    expireSummonGateGraceLocked(now);
-    return gateParked || gateSummoning || summonGateGraceActiveLocked(now);
-}
-
-static void recomputeSummoning() {
-    gateSummoning = lastAca && sprSeen;
-    recoverSummonGateGraceLocked();
-}
-
-static void clearSummonOnPark() {
-    gateSummoning = false;
-    sprSeen       = false;
-    summonGateGraceUntilMs = 0;
-}
-
-static void clearSummonOnParkIfAcaInactive(uint8_t gear) {
-    if (gear == 1 && !lastAca)
-        clearSummonOnPark();
+    (void)refreshSummonDerivedStateLocked(now);
+    return summonAuthorization != SUMMON_AUTH_NONE;
 }
 
 static void handle280(const uint8_t *data) {
+    if (!data) return;
     sumRx280++;
     const uint32_t now = (uint32_t)millis();
-    last280Millis = now;
-    uint8_t gear = readVehicleGear(data);
-    int     gs   = gearState(gear);
+    const uint8_t gear = readVehicleGear(data);
+    const int gs = gearState(gear);
+    const bool aca = (data[6] & 0x04) != 0;
+    bool requestReassert = false;
+
     portENTER_CRITICAL(&stateMux);
-    if (gs == 1)  gateParked = true;
-    if (gs == 0)  gateParked = false;
     if (gs >= 0) {
         priorityGear280State = (int8_t)gs;
         priorityGear280Ms = now;
     }
-    bool aca = (data[6] & 0x04) != 0;
-    if (lastAca && !aca) {
-        // Only bridge a dropout that happened after Summon was already confirmed.
-        // Do not arm/extend grace from Park or from an already-inactive session.
-        if (gateSummoning && !gateParked && summonGateGraceUntilMs == 0) {
-            summonGateGraceUntilMs = now + SUMMON_GATE_DROPOUT_GRACE_MS;
-            summonGateGraceEnterCount++;
-        }
-        sprSeen = false;
-    }
-    lastAca = aca;
-    recomputeSummoning();
-    expireSummonGateGraceLocked(now);
-    clearSummonOnParkIfAcaInactive(gear);
-    recomputeSummonPriorityStateLocked(now);
+
+    SummonV26CompatStatePure compat = {
+        gateParked, gateSummoning, lastAca, sprSeen, last280Millis};
+    summonV26CompatApply118Pure(compat, (int8_t)gs, aca, now);
+    gateParked = compat.parked;
+    gateSummoning = compat.summoning;
+    lastAca = compat.acaActive;
+    sprSeen = compat.sprSeen;
+    last280Millis = compat.last118Ms;
+
+    acaValid = true;
+    lastAcaMillis = now;
+    requestReassert = refreshSummonDerivedStateLocked(now);
     portEXIT_CRITICAL(&stateMux);
 }
 
 static void handle390(const uint8_t *data) {
+    if (!data) return;
     sumRx390++;
     const uint32_t now = (uint32_t)millis();
-    uint8_t gear = readVehicleGear(data);
-    int     gs   = gearState(gear);
+    const uint8_t gear = readVehicleGear(data);
+    const int gs = gearState(gear);
     if (gs < 0) return;
+
+    bool requestReassert = false;
     portENTER_CRITICAL(&stateMux);
     priorityGear390State = (int8_t)gs;
     priorityGear390Ms = now;
-    uint32_t age = now - last280Millis;
-    if (last280Millis == 0 || age > PARKED_TIMEOUT_MS) {
-        gateParked = (gs == 1);
-        clearSummonOnParkIfAcaInactive(gear);
-    }
-    recomputeSummonPriorityStateLocked(now);
+
+    SummonV26CompatStatePure compat = {
+        gateParked, gateSummoning, lastAca, sprSeen, last280Millis};
+    const SummonRoutePure route = activeSummonRoute();
+    summonV26CompatApply186Pure(
+        compat, (int8_t)gs, now, PARKED_TIMEOUT_MS,
+        route.valid && route.allow186Fallback);
+    gateParked = compat.parked;
+    gateSummoning = compat.summoning;
+    lastAca = compat.acaActive;
+    sprSeen = compat.sprSeen;
+    last280Millis = compat.last118Ms;
+
+    requestReassert = refreshSummonDerivedStateLocked(now);
     portEXIT_CRITICAL(&stateMux);
 }
 
@@ -1489,7 +1594,7 @@ static void handle921(const uint8_t *data, uint8_t dlc) {
     const uint8_t alcState = alcValid ? readDASAutoLaneChangeState(data) : 0xFF;
     bool ap = isDASActive(readDASStatus(data));
     bool noa = (dasState4 == 5); // ACTIVE_NAV = Navigate on Autopilot
-    bool wasAp, wasNoa;
+    bool wasAp, wasNoa, requestReassert = false;
     portENTER_CRITICAL(&stateMux);
     wasAp = gateAPActive;
     wasNoa = gateNOAActive;
@@ -1505,37 +1610,39 @@ static void handle921(const uint8_t *data, uint8_t dlc) {
     dasAutoLaneChangeState = alcState;
     dasAutoLaneChangeStateValid = alcValid;
     lastDASStatusMillis = now;
-    recomputeSummonPriorityStateLocked(now);
+    requestReassert = refreshSummonDerivedStateLocked(now);
     portEXIT_CRITICAL(&stateMux);
 
     // Keep NAG continuity diagnostics scoped to the current AP session.
     nagDiagApTransition(ap, wasAp, now);
     // Mode B should begin with a fresh burst when AP transitions OFF -> ON.
     if (ap && !wasAp) nagModeBPhaseStartMs = now;
+    // Mode H never resumes an event across an AP boundary. Both engagement
+    // and disengagement invalidate the current descriptor and session seed.
+    nagHumanRuntimeApTransition(ap, wasAp);
 
     // A delayed Auto Blinker request must not survive a NOA ->
     // Autosteer/OFF transition. AP/NOA validity is latched until CAN A recovery;
     // do not truncate a pulse already in progress.
     if (wasNoa && !noa) {
       portENTER_CRITICAL(&blinkAMux);
-      autoArmed = false;
-      autoPendingDir = 0;
-      autoFireAt = 0;
+      autoBlinkerClearPendingLocked();
       lastReqDir = 0;
+      autoRequestLastSeenMs = 0;
       portEXIT_CRITICAL(&blinkAMux);
     }
 
     // ALC availability lives in this same 0x399 frame. Re-evaluate immediately
-    // so a pending Auto Blinker request is cancelled as soon as the requested
-    // direction becomes unavailable, without waiting for another 0x24A frame.
+    // so a pending Auto Blinker request can fire as soon as the requested lane
+    // becomes available, without waiting for another 0x24A frame.
     evaluateAutoBlinker();
 }
 
 static void handle1016(const uint8_t *data, uint8_t dlc) {
-    if (dlc < 4) return;
+    if (!data || dlc < 4) return;
     sumRx1016++;
     const uint32_t now = (uint32_t)millis();
-    uint8_t spr = (data[3] >> 4) & 0x0F;
+    const uint8_t spr = (data[3] >> 4) & 0x0F;
     if (dlc >= 8) {
         // UI_accFollowDistanceSetting: bits 45-47.
         // UI_ulcSpeedConfig: bits 50-51.
@@ -1547,11 +1654,23 @@ static void handle1016(const uint8_t *data, uint8_t dlc) {
         uiAlcOffHighwayEnable = getBit(data, 56);
         uiDriverAssistLastRxMs = now;
     }
+
+    bool requestReassert = false;
     portENTER_CRITICAL(&stateMux);
-    if (spr != 0)
-        sprSeen = true;
-    recomputeSummoning();
-    recomputeSummonPriorityStateLocked(now);
+    lastSprRaw = spr;
+    sprValid = true;
+    lastSprMillis = now;
+
+    SummonV26CompatStatePure compat = {
+        gateParked, gateSummoning, lastAca, sprSeen, last280Millis};
+    summonV26CompatApplySprPure(compat, spr);
+    gateParked = compat.parked;
+    gateSummoning = compat.summoning;
+    lastAca = compat.acaActive;
+    sprSeen = compat.sprSeen;
+    last280Millis = compat.last118Ms;
+
+    requestReassert = refreshSummonDerivedStateLocked(now);
     portEXIT_CRITICAL(&stateMux);
 }
 
@@ -1731,8 +1850,7 @@ static void injectSummon(const twai_message_t &src) {
     // or mutate R79 bit18/bit19/bit47; R79 LAB is the sole owner of those bits.
     summonTransportWanted = fmode || gate;
     if (!gate && !fmode) {
-      if (!gateAPActive && !gateParked && !gateSummoning)
-        strncpy(gateBlockReason, "AP-,Park-,Summon-", sizeof(gateBlockReason));
+      strncpy(gateBlockReason, "No AP/Summon/PARK auth", sizeof(gateBlockReason));
     }
     portEXIT_CRITICAL(&stateMux);
 
@@ -1763,7 +1881,7 @@ static void injectSummon(const twai_message_t &src) {
     if (!changed) return;
 
     esp_err_t err = ESP_ERR_TIMEOUT;
-    if (summonTransportWanted) err = twaiTransmitSummonPriority(&out, txEpoch);
+    if (summonTransportWanted) err = twaiTransmitSummonPriority(&out, txEpoch, activeSummonRequiredTxFreshMask());
     else if (twaiNonSummonAdmissionOpen()) err = canTxTwaiTransmit(&out, txEpoch);
 
     if (err == ESP_OK) sumTxOk++;
@@ -1802,119 +1920,72 @@ static void doInjectTlsscRestore(const twai_message_t &src) {
 // TLSSC has its own AP-active gate. It does not share or bypass
 // the Parked/Summoning gate used by Summon Monitor.
 static uint8_t r79LabGateReason(uint32_t now) {
-  // Summon takes precedence over AP for transport selection. Tesla can expose
-  // brief AP-state transients around a Summon session; a confirmed Summon must
-  // still use the priority TX path instead of being downgraded to normal AP TX.
-  bool summonActive = false;
-  bool freshParked = false;
+  uint8_t authorization = SUMMON_AUTH_NONE;
   portENTER_CRITICAL(&stateMux);
-  // Fail closed for Summon: require the priority layer to have entered FULL from
-  // a fresh Park context, plus current ACA+SPR activity or its short dropout grace.
-  summonActive = (summonPriorityState == SUMMON_PRIORITY_FULL) &&
-                 (gateSummoning || summonGateGraceActiveLocked(now));
-  freshParked = summonPriorityFreshParkedLocked(now);
+  (void)refreshSummonDerivedStateLocked(now);
+  authorization = summonAuthorization;
   portEXIT_CRITICAL(&stateMux);
 
-  if (summonActive) return R79LAB_GATE_SUMMON;
-  if (r79LabApGateOpen(now)) return R79LAB_GATE_AP;
-
-  if (freshParked) return R79LAB_GATE_PARK;
-  return R79LAB_GATE_BLOCKED;
+  switch (authorization) {
+    case SUMMON_AUTH_SUMMON: return R79LAB_GATE_SUMMON;
+    case SUMMON_AUTH_AP: return R79LAB_GATE_AP;
+    case SUMMON_AUTH_PARK: return R79LAB_GATE_PARK;
+    default: return R79LAB_GATE_BLOCKED;
+  }
 }
 
 static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now,
-                                 uint8_t gateReason, uint8_t txKind, uint32_t txEpoch) {
-  if (!stock || gateReason == R79LAB_GATE_BLOCKED) return false;
-
-  // During Summon, use the existing priority transport so the reassertion is not
-  // starved by non-Summon VH traffic. AP and Park traffic stays disposable,
-  // non-blocking, and refuses to pile into a busy queue.
-  if (gateReason != R79LAB_GATE_SUMMON &&
-      twaiTxQueueNow >= TWAI_STANDBY_NON_SUMMON_QUEUE_LIMIT) {
-    portENTER_CRITICAL(&r79LabMux); r79LabQueueSkip++; portEXIT_CRITICAL(&r79LabMux);
-    return false;
-  }
-
+                                 uint8_t gateReason, uint8_t txKind,
+                                 uint32_t txEpoch, uint8_t requiredFreshMask) {
+  if (!stock || gateReason == R79LAB_GATE_BLOCKED || requiredFreshMask == SUMMON_BUS_NONE) return false;
   twai_message_t out = {};
-  out.identifier = 0x3FD;
-  out.data_length_code = 8;
-  out.flags = 0;
+  out.identifier = 0x3FD; out.data_length_code = 8; out.flags = 0;
   memcpy(out.data, stock, 8);
   if (readMuxID(out.data) != 1 || !r79LabApplySelectedBits(out.data)) return false;
-
-  // Deliberately transmit even when FORCE equals stock. This is a refresh /
-  // reassertion experiment, not only an edge-triggered mutation.
-  portENTER_CRITICAL(&r79LabMux); r79LabAppliedFrames++; portEXIT_CRITICAL(&r79LabMux);
-  const esp_err_t err = (gateReason == R79LAB_GATE_SUMMON)
-                          ? twaiTransmitSummonPriority(&out, txEpoch)
-                          : canTxTwaiTransmit(&out, txEpoch);
+  portENTER_CRITICAL(&r79LabMux);
+  r79LabAppliedFrames++; r79LabLastBlockReason = R79LAB_BLOCK_NONE; r79LabLastBlockMs = 0;
+  portEXIT_CRITICAL(&r79LabMux);
+  // Direct bounded enqueue, matching the proven V2.6 cadence. No pending/coalescing/retry service.
+  const esp_err_t err = canTxTwaiTransmitWithMaskWait(&out, txEpoch, requiredFreshMask, pdMS_TO_TICKS(2));
   r79LabRecordTxResult(err == ESP_OK, out, txKind);
-  if (err == ESP_OK) {
-    portENTER_CRITICAL(&r79LabMux); r79LabLastTxMs = now; portEXIT_CRITICAL(&r79LabMux);
-  }
+  portENTER_CRITICAL(&r79LabMux);
+  if (err == ESP_OK) { r79LabLastTxMs = now; r79LabLastBlockReason = R79LAB_BLOCK_NONE; r79LabLastBlockMs = 0; }
+  else { r79LabLastBlockReason = R79LAB_BLOCK_TX; r79LabLastBlockMs = now; }
+  portEXIT_CRITICAL(&r79LabMux);
   return err == ESP_OK;
 }
 
-static void r79LabImmediateFromStock(const uint8_t *data, uint8_t dlc, uint32_t now) {
-  if (!data || dlc < 8 || readMuxID(data) != 1) return;
-  const uint32_t txEpoch = canTxEpochSnapshot();
 
-  const uint8_t gateReason = r79LabGateReason(now);
-  portENTER_CRITICAL(&r79LabMux);
-  r79LabLastGateReason = gateReason;
-  portEXIT_CRITICAL(&r79LabMux);
-  if (gateReason == R79LAB_GATE_BLOCKED) {
-    portENTER_CRITICAL(&r79LabMux); r79LabGateBlocked++; portEXIT_CRITICAL(&r79LabMux);
-    return;
-  }
 
-  // Immediate stock-RX injection is intentionally independent from the periodic
-  // refresh phase. A fresh stock mux1 updates the shadow/template and is injected
-  // immediately, but it does not delay or reset the selected periodic clock.
-  r79LabTransmitShadow(data, now, gateReason, R79LAB_TX_IMMEDIATE, txEpoch);
-}
+
 
 static void r79LabPeriodicTick() {
   const uint32_t now = (uint32_t)millis();
-  uint16_t period;
-  uint32_t lastAttempt;
+  bool summoning;
+  portENTER_CRITICAL(&stateMux);
+  (void)refreshSummonDerivedStateLocked(now);
+  summoning = gateSummoning;
+  portEXIT_CRITICAL(&stateMux);
+  if (!summoning) return;
+
+  uint16_t period; uint32_t lastPeriodicTx; bool stockValid; uint8_t stock[8] = {};
   portENTER_CRITICAL(&r79LabMux);
-  period = r79LabPeriodMs;
-  lastAttempt = r79LabLastAttemptMs;
+  period = r79LabPeriodMs; lastPeriodicTx = r79LabLastPeriodicTxMs; stockValid = r79LabStockValid;
+  if (stockValid) memcpy(stock, r79LabLastStockRaw, sizeof(stock));
   portEXIT_CRITICAL(&r79LabMux);
+  if (!stockValid) return;
   if (!r79LabPeriodValid(period)) period = R79LAB_DEFAULT_PERIOD_MS;
-  if ((uint32_t)(now - lastAttempt) < period) return;
-
-  // Attempt at most once per selected period even if the gate/queue/TX rejects it.
-  portENTER_CRITICAL(&r79LabMux);
-  r79LabLastAttemptMs = now;
-  portEXIT_CRITICAL(&r79LabMux);
-
-  const uint32_t txEpoch = canTxEpochSnapshot();
+  // Crucial V2.6 behavior: periodic cadence is independent of stock-triggered immediate TX.
+  if (lastPeriodicTx && (uint32_t)(now - lastPeriodicTx) < period) return;
   const uint8_t gateReason = r79LabGateReason(now);
+  const uint8_t requiredFreshMask = activeSummonRequiredTxFreshMask();
+  if (gateReason == R79LAB_GATE_BLOCKED || requiredFreshMask == SUMMON_BUS_NONE) return;
   portENTER_CRITICAL(&r79LabMux);
-  r79LabLastGateReason = gateReason;
+  r79LabLastAttemptMs = now; r79LabLastPeriodicRequestMs = now;
   portEXIT_CRITICAL(&r79LabMux);
-  if (gateReason == R79LAB_GATE_BLOCKED) {
-    portENTER_CRITICAL(&r79LabMux); r79LabGateBlocked++; portEXIT_CRITICAL(&r79LabMux);
-    return;
+  if (r79LabTransmitShadow(stock, now, gateReason, R79LAB_TX_PERIODIC, canTxEpochSnapshot(), requiredFreshMask)) {
+    portENTER_CRITICAL(&r79LabMux); r79LabLastPeriodicTxMs = now; portEXIT_CRITICAL(&r79LabMux);
   }
-
-  uint8_t stock[8];
-  bool valid;
-  portENTER_CRITICAL(&r79LabMux);
-  valid = r79LabStockValid;
-  memcpy(stock, r79LabLastStockRaw, sizeof(stock));
-  portEXIT_CRITICAL(&r79LabMux);
-  if (!valid) {
-    // Never synthesize mux1 from constants. Periodic refresh starts only after
-    // this CAN epoch has observed at least one real stock mux1 template. Once
-    // captured, the latest template remains valid until CAN state/reinit clears it.
-    portENTER_CRITICAL(&r79LabMux); r79LabNoTemplateSkip++; portEXIT_CRITICAL(&r79LabMux);
-    return;
-  }
-
-  r79LabTransmitShadow(stock, now, gateReason, R79LAB_TX_PERIODIC, txEpoch);
 }
 
 static void injectTLSSC(const twai_message_t &src) {

@@ -1,4 +1,4 @@
-// T2CAN Universal v3.2 hotfix - Model 3/Y firmware
+// T2CAN Universal v3.5a1 - Model 3/Y firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -27,11 +27,13 @@
 #include <SPI.h>
 #include "index_html.h"
 #include "vehicle_profile.h"
+#include "summon_state_pure.h"
 #include "auto_blinker_pure.h"
 #include "can_research_capture_pure.h"
 #include "runtime_gate_pure.h"
+#include "nag_human_pure.h"
 
-#define FW_VERSION "v3.2 hotfix"
+#define FW_VERSION "v3.5a1"
 
 #include "t2can_core_state.h"
 #include "t2can_forward.h"
@@ -148,7 +150,7 @@ void setup() {
                 labMenuEnabled ? "ON" : "OFF",
                 (unsigned)lab3f8AlcMode, (unsigned)lab3f8UlcBlindMode,
                 (unsigned)lab3f8AccFollowRaw);
-  Serial.printf("R79 policy bit19=0 bit47=1 bit18Mode=%u period=%ums scheduler=INDEPENDENT park=ALWAYS_ON gate=AP_OR_SUMMON_OR_PARK\n",
+  Serial.printf("R79 policy bit19=0 bit47=1 bit18Mode=%u period=%ums scheduler=V26_COMPAT parkPolicy=BOOT_PARK_AND_0x118_STALE_5S gate=SUMMON_OR_AP_OR_PARK\n",
                 (unsigned)r79LabSmartMode, (unsigned)r79LabPeriodMs);
   Serial.printf("S3XY bluetooth=%s auto-connect=%s registry=%u/%u\n",
                 s3xyBluetoothEnabled ? "ON" : "OFF",

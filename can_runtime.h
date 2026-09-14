@@ -7,19 +7,39 @@
 // CAN TASKS
 // ═══════════════════════════════════════════════════════════════
 
-// Fail closed at every controller reset/recovery boundary. Persistent user
-// configuration is deliberately preserved; only bus-derived authorization,
-// cached stock templates, and queued/transient TX requests are invalidated.
-static void invalidateCanTxStateInternal(bool invalidatePartyTelemetry) {
+// Recovery invalidates only observations owned by the controller that reset.
+// A new global epoch still cancels in-flight TX, while freshness for an
+// unaffected, physically-live bus may cross the local recovery boundary.
+static uint8_t canPhysicalFreshMaskNow(uint32_t now) {
+  uint8_t mask = SUMMON_BUS_NONE;
+  const uint32_t lastA = lastCanAFrameMs;
+  const uint32_t lastB = lastCanBFrameMs;
+  if (lastA != 0 && (uint32_t)(now - lastA) <= RECOVERY_BUS_FRESH_MS)
+    mask = (uint8_t)(mask | SUMMON_BUS_A);
+  if (lastB != 0 && (uint32_t)(now - lastB) <= RECOVERY_BUS_FRESH_MS)
+    mask = (uint8_t)(mask | SUMMON_BUS_B);
+  return mask;
+}
+
+static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
+  const uint32_t now = (uint32_t)millis();
+  const uint8_t physicalFreshMask = canPhysicalFreshMaskNow(now);
   const bool barrierLocked = canTxBarrierMutex &&
                              xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE;
   if (barrierLocked) {
-    canTxBarrierInvalidatePure(canTxBarrierState);
-    __atomic_store_n(&canTxFreshMaskFast, 0, __ATOMIC_RELEASE);
+    const uint8_t preserved = summonPreservedFreshMaskPure(
+        canTxBarrierState.freshMask, invalidatedBusMask, physicalFreshMask);
+    canTxBarrierInvalidatePreservePure(canTxBarrierState, preserved);
+    __atomic_store_n(&canTxFreshMaskFast, preserved, __ATOMIC_RELEASE);
   }
 
+  const SummonRoutePure route = activeSummonRoute();
+  const SummonInvalidationPure inv =
+      summonInvalidationPure(route, invalidatedBusMask);
+
+  bool requestR79Reassert = false;
   portENTER_CRITICAL(&stateMux);
-  if (invalidatePartyTelemetry) {
+  if (inv.invalidateDas) {
     gateAPActive = false;
     gateNOAActive = false;
     forceMode = false;
@@ -30,39 +50,66 @@ static void invalidateCanTxStateInternal(bool invalidatePartyTelemetry) {
     dasAutoLaneChangeStateValid = false;
     lastDASStatusMillis = 0;
   }
-  gateParked = false;
-  gateSummoning = false;
-  sprSeen = false;
-  lastAca = false;
-  last280Millis = 0;
-  summonGateGraceUntilMs = 0;
-  summonPriorityState = SUMMON_PRIORITY_NORMAL;
-  summonPriorityStateSinceMs = 0;
-  summonPriorityFullInactiveSinceMs = 0;
-  priorityGear280State = -1;
-  priorityGear390State = -1;
-  priorityGear280Ms = 0;
-  priorityGear390Ms = 0;
+  if (inv.invalidateGear) {
+    // V2.6 compatibility: a gear-source reset returns the R79 gate to the
+    // same permissive PARK-open state used at boot.
+    gateParked = true;
+    lastAca = false;
+    acaValid = false;
+    lastAcaMillis = 0;
+    last280Millis = 0;
+    priorityGear280State = -1;
+    priorityGear390State = -1;
+    priorityGear280Ms = 0;
+    priorityGear390Ms = 0;
+    summonGearSource = SUMMON_GEAR_NONE;
+    summonGearObservedMs = 0;
+  }
+  if (inv.invalidateSpr) {
+    sprSeen = false;
+    sprValid = false;
+    lastSprRaw = 0;
+    lastSprMillis = 0;
+  }
+  if (inv.invalidateGear || inv.invalidateSpr) {
+    gateSummoning = false;
+    summonGateGraceUntilMs = 0;
+    summonPriorityState = SUMMON_PRIORITY_NORMAL;
+    summonPriorityStateSinceMs = 0;
+    summonPriorityFullInactiveSinceMs = 0;
+  }
+  // Fresh source observations remain recovery-scoped. R79 authorization itself
+  // follows the requested Summon-Unlock V2.6 compatibility policy, so loss of
+  // the gear-source controller returns the gate to PARK-open.
+  requestR79Reassert = refreshSummonDerivedStateLocked(now);
   portEXIT_CRITICAL(&stateMux);
 
-  portENTER_CRITICAL(&r79LabMux);
-  r79LabStockValid = false;
-  r79LabLast3fdMs = 0;
-  r79LabLastAttemptMs = 0;
-  r79LabLastTxValid = false;
-  r79LabLastGateReason = R79LAB_GATE_BLOCKED;
-  memset(r79LabLastStockRaw, 0, sizeof(r79LabLastStockRaw));
-  memset(r79LabLastEffectiveRaw, 0, sizeof(r79LabLastEffectiveRaw));
-  portEXIT_CRITICAL(&r79LabMux);
+  if (inv.invalidateTemplate) {
+    portENTER_CRITICAL(&r79LabMux);
+    r79LabStockValid = false;
+    r79LabLast3fdMs = 0;
+    r79LabLastAttemptMs = 0;
+    r79LabLastPeriodicRequestMs = 0;
+    r79LabLastPeriodicTxMs = 0;
+    r79LabLastTxValid = false;
+    r79LabLastGateReason = R79LAB_GATE_BLOCKED;
+    r79LabPending = {};
+    memset(r79LabLastStockRaw, 0, sizeof(r79LabLastStockRaw));
+    memset(r79LabLastEffectiveRaw, 0, sizeof(r79LabLastEffectiveRaw));
+    portEXIT_CRITICAL(&r79LabMux);
+  }
 
+  // These transient feature requests are inexpensive to restart and are cleared
+  // at either controller recovery so they cannot cross a changed CAN epoch.
   portENTER_CRITICAL(&blinkAMux);
-  autoArmed = false;
-  autoPendingDir = 0;
-  autoFireAt = 0;
+  autoBlinkerClearPendingLocked();
   oneShotTurn = STALK_IDLE;
   oneShotUntil = 0;
+  oneShotReleaseAt = 0;
   activeTurn = STALK_IDLE;
   lastReqDir = 0;
+  autoRequestLastSeenMs = 0;
+  autoRetryCount = 0;
   visualBehaviorType = 0;
   visualDebugLastMs = 0;
   seen249 = false;
@@ -94,15 +141,15 @@ static void invalidateCanTxStateInternal(bool invalidatePartyTelemetry) {
   pedalMapOriginRaw = 0xFF;
   portEXIT_CRITICAL(&pedalMapMux);
 
-
-  portENTER_CRITICAL(&lab3f8Mux);
-  uiDriverAssistLastRxMs = 0;
-  uiUlcBlindSpotConfig = 0;
-  uiUlcSpeedConfig = 0;
-  uiAlcOffHighwayEnable = false;
-  uiAccFollowDistanceRaw = 0;
-  portEXIT_CRITICAL(&lab3f8Mux);
-
+  if ((invalidatedBusMask & SUMMON_BUS_B) != 0) {
+    portENTER_CRITICAL(&lab3f8Mux);
+    uiDriverAssistLastRxMs = 0;
+    uiUlcBlindSpotConfig = 0;
+    uiUlcSpeedConfig = 0;
+    uiAlcOffHighwayEnable = false;
+    uiAccFollowDistanceRaw = 0;
+    portEXIT_CRITICAL(&lab3f8Mux);
+  }
 
   if (barrierLocked) xSemaphoreGive(canTxBarrierMutex);
 }
@@ -115,17 +162,27 @@ static void invalidateNagPartySpeedState() {
   portEXIT_CRITICAL(&nagCtxMux);
 }
 
-static void invalidateCanTxState() {
-  // A full/CAN-A recovery crosses the source boundary for Party 0x257 speed.
+static void invalidateCanTxStateForCanARecovery() {
   invalidateNagPartySpeedState();
-  invalidateCanTxStateInternal(true);
+  invalidateCanTxStateInternal(SUMMON_BUS_A);
+  nagExactEchoReset();
+  nagHumanRuntimeReset(true);
 }
 
-// CAN B local recovery normally preserves CAN-A-derived AP state on YL. For
-// Standard Party+Chassis, however, the NAG AP authorization is supplied by
-// Chassis CAN B, so that latched gate must be invalidated before NAG TX resumes.
 static void invalidateCanTxStateForCanBRecovery() {
-  invalidateCanTxStateInternal(activeProfileNagGateDependsOnCanB());
+  const bool invalidatesNagGate = activeProfileNagGateDependsOnCanB();
+  invalidateCanTxStateInternal(SUMMON_BUS_B);
+  if (invalidatesNagGate) {
+    nagExactEchoReset();
+    nagHumanRuntimeReset(true);
+  }
+}
+
+static void invalidateCanTxStateForFullRecovery() {
+  invalidateNagPartySpeedState();
+  invalidateCanTxStateInternal(SUMMON_BUS_BOTH);
+  nagExactEchoReset();
+  nagHumanRuntimeReset(true);
 }
 
 static void recordTwaiBusOffSnapshot(const twai_status_info_t &st, uint32_t now) {
@@ -274,7 +331,7 @@ static void canTaskMcp(void* arg) {
           lastMcpRecoverMs = now;
           Serial.printf("[CAN A] MCP2515 bus-off (eflg=0x%02X txFailSeq=%u), reset...\n",
                         eflg, consecutive);
-          invalidateCanTxState();
+          invalidateCanTxStateForCanARecovery();
           if (!mcpReinit()) requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_MCP_REINIT_FAIL);
         }
       } else if (consecutive > 0 || (eflg & (MCP2515::EFLG_TXWAR | MCP2515::EFLG_RXWAR))) {
@@ -387,8 +444,8 @@ static void canTaskTwai(void* arg) {
       rxResult = rxBudget < TWAI_RX_DRAIN_BUDGET ? twai_receive(&f, 0) : ESP_ERR_TIMEOUT;
     }
 
-    // Expire PARK_STANDBY if the confirmed gear source becomes stale.
-    // SUMMON_FULL uses a short dropout grace before leaving the active session.
+    // Refresh the V2.6 compatibility gate, including the 5 s 0x118-stale
+    // PARK fallback, before periodic R79 servicing.
     refreshSummonPriorityState();
     r79LabPeriodicTick();
     researchCaptureTick((uint32_t)millis());
@@ -479,13 +536,6 @@ static void canTaskTwai(void* arg) {
         lastNoCanWarn = millis();
       }
     }
-
-    // Summon watchdog: if CAN 280 silent > PARKED_TIMEOUT_MS
-    uint32_t nowMs = (uint32_t)millis();
-    portENTER_CRITICAL(&stateMux);
-    bool can280Stale = (last280Millis > 0) && (nowMs - last280Millis > PARKED_TIMEOUT_MS);
-    if (can280Stale) gateParked = true;
-    portEXIT_CRITICAL(&stateMux);
 
     vTaskDelay(1);
   }
@@ -667,7 +717,7 @@ static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason) {
                 canRecoveryDiagnosticReasonName(diagReason));
 
   recoveryStopCanTasks();
-  invalidateCanTxState();
+  invalidateCanTxStateForFullRecovery();
   bool aOk = recoveryMcpColdInit();
   bool bOk = recoveryTwaiFullReinit();
   bool tasksOk = aOk && bOk && recoveryStartCanTasks();

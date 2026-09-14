@@ -30,6 +30,13 @@ static const char *S3XY_ID_UUID      = "00003d49-87d2-479e-7e45-8551415a6de1";
 
 static constexpr uint8_t  S3XY_MAX_DEVICES = 3;
 static constexpr uint8_t  S3XY_DISCOVERY_MAX = 8;
+
+// Heavy BLE diagnostics are preserved in source but compiled out by default.
+// Set to 1 (or pass -DS3XY_DIAGNOSTICS_ENABLED=1) for a diagnostic build.
+#ifndef S3XY_DIAGNOSTICS_ENABLED
+#define S3XY_DIAGNOSTICS_ENABLED 0
+#endif
+
 static constexpr uint16_t S3XY_LOG_MAX = 128;
 static constexpr uint8_t  S3XY_LOG_DATA_MAX = 20;
 static constexpr uint8_t  S3XY_PEER_ID_MAX = 20;
@@ -122,6 +129,7 @@ enum S3xyLogType : uint8_t {
   S3XY_LOG_ERROR
 };
 
+#if S3XY_DIAGNOSTICS_ENABLED
 struct S3xyLogEntry {
   uint32_t ms;
   uint8_t type;
@@ -131,6 +139,7 @@ struct S3xyLogEntry {
   uint8_t data[S3XY_LOG_DATA_MAX];
   char detail[56];
 };
+#endif
 
 struct S3xyDeviceSlot {
   volatile bool used;
@@ -209,10 +218,12 @@ static volatile uint8_t s3xyDiscoveredCount = 0;
 static volatile bool s3xyDiscoveryScanning = false;
 static char s3xyDiscoveryError[64] = "";
 
+#if S3XY_DIAGNOSTICS_ENABLED
 static S3xyLogEntry s3xyLog[S3XY_LOG_MAX] = {};
 static volatile uint16_t s3xyLogHead = 0;
 static volatile uint16_t s3xyLogCount = 0;
 static volatile uint32_t s3xyLogDropped = 0;
+#endif
 static volatile uint32_t s3xyActionPending = 0;
 static volatile uint32_t s3xyAccelActionPending = 0;
 static volatile uint32_t s3xyResearchCaptureAPending = 0;
@@ -318,6 +329,7 @@ static uint8_t s3xyParseAction(const String &s) {
   return S3XY_ACTION_NONE;
 }
 
+#if S3XY_DIAGNOSTICS_ENABLED
 static const char *s3xyLogTypeName(uint8_t t) {
   switch (t) {
     case S3XY_LOG_INFO:       return "INFO";
@@ -355,6 +367,12 @@ static void s3xyLogPush(uint8_t type, const char *detail,
   else s3xyLogDropped++;
   portEXIT_CRITICAL(&s3xyMux);
 }
+
+#else
+// Macro form intentionally discards arguments without evaluating them. This avoids
+// temporary String creation and locking in normal production builds.
+#define s3xyLogPush(...) do {} while (0)
+#endif
 
 static void s3xyBytesToHex(const uint8_t *data, size_t len, char *out, size_t outLen) {
   if (!out || outLen == 0) return;
@@ -394,6 +412,7 @@ static bool s3xyPeerIdEquals(const uint8_t *a, size_t aLen, const uint8_t *b, si
   return a && b && aLen > 0 && aLen == bLen && memcmp(a, b, aLen) == 0;
 }
 
+#if S3XY_DIAGNOSTICS_ENABLED
 static void s3xySetAutoTrace(const String &detail) {
   portENTER_CRITICAL(&s3xyMux);
   strncpy(s3xyAutoTrace, detail.c_str(), sizeof(s3xyAutoTrace) - 1);
@@ -461,6 +480,15 @@ static void s3xyAutoTimingReady(uint8_t slot) {
     s3xyDevices[slot].lastReadyMs = now - s3xyDevices[slot].autoAttemptStartMs;
   portEXIT_CRITICAL(&s3xyMux);
 }
+
+#else
+#define s3xySetAutoTrace(...) do {} while (0)
+#define s3xyAutoTimingBegin(...) do {} while (0)
+#define s3xyAutoTimingPath(...) do {} while (0)
+#define s3xyAutoTimingAdopt(...) do {} while (0)
+#define s3xyAutoTimingDiscover(...) do {} while (0)
+#define s3xyAutoTimingReady(...) do {} while (0)
+#endif
 
 static String s3xyJsonEscape(const char *src) {
   String s = src ? String(src) : String("");
@@ -2386,9 +2414,11 @@ static void s3xyResetAllBluetoothData() {
   s3xyDiscoveredCount = 0;
   s3xyDiscoveryScanning = false;
   s3xyDiscoveryError[0] = '\0';
+#if S3XY_DIAGNOSTICS_ENABLED
   s3xyLogHead = 0;
   s3xyLogCount = 0;
   s3xyLogDropped = 0;
+#endif
   portEXIT_CRITICAL(&s3xyMux);
 
   Serial.printf("S3XY: Bluetooth data reset complete; removed bonds=%u; rebooting\n", (unsigned)removedBonds);
@@ -2481,6 +2511,7 @@ static void s3xyRunBatchAutoReconnect() {
     S3xyDeviceSlot &d = s3xyDevices[i];
     if (d.used && d.autoConnect && !d.connected && !d.manualPaused && d.nextAttemptMs != 0) {
       pendingAtStart[i] = true;
+#if S3XY_DIAGNOSTICS_ENABLED
       d.autoAttempts++;
       d.autoAttemptStartMs = batchStartedMs;
       d.lastDiscoverMs = 0;
@@ -2488,6 +2519,7 @@ static void s3xyRunBatchAutoReconnect() {
       d.lastReadyMs = 0;
       strncpy(d.lastAutoPath, "BATCH_EXACT", sizeof(d.lastAutoPath) - 1);
       d.lastAutoPath[sizeof(d.lastAutoPath) - 1] = '\0';
+#endif
     }
   }
   portEXIT_CRITICAL(&s3xyMux);
@@ -2623,7 +2655,9 @@ static void s3xyRunAutoAttempt(uint8_t triggerSlot) {
     strncpy(address, d0.address, sizeof(address) - 1);
     address[sizeof(address) - 1] = '\0';
     hasStableIdentity = (d0.peerIdLen > 0);
+#if S3XY_DIAGNOSTICS_ENABLED
     d0.autoAttempts++;
+#endif
   }
   portEXIT_CRITICAL(&s3xyMux);
   if (!eligible || !address[0]) return;
@@ -2638,8 +2672,10 @@ static void s3xyRunAutoAttempt(uint8_t triggerSlot) {
   if (sinceLast < S3XY_BLE_OPERATION_GAP_MS)
     vTaskDelay(pdMS_TO_TICKS(S3XY_BLE_OPERATION_GAP_MS - sinceLast));
 
+#if S3XY_DIAGNOSTICS_ENABLED
   String trace = String("slot ") + String(triggerSlot + 1) + " exact scan " + address;
   s3xySetAutoTrace(trace);
+#endif
   s3xyLogPush(S3XY_LOG_INFO, (String("auto exact scan addr=") + address).c_str(), nullptr, 0, -127, (int8_t)triggerSlot);
 
   const uint32_t exactScanStartedMs = millis();
@@ -2942,6 +2978,7 @@ static String s3xyStatsToJson() {
   bool autoEnabled, bluetoothEnabled, bleInitialized, scanning;
   uint8_t discoveredCount;
   char discoveryError[64];
+#if S3XY_DIAGNOSTICS_ENABLED
   uint32_t logDropped;
   uint32_t identityProbeAttempts, identityProbeMatches, identityProbeMismatches, identityRebinds;
   uint32_t autoExactHits, autoExactMisses, autoLinkFailures;
@@ -2951,13 +2988,17 @@ static String s3xyStatsToJson() {
   char bleStack[16];
   char autoTrace[112];
   uint32_t totalAttempts = 0, totalReconnects = 0, totalFailures = 0;
+#endif
+
   portENTER_CRITICAL(&s3xyMux);
   autoEnabled = s3xyAutoEnabled;
   bluetoothEnabled = s3xyBluetoothEnabled;
   bleInitialized = s3xyBleInitialized;
   scanning = s3xyDiscoveryScanning;
   discoveredCount = s3xyDiscoveredCount;
-  strncpy(discoveryError, s3xyDiscoveryError, sizeof(discoveryError)-1); discoveryError[sizeof(discoveryError)-1] = '\0';
+  strncpy(discoveryError, s3xyDiscoveryError, sizeof(discoveryError)-1);
+  discoveryError[sizeof(discoveryError)-1] = '\0';
+#if S3XY_DIAGNOSTICS_ENABLED
   logDropped = s3xyLogDropped;
   identityProbeAttempts = s3xyIdentityProbeAttempts;
   identityProbeMatches = s3xyIdentityProbeMatches;
@@ -2971,14 +3012,17 @@ static String s3xyStatsToJson() {
   bondRepairAttempts = s3xyBondRepairAttempts;
   bondRepairReady = s3xyBondRepairReady;
   bondPersistStillMissing = s3xyBondPersistStillMissing;
-  strncpy(bleStack, s3xyBleStackName, sizeof(bleStack) - 1); bleStack[sizeof(bleStack) - 1] = '\0';
-  strncpy(autoTrace, s3xyAutoTrace, sizeof(autoTrace) - 1); autoTrace[sizeof(autoTrace) - 1] = '\0';
+  strncpy(bleStack, s3xyBleStackName, sizeof(bleStack) - 1);
+  bleStack[sizeof(bleStack) - 1] = '\0';
+  strncpy(autoTrace, s3xyAutoTrace, sizeof(autoTrace) - 1);
+  autoTrace[sizeof(autoTrace) - 1] = '\0';
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
     if (!s3xyDevices[i].used) continue;
     totalAttempts += s3xyDevices[i].autoAttempts;
     totalReconnects += s3xyDevices[i].autoReconnects;
     totalFailures += s3xyDevices[i].autoFailures;
   }
+#endif
   portEXIT_CRITICAL(&s3xyMux);
 
   uint32_t ulcExpire, ulcAccepted, ulcBlocked, ulcTxOk, ulcTxFail, ulcLastAction;
@@ -2994,18 +3038,25 @@ static String s3xyStatsToJson() {
   ulcTxFail = ulcSnoozeTxFail;
   ulcLastAction = ulcSnoozeLastActionMs;
   ulcLastDir = ulcSnoozeLastDir;
-  strncpy(ulcResult, ulcSnoozeLastResult, sizeof(ulcResult)-1); ulcResult[sizeof(ulcResult)-1] = '\0';
+  strncpy(ulcResult, ulcSnoozeLastResult, sizeof(ulcResult)-1);
+  ulcResult[sizeof(ulcResult)-1] = '\0';
   portEXIT_CRITICAL(&ulcSnoozeMux);
 
   String j;
+#if S3XY_DIAGNOSTICS_ENABLED
   j.reserve(4096);
+#else
+  j.reserve(3072);
+#endif
   j = "{";
   j += "\"bluetoothEnabled\":" + String(bluetoothEnabled ? "true" : "false");
   j += ",\"bleInitialized\":" + String(bleInitialized ? "true" : "false");
   j += ",\"autoEnabled\":" + String(autoEnabled ? "true" : "false");
+  j += ",\"diagnosticsEnabled\":" + String(S3XY_DIAGNOSTICS_ENABLED ? "true" : "false");
   j += ",\"maxDevices\":" + String(S3XY_MAX_DEVICES);
   j += ",\"pairedCount\":" + String(s3xyRegisteredCount());
   j += ",\"connectedCount\":" + String(s3xyConnectedCount());
+#if S3XY_DIAGNOSTICS_ENABLED
   j += ",\"localBondCount\":" + String(s3xyLocalBondCount());
   j += ",\"bleStack\":\"" + s3xyJsonEscape(bleStack) + "\"";
 #ifdef ESP_ARDUINO_VERSION_STR
@@ -3029,63 +3080,84 @@ static String s3xyStatsToJson() {
   j += ",\"autoAttempts\":" + String(totalAttempts);
   j += ",\"autoReconnects\":" + String(totalReconnects);
   j += ",\"autoFailures\":" + String(totalFailures);
+#endif
   j += ",\"scanning\":" + String(scanning ? "true" : "false");
   j += ",\"scanError\":\"" + s3xyJsonEscape(discoveryError) + "\"";
   j += ",\"devices\":[";
 
   bool first = true;
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
-    bool used, connected, subscribed, secure, paused, deviceAutoConnect, addressTypeKnown, identityPersistVerified;
-    uint8_t state, addressType, singleAction, doubleAction, longAction, lastLen, peerIdLen;
+    bool used, connected, paused, deviceAutoConnect;
+    uint8_t state, singleAction, doubleAction, longAction;
     int16_t rssi;
+    char addr[24], name[28];
+#if S3XY_DIAGNOSTICS_ENABLED
+    bool subscribed, secure, addressTypeKnown, identityPersistVerified;
+    uint8_t addressType, lastLen, peerIdLen;
     uint32_t notifyCount, unparsedCount, singleCount, doubleCount, longCount, ackCount, lastMs;
     uint32_t nextAttempt, attempts, reconnects, failures, consecutive;
     uint32_t lastDiscoverMs, lastConnectMs, lastReadyMs;
-    char addr[24], name[28], err[64], idHex[64], lastAutoPath[24];
+    char err[64], idHex[64], lastAutoPath[24];
     uint8_t last[S3XY_LOG_DATA_MAX] = {};
+#endif
     portENTER_CRITICAL(&s3xyMux);
     used = s3xyDevices[i].used;
     if (used) {
-      connected = s3xyDevices[i].connected; subscribed = s3xyDevices[i].subscribed;
-      secure = s3xyDevices[i].secureOk; paused = s3xyDevices[i].manualPaused;
+      connected = s3xyDevices[i].connected;
+      paused = s3xyDevices[i].manualPaused;
       deviceAutoConnect = s3xyDevices[i].autoConnect;
+      state = s3xyDevices[i].state;
+      rssi = s3xyDevices[i].rssi;
+      singleAction = s3xyDevices[i].singleAction;
+      doubleAction = s3xyDevices[i].doubleAction;
+      longAction = s3xyDevices[i].longAction;
+      strncpy(addr, s3xyDevices[i].address, sizeof(addr)-1);
+      addr[sizeof(addr)-1] = '\0';
+      strncpy(name, s3xyDevices[i].name, sizeof(name)-1);
+      name[sizeof(name)-1] = '\0';
+#if S3XY_DIAGNOSTICS_ENABLED
+      subscribed = s3xyDevices[i].subscribed;
+      secure = s3xyDevices[i].secureOk;
       addressType = s3xyDevices[i].addressType;
       addressTypeKnown = s3xyDevices[i].addressTypeKnown;
       identityPersistVerified = s3xyDevices[i].identityPersistVerified;
       peerIdLen = s3xyDevices[i].peerIdLen;
-      state = s3xyDevices[i].state; rssi = s3xyDevices[i].rssi;
-      singleAction = s3xyDevices[i].singleAction; doubleAction = s3xyDevices[i].doubleAction; longAction = s3xyDevices[i].longAction;
-      notifyCount = s3xyDevices[i].notifyCount; unparsedCount = s3xyDevices[i].unparsedCount; singleCount = s3xyDevices[i].singleCount;
-      doubleCount = s3xyDevices[i].doubleCount; longCount = s3xyDevices[i].longCount;
-      ackCount = s3xyDevices[i].handshakeAckCount; lastMs = s3xyDevices[i].lastNotifyMs;
-      lastLen = s3xyDevices[i].lastNotifyLen; memcpy(last, s3xyDevices[i].lastNotify, lastLen);
-      nextAttempt = s3xyDevices[i].nextAttemptMs; attempts = s3xyDevices[i].autoAttempts;
-      reconnects = s3xyDevices[i].autoReconnects; failures = s3xyDevices[i].autoFailures;
+      notifyCount = s3xyDevices[i].notifyCount;
+      unparsedCount = s3xyDevices[i].unparsedCount;
+      singleCount = s3xyDevices[i].singleCount;
+      doubleCount = s3xyDevices[i].doubleCount;
+      longCount = s3xyDevices[i].longCount;
+      ackCount = s3xyDevices[i].handshakeAckCount;
+      lastMs = s3xyDevices[i].lastNotifyMs;
+      lastLen = s3xyDevices[i].lastNotifyLen;
+      memcpy(last, s3xyDevices[i].lastNotify, lastLen);
+      nextAttempt = s3xyDevices[i].nextAttemptMs;
+      attempts = s3xyDevices[i].autoAttempts;
+      reconnects = s3xyDevices[i].autoReconnects;
+      failures = s3xyDevices[i].autoFailures;
       consecutive = s3xyDevices[i].consecutiveFailures;
       lastDiscoverMs = s3xyDevices[i].lastDiscoverMs;
       lastConnectMs = s3xyDevices[i].lastConnectMs;
       lastReadyMs = s3xyDevices[i].lastReadyMs;
-      strncpy(lastAutoPath, s3xyDevices[i].lastAutoPath, sizeof(lastAutoPath)-1); lastAutoPath[sizeof(lastAutoPath)-1] = '\0';
-      strncpy(addr, s3xyDevices[i].address, sizeof(addr)-1); addr[sizeof(addr)-1] = '\0';
-      strncpy(name, s3xyDevices[i].name, sizeof(name)-1); name[sizeof(name)-1] = '\0';
-      strncpy(err, s3xyDevices[i].lastError, sizeof(err)-1); err[sizeof(err)-1] = '\0';
-      strncpy(idHex, s3xyDevices[i].idHex, sizeof(idHex)-1); idHex[sizeof(idHex)-1] = '\0';
+      strncpy(lastAutoPath, s3xyDevices[i].lastAutoPath, sizeof(lastAutoPath)-1);
+      lastAutoPath[sizeof(lastAutoPath)-1] = '\0';
+      strncpy(err, s3xyDevices[i].lastError, sizeof(err)-1);
+      err[sizeof(err)-1] = '\0';
+      strncpy(idHex, s3xyDevices[i].idHex, sizeof(idHex)-1);
+      idHex[sizeof(idHex)-1] = '\0';
+#endif
     }
     portEXIT_CRITICAL(&s3xyMux);
     if (!used) continue;
-    char lastHex[80] = {}; s3xyBytesToHex(last, lastLen, lastHex, sizeof(lastHex));
-    const uint32_t retryMs = (nextAttempt && (int32_t)(nextAttempt - now) > 0) ? (nextAttempt - now) : 0;
-    if (!first) j += ","; first = false;
+
+    if (!first) j += ",";
+    first = false;
     j += "{";
     j += "\"id\":" + String((unsigned)(i + 1));
     j += ",\"name\":\"" + s3xyJsonEscape(name) + "\"";
     j += ",\"address\":\"" + s3xyJsonEscape(addr) + "\"";
-    j += ",\"addressTypeKnown\":" + String(addressTypeKnown ? "true" : "false");
-    j += ",\"addressType\":" + String((unsigned)addressType);
     j += ",\"state\":\"" + String(s3xyStateName(state)) + "\"";
     j += ",\"connected\":" + String(connected ? "true" : "false");
-    j += ",\"subscribed\":" + String(subscribed ? "true" : "false");
-    j += ",\"secure\":" + String(secure ? "true" : "false");
     j += ",\"paused\":" + String(paused ? "true" : "false");
     j += ",\"autoConnect\":" + String(deviceAutoConnect ? "true" : "false");
     j += ",\"rssi\":" + String((int)rssi);
@@ -3095,6 +3167,14 @@ static String s3xyStatsToJson() {
     j += ",\"singleLabel\":\"" + String(s3xyActionLabel(singleAction)) + "\"";
     j += ",\"doubleLabel\":\"" + String(s3xyActionLabel(doubleAction)) + "\"";
     j += ",\"longLabel\":\"" + String(s3xyActionLabel(longAction)) + "\"";
+#if S3XY_DIAGNOSTICS_ENABLED
+    char lastHex[80] = {};
+    s3xyBytesToHex(last, lastLen, lastHex, sizeof(lastHex));
+    const uint32_t retryMs = (nextAttempt && (int32_t)(nextAttempt - now) > 0) ? (nextAttempt - now) : 0;
+    j += ",\"addressTypeKnown\":" + String(addressTypeKnown ? "true" : "false");
+    j += ",\"addressType\":" + String((unsigned)addressType);
+    j += ",\"subscribed\":" + String(subscribed ? "true" : "false");
+    j += ",\"secure\":" + String(secure ? "true" : "false");
     j += ",\"notifyCount\":" + String(notifyCount);
     j += ",\"unparsedCount\":" + String(unparsedCount);
     j += ",\"singleCount\":" + String(singleCount);
@@ -3116,6 +3196,7 @@ static String s3xyStatsToJson() {
     j += ",\"lastAutoPath\":\"" + s3xyJsonEscape(lastAutoPath) + "\"";
     j += ",\"retryInMs\":" + String(retryMs);
     j += ",\"error\":\"" + s3xyJsonEscape(err) + "\"";
+#endif
     j += "}";
   }
   j += "]";
@@ -3123,7 +3204,9 @@ static String s3xyStatsToJson() {
   j += ",\"scanResults\":[";
   for (uint8_t i = 0; i < discoveredCount; i++) {
     S3xyDiscoveredDevice d;
-    portENTER_CRITICAL(&s3xyMux); d = s3xyDiscovered[i]; portEXIT_CRITICAL(&s3xyMux);
+    portENTER_CRITICAL(&s3xyMux);
+    d = s3xyDiscovered[i];
+    portEXIT_CRITICAL(&s3xyMux);
     if (i) j += ",";
     j += "{\"address\":\"" + s3xyJsonEscape(d.address) + "\"";
     j += ",\"name\":\"" + s3xyJsonEscape(d.name) + "\"";
@@ -3141,7 +3224,9 @@ static String s3xyStatsToJson() {
   j += ",\"ulcLastActionMs\":" + String(ulcLastAction);
   j += ",\"ulcLastDir\":" + String((unsigned)ulcLastDir);
   j += ",\"ulcResult\":\"" + s3xyJsonEscape(ulcResult) + "\"";
+#if S3XY_DIAGNOSTICS_ENABLED
   j += ",\"logDropped\":" + String((unsigned long)logDropped);
+#endif
   j += "}";
   return j;
 }
@@ -3166,8 +3251,13 @@ static void csvEscapeField(const char *src, char *dst, size_t dstLen) {
 }
 
 static void s3xyClearLog() {
+#if S3XY_DIAGNOSTICS_ENABLED
   portENTER_CRITICAL(&s3xyMux);
-  s3xyLogHead = 0; s3xyLogCount = 0; s3xyLogDropped = 0; s3xyActionPending = 0; s3xyAccelActionPending = 0; s3xyResearchCaptureAPending = 0; s3xyResearchCaptureBPending = 0; s3xyResearchCaptureCPending = 0; s3xyResearchCaptureDPending = 0; s3xyResearchCaptureResetPending = 0;
+  s3xyLogHead = 0; s3xyLogCount = 0; s3xyLogDropped = 0;
+  s3xyActionPending = 0; s3xyAccelActionPending = 0;
+  s3xyResearchCaptureAPending = 0; s3xyResearchCaptureBPending = 0;
+  s3xyResearchCaptureCPending = 0; s3xyResearchCaptureDPending = 0;
+  s3xyResearchCaptureResetPending = 0;
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
     if (!s3xyDevices[i].used) continue;
     s3xyDevices[i].notifyCount = 0;
@@ -3179,20 +3269,14 @@ static void s3xyClearLog() {
     s3xyDevices[i].autoAttempts = 0;
     s3xyDevices[i].autoReconnects = 0;
     s3xyDevices[i].autoFailures = 0;
-    s3xyDevices[i].consecutiveFailures = 0;
+    // Preserve consecutiveFailures because it participates in reconnect backoff.
     s3xyDevices[i].lastNotifyMs = 0;
     s3xyDevices[i].lastNotifyLen = 0;
     memset(s3xyDevices[i].lastNotify, 0, sizeof(s3xyDevices[i].lastNotify));
   }
   portEXIT_CRITICAL(&s3xyMux);
-  portENTER_CRITICAL(&ulcSnoozeMux);
-  ulcSnoozePending = false; ulcSnoozeExpireMs = 0;
-  ulcSnoozeAccepted = 0; ulcSnoozeBlocked = 0; ulcSnoozeTxOk = 0; ulcSnoozeTxFail = 0;
-  ulcSnoozeLastActionMs = 0; ulcSnoozeLastDir = 0;
-  strncpy(ulcSnoozeLastResult, "never", sizeof(ulcSnoozeLastResult) - 1);
-  ulcSnoozeLastResult[sizeof(ulcSnoozeLastResult) - 1] = '\0';
-  portEXIT_CRITICAL(&ulcSnoozeMux);
   s3xyLogPush(S3XY_LOG_INFO, "multi-device/action log cleared");
+#endif
 }
 
 

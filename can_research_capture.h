@@ -107,10 +107,21 @@ static_assert(sizeof(ResearchCaptureRawEntry) == 16, "research raw entry size ch
 
 static constexpr size_t RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES = sizeof(ResearchCaptureEntry) * RESEARCH_CAPTURE_CAPACITY;
 static constexpr size_t RESEARCH_CAPTURE_RAW_MAIN_BYTES = sizeof(ResearchCaptureRawEntry) * RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY;
-static constexpr size_t RESEARCH_CAPTURE_MAIN_BUFFER_BYTES = RESEARCH_CAPTURE_RAW_MAIN_BYTES > RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES ? RESEARCH_CAPTURE_RAW_MAIN_BYTES : RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES;
 static constexpr size_t RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES = sizeof(ResearchCapturePreState) * RESEARCH_CAPTURE_STATE_COUNT * RESEARCH_CAPTURE_PRE_SLOT_COUNT;
 static constexpr size_t RESEARCH_CAPTURE_RAW_AUX_BYTES = sizeof(ResearchCaptureRawEntry) * RESEARCH_CAPTURE_RAW_PRE_CAPACITY;
-static constexpr size_t RESEARCH_CAPTURE_AUX_BUFFER_BYTES = RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES > RESEARCH_CAPTURE_RAW_AUX_BYTES ? RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES : RESEARCH_CAPTURE_RAW_AUX_BYTES;
+static constexpr size_t RESEARCH_CAPTURE_LATEST_BYTES = sizeof(ResearchCaptureLatest) * RESEARCH_CAPTURE_STATE_COUNT;
+static constexpr size_t RESEARCH_CAPTURE_KNOWN_BYTES = sizeof(uint16_t) * RESEARCH_CAPTURE_STATE_COUNT;
+
+// v3.3 optimization: allocate the large archive/pre-history blocks for the
+// selected capture mode instead of permanently reserving the RAW maximum.
+// Snapshot capacity and RAW capacity are unchanged.
+static inline size_t researchCaptureMainBytesForMode(uint8_t mode) {
+  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) ? RESEARCH_CAPTURE_RAW_MAIN_BYTES : RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES;
+}
+
+static inline size_t researchCaptureAuxBytesForMode(uint8_t mode) {
+  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) ? RESEARCH_CAPTURE_RAW_AUX_BYTES : RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES;
+}
 
 struct __attribute__((packed)) ResearchCapturePreSlot {
   uint32_t snapshotMs;
@@ -151,6 +162,8 @@ static ResearchCaptureEntry *researchCaptureEntries = nullptr;
 static ResearchCaptureLatest *researchCaptureLatest = nullptr;
 static ResearchCapturePreState *researchCapturePreStates = nullptr;
 static uint16_t *researchCaptureKnownIndices = nullptr;
+static volatile size_t researchCaptureAllocatedMainBytes = 0;
+static volatile size_t researchCaptureAllocatedAuxBytes = 0;
 static ResearchCapturePreSlot researchCapturePreSlots[RESEARCH_CAPTURE_PRE_SLOT_COUNT] = {};
 static ResearchCaptureSegmentMeta researchCaptureSegments[RESEARCH_CAPTURE_MAX_SEGMENTS] = {};
 static char researchCaptureLabels[RESEARCH_CAPTURE_LABEL_SLOTS][RESEARCH_CAPTURE_LABEL_BYTES] = {
@@ -180,7 +193,7 @@ static volatile uint32_t researchCapturePostWindowMs = RESEARCH_CAPTURE_POST_DEF
 static volatile uint8_t researchCaptureMode = RESEARCH_CAPTURE_MODE_SNAPSHOT;
 static volatile bool researchCaptureConfigUpdating = false;
 static volatile bool researchCaptureExporting = false;
-// RAW modes reuse the oversized main/aux PSRAM blocks as a compact 16-byte archive
+// RAW modes use mode-sized main/aux PSRAM blocks as a compact 16-byte archive
 // plus an independent rolling PRE ring. This preserves completed segments while PRE
 // recording continues for the next automatic or manual trigger.
 static volatile uint32_t researchCaptureRawArchiveCount = 0;
@@ -374,35 +387,56 @@ static bool researchCaptureSetConfig(uint32_t preMs, uint32_t postMs) {
 }
 
 static void researchCaptureReset();
+static void researchCaptureReleaseModeBuffers();
+static bool researchCaptureEnsureBuffer();
 
 static bool researchCaptureSetMode(uint8_t mode) {
   if (mode != RESEARCH_CAPTURE_MODE_SNAPSHOT && mode != RESEARCH_CAPTURE_MODE_RAW_TRANSITION &&
       mode != RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) return false;
+  uint8_t oldMode;
   portENTER_CRITICAL(&researchCaptureMux);
   if (researchCaptureState == RESEARCH_CAPTURE_CAPTURING || researchCaptureConfigUpdating || researchCaptureExporting) {
     portEXIT_CRITICAL(&researchCaptureMux);
     return false;
   }
-  if (mode == researchCaptureMode) {
+  oldMode = researchCaptureMode;
+  if (mode == oldMode) {
     portEXIT_CRITICAL(&researchCaptureMux);
     return true;
   }
   researchCaptureConfigUpdating = true;
+  researchCaptureMode = mode;
   portEXIT_CRITICAL(&researchCaptureMux);
 
+  // Resize the mode-specific buffers first. NVS is updated only after the new
+  // allocation succeeds, so an allocation failure cannot persist a mode that
+  // would fail again on the next boot.
+  researchCaptureReleaseModeBuffers();
+  const bool bufferOk = researchCaptureEnsureBuffer();
   bool saved = false;
-  Preferences p;
-  if (p.begin("researchcap", false)) {
-    saved = p.putUChar("mode", mode) == sizeof(uint8_t);
-    p.end();
+  if (bufferOk) {
+    Preferences p;
+    if (p.begin("researchcap", false)) {
+      saved = p.putUChar("mode", mode) == sizeof(uint8_t);
+      p.end();
+    }
   }
 
+  if (!bufferOk || !saved) {
+    portENTER_CRITICAL(&researchCaptureMux);
+    researchCaptureMode = oldMode;
+    portEXIT_CRITICAL(&researchCaptureMux);
+    researchCaptureReleaseModeBuffers();
+    (void)researchCaptureEnsureBuffer();
+  }
+
+  researchCaptureReset();
   portENTER_CRITICAL(&researchCaptureMux);
-  if (saved) researchCaptureMode = mode;
   researchCaptureConfigUpdating = false;
+  if ((!bufferOk || !saved) && !(researchCaptureEntries && researchCapturePreStates))
+    researchCaptureState = RESEARCH_CAPTURE_ERROR;
   portEXIT_CRITICAL(&researchCaptureMux);
-  if (saved) researchCaptureReset();
-  return saved;
+  return bufferOk && saved;
 }
 
 static inline uint16_t researchCaptureStateIndex(uint8_t bus, uint16_t id) {
@@ -415,22 +449,65 @@ static inline uint16_t researchCaptureAge16(uint32_t now, uint32_t then) {
   return (uint16_t)(age > 65535U ? 65535U : age);
 }
 
+static void researchCaptureReleaseModeBuffers() {
+  ResearchCaptureEntry *entries = nullptr;
+  ResearchCapturePreState *pre = nullptr;
+  portENTER_CRITICAL(&researchCaptureMux);
+  entries = researchCaptureEntries;
+  pre = researchCapturePreStates;
+  researchCaptureEntries = nullptr;
+  researchCapturePreStates = nullptr;
+  researchCaptureAllocatedMainBytes = 0;
+  researchCaptureAllocatedAuxBytes = 0;
+  researchCaptureUsingPsram = false;
+  portEXIT_CRITICAL(&researchCaptureMux);
+  if (entries) heap_caps_free(entries);
+  if (pre) heap_caps_free(pre);
+}
+
 static bool researchCaptureEnsureBuffer() {
-  if (researchCaptureEntries && researchCaptureLatest && researchCapturePreStates && researchCaptureKnownIndices) return true;
+  uint8_t mode;
+  ResearchCaptureEntry *currentEntries;
+  ResearchCapturePreState *currentPre;
+  ResearchCaptureLatest *currentLatest;
+  uint16_t *currentKnown;
+  size_t currentMainBytes, currentAuxBytes;
+  portENTER_CRITICAL(&researchCaptureMux);
+  mode = researchCaptureMode;
+  currentEntries = researchCaptureEntries;
+  currentPre = researchCapturePreStates;
+  currentLatest = researchCaptureLatest;
+  currentKnown = researchCaptureKnownIndices;
+  currentMainBytes = researchCaptureAllocatedMainBytes;
+  currentAuxBytes = researchCaptureAllocatedAuxBytes;
+  portEXIT_CRITICAL(&researchCaptureMux);
+
+  const size_t requiredMainBytes = researchCaptureMainBytesForMode(mode);
+  const size_t requiredAuxBytes = researchCaptureAuxBytesForMode(mode);
+  if (currentEntries && currentPre && currentLatest && currentKnown &&
+      currentMainBytes == requiredMainBytes && currentAuxBytes == requiredAuxBytes) return true;
+
+  // A mode change may require a differently-sized archive/history pair. Detach
+  // the old pair under the capture lock, then free it outside the critical section.
+  if (currentEntries || currentPre) researchCaptureReleaseModeBuffers();
 
   ResearchCaptureEntry *entries = (ResearchCaptureEntry *)heap_caps_malloc(
-      RESEARCH_CAPTURE_MAIN_BUFFER_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  ResearchCaptureLatest *latest = (ResearchCaptureLatest *)heap_caps_malloc(
-      sizeof(ResearchCaptureLatest) * RESEARCH_CAPTURE_STATE_COUNT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      requiredMainBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   ResearchCapturePreState *pre = (ResearchCapturePreState *)heap_caps_malloc(
-      RESEARCH_CAPTURE_AUX_BUFFER_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  uint16_t *known = (uint16_t *)heap_caps_malloc(
-      sizeof(uint16_t) * RESEARCH_CAPTURE_STATE_COUNT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      requiredAuxBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  ResearchCaptureLatest *latest = nullptr;
+  uint16_t *known = nullptr;
+  const bool allocatedLatest = currentLatest == nullptr;
+  const bool allocatedKnown = currentKnown == nullptr;
+  if (allocatedLatest) latest = (ResearchCaptureLatest *)heap_caps_malloc(
+      RESEARCH_CAPTURE_LATEST_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (allocatedKnown) known = (uint16_t *)heap_caps_malloc(
+      RESEARCH_CAPTURE_KNOWN_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-  if (!entries || !latest || !pre || !known) {
+  if (!entries || !pre || (allocatedLatest && !latest) || (allocatedKnown && !known)) {
     if (entries) heap_caps_free(entries);
-    if (latest) heap_caps_free(latest);
     if (pre) heap_caps_free(pre);
+    if (latest) heap_caps_free(latest);
     if (known) heap_caps_free(known);
     portENTER_CRITICAL(&researchCaptureMux);
     researchCaptureState = RESEARCH_CAPTURE_ERROR;
@@ -439,29 +516,41 @@ static bool researchCaptureEnsureBuffer() {
     return false;
   }
 
-  memset(latest, 0, sizeof(ResearchCaptureLatest) * RESEARCH_CAPTURE_STATE_COUNT);
-  memset(pre, 0, RESEARCH_CAPTURE_AUX_BUFFER_BYTES);
-  memset(known, 0, sizeof(uint16_t) * RESEARCH_CAPTURE_STATE_COUNT);
+  memset(entries, 0, requiredMainBytes);
+  memset(pre, 0, requiredAuxBytes);
+  if (allocatedLatest) memset(latest, 0, RESEARCH_CAPTURE_LATEST_BYTES);
+  if (allocatedKnown) memset(known, 0, RESEARCH_CAPTURE_KNOWN_BYTES);
 
   portENTER_CRITICAL(&researchCaptureMux);
-  if (!researchCaptureEntries && !researchCaptureLatest && !researchCapturePreStates && !researchCaptureKnownIndices) {
+  if (!researchCaptureEntries && !researchCapturePreStates) {
     researchCaptureEntries = entries;
-    researchCaptureLatest = latest;
     researchCapturePreStates = pre;
-    researchCaptureKnownIndices = known;
-    researchCaptureUsingPsram = true;
-    researchCaptureState = RESEARCH_CAPTURE_READY;
+    researchCaptureAllocatedMainBytes = requiredMainBytes;
+    researchCaptureAllocatedAuxBytes = requiredAuxBytes;
     entries = nullptr;
-    latest = nullptr;
     pre = nullptr;
+  }
+  if (!researchCaptureLatest) {
+    researchCaptureLatest = latest;
+    latest = nullptr;
+  }
+  if (!researchCaptureKnownIndices) {
+    researchCaptureKnownIndices = known;
     known = nullptr;
   }
-  const bool ok = researchCaptureEntries && researchCaptureLatest && researchCapturePreStates && researchCaptureKnownIndices;
+  const bool ok = researchCaptureEntries && researchCaptureLatest &&
+                  researchCapturePreStates && researchCaptureKnownIndices &&
+                  researchCaptureAllocatedMainBytes == requiredMainBytes &&
+                  researchCaptureAllocatedAuxBytes == requiredAuxBytes;
+  if (ok) {
+    researchCaptureUsingPsram = true;
+    if (researchCaptureState == RESEARCH_CAPTURE_ERROR) researchCaptureState = RESEARCH_CAPTURE_READY;
+  }
   portEXIT_CRITICAL(&researchCaptureMux);
 
   if (entries) heap_caps_free(entries);
-  if (latest) heap_caps_free(latest);
   if (pre) heap_caps_free(pre);
+  if (latest) heap_caps_free(latest);
   if (known) heap_caps_free(known);
   return ok;
 }
@@ -470,14 +559,17 @@ static bool researchCaptureInit() {
   researchCaptureLoadLabels();
   researchCaptureLoadConfig();
   const bool ok = researchCaptureEnsureBuffer();
-  const size_t mainBytes = RESEARCH_CAPTURE_MAIN_BUFFER_BYTES;
-  const size_t latestBytes = sizeof(ResearchCaptureLatest) * RESEARCH_CAPTURE_STATE_COUNT;
-  const size_t preBytes = RESEARCH_CAPTURE_AUX_BUFFER_BYTES;
-  const size_t knownBytes = sizeof(uint16_t) * RESEARCH_CAPTURE_STATE_COUNT;
-  Serial.printf("CAN Research Capture: %s · main=%u KiB · aux=%u KiB · state=%u KiB · snapshot=%lu rows · raw=%lu frames/%u segments\n",
-                ok ? "PSRAM READY" : "DISABLED",
-                (unsigned)(mainBytes / 1024U), (unsigned)(preBytes / 1024U),
-                (unsigned)((latestBytes + knownBytes) / 1024U), (unsigned long)RESEARCH_CAPTURE_CAPACITY,
+  uint8_t mode; size_t mainBytes, auxBytes;
+  portENTER_CRITICAL(&researchCaptureMux);
+  mode = researchCaptureMode;
+  mainBytes = researchCaptureAllocatedMainBytes;
+  auxBytes = researchCaptureAllocatedAuxBytes;
+  portEXIT_CRITICAL(&researchCaptureMux);
+  Serial.printf("CAN Research Capture: %s · %s · main=%u KiB · aux=%u KiB · state=%u KiB · snapshot=%lu rows · raw=%lu frames/%u segments\n",
+                ok ? "PSRAM READY" : "DISABLED", researchCaptureModeName(mode),
+                (unsigned)(mainBytes / 1024U), (unsigned)(auxBytes / 1024U),
+                (unsigned)((RESEARCH_CAPTURE_LATEST_BYTES + RESEARCH_CAPTURE_KNOWN_BYTES) / 1024U),
+                (unsigned long)RESEARCH_CAPTURE_CAPACITY,
                 (unsigned long)RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY, (unsigned)RESEARCH_CAPTURE_RAW_MAX_SEGMENTS);
   return ok;
 }
@@ -913,6 +1005,14 @@ static bool researchCaptureRawRequestLocked(uint8_t labelSlot, uint32_t triggerN
 static void researchCaptureTick(uint32_t now) {
   if (!researchCaptureEntries || !researchCaptureLatest || !researchCapturePreStates || !researchCaptureKnownIndices) return;
   portENTER_CRITICAL(&researchCaptureMux);
+  // A mode change can detach/free the mode-specific buffers between the fast
+  // pointer check above and this lock acquisition. Revalidate under the lock
+  // before dereferencing either archive/history block.
+  if (researchCaptureConfigUpdating || !researchCaptureEntries || !researchCaptureLatest ||
+      !researchCapturePreStates || !researchCaptureKnownIndices) {
+    portEXIT_CRITICAL(&researchCaptureMux);
+    return;
+  }
 
   if (researchCaptureModeIsRaw(researchCaptureMode)) {
     if (researchCaptureState == RESEARCH_CAPTURE_CAPTURING && researchCaptureRawTriggered &&
@@ -1097,6 +1197,14 @@ static void researchCaptureObserve(uint8_t bus, uint16_t id, uint8_t dlc, const 
   const uint16_t stateIdx = researchCaptureStateIndex(bus, id);
 
   portENTER_CRITICAL(&researchCaptureMux);
+  // Mode changes resize/free the archive/history blocks outside the critical
+  // section. Skip this frame while that transition is in progress and recheck
+  // the pointers under the lock to close the fast-check race above.
+  if (researchCaptureConfigUpdating || !researchCaptureEntries || !researchCapturePreStates ||
+      !researchCaptureLatest || !researchCaptureKnownIndices) {
+    portEXIT_CRITICAL(&researchCaptureMux);
+    return;
+  }
   // Timestamp under the capture lock so Party/VH task preemption cannot append
   // out-of-order RAW entries and violate the bulk-copy planner's chronology.
   const uint32_t now = (uint32_t)millis();
@@ -1150,6 +1258,10 @@ static inline void researchCaptureObserveTxParty(uint16_t id, uint8_t dlc,
   if (id != 0x399 || !data) return;
   const uint8_t n = dlc > 8 ? 8 : dlc;
   portENTER_CRITICAL(&researchCaptureMux);
+  if (researchCaptureConfigUpdating || !researchCaptureEntries || !researchCapturePreStates) {
+    portEXIT_CRITICAL(&researchCaptureMux);
+    return;
+  }
   const uint32_t now = (uint32_t)millis();
   researchCaptureRawObserveLocked(txOk ? RESEARCH_CAPTURE_BUS_PARTY_TX_OK
                                        : RESEARCH_CAPTURE_BUS_PARTY_TX_FAIL,

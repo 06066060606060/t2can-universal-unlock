@@ -12,11 +12,12 @@ static void httpPedalMapStats(){server.send(200,"application/json",pedalMapStats
 
 static String nagCfgToJson() {
   NagConfig c;
+  const NagHumanConfigPure human = nagHumanRuntimeConfigSnapshot();
   portENTER_CRITICAL(&nagCfgMux);
   c = nagCfg;
   portEXIT_CRITICAL(&nagCfgMux);
   String s;
-  s.reserve(512);
+  s.reserve(620);
   s = "{";
   s += "\"enabled\":";    s += (c.enabled ? "true" : "false");
   s += ",\"pauseAtZeroSpeed\":"; s += (c.pauseAtZeroSpeed ? "true" : "false");
@@ -27,6 +28,9 @@ static String nagCfgToJson() {
   s += ",\"pauseMs\":";   s += String(c.pauseMs);
   s += ",\"apStateId\":"; s += String(c.apStateId);
   s += ",\"steeringId\":";s += String(c.steeringId);
+  s += ",\"humanPreset\":\"NORMAL_TIMING\"";
+  s += ",\"humanPeakMinNm\":" + String((float)human.peakMinRaw / 100.0f, 2);
+  s += ",\"humanPeakMaxNm\":" + String((float)human.peakMaxRaw / 100.0f, 2);
 s += ",\"torque\":[";
 for (uint8_t i = 0; i < c.torqueCount; i++) {
   if (i) s += ",";
@@ -57,14 +61,14 @@ static String nagStatsToJson() {
   dasLast = lastDASStatusMillis;
   portEXIT_CRITICAL(&stateMux);
 
-  uint32_t txOk, txFail, skDisabled, skBoot, skWarmup, skSelf, skHo, skInvalid, skInactive, skDecision, skStopped;
+  uint32_t txOk, txFail, skDisabled, skBoot, skWarmup, skSelf, skHo, skInvalid, skInactive, skDecision, skStopped, skCadence, skSpeedStale;
   uint32_t bMutex, bMcp, bEpoch, bFresh, bInvalid, sendErr, lastTx, maxGap, sessStart, sessTx;
   uint8_t lastSkip, lastBlock;
   uint32_t lastSkipMs, lastBlockMs;
   portENTER_CRITICAL(&nagDiagMux);
   txOk=nagTxOk; txFail=nagTxFail;
   skDisabled=nagSkipDisabled; skBoot=nagSkipBootDelay; skWarmup=nagSkipWarmup; skSelf=nagSkipSelfFrame;
-  skHo=nagSkipHandsOn; skInvalid=nagSkipApInvalid; skInactive=nagSkipApInactive; skDecision=nagSkipDecision; skStopped=nagSkipStopped;
+  skHo=nagSkipHandsOn; skInvalid=nagSkipApInvalid; skInactive=nagSkipApInactive; skDecision=nagSkipDecision; skStopped=nagSkipStopped; skCadence=nagSkipCadence; skSpeedStale=nagSkipSpeedStale;
   bMutex=nagBlockMutex; bMcp=nagBlockMcpNotReady; bEpoch=nagBlockEpoch; bFresh=nagBlockFreshMask;
   bInvalid=nagBlockInvalidMsg; sendErr=nagSendError;
   lastTx=nagLastTxOkMs; maxGap=nagMaxTxGapMs; sessStart=nagSessionStartMs; sessTx=nagSessionTxOk;
@@ -73,15 +77,24 @@ static String nagStatsToJson() {
 
   const uint32_t now = (uint32_t)millis();
   bool pauseAtZero = false;
+  uint8_t nagModeNow = MODE_A;
   portENTER_CRITICAL(&nagCfgMux);
   pauseAtZero = nagCfg.pauseAtZeroSpeed;
+  nagModeNow = nagCfg.mode;
   portEXIT_CRITICAL(&nagCfgMux);
   const uint32_t speedAgeMs = c.lastVehicleSpeedMs == 0 ? 999999UL : (uint32_t)(now - c.lastVehicleSpeedMs);
   const bool speedFresh = c.vehicleSpeedValid && c.lastVehicleSpeedMs != 0 && speedAgeMs <= NAG_SPEED_FRESH_MS;
   const float speedKph = c.vehicleSpeedValid ? ((float)nagPartySpeedKphX100Pure(c.vehicleSpeedRaw) / 100.0f) : 0.0f;
-  const bool stoppedGate = nagPauseAtZeroBlocksPure(pauseAtZero, c.vehicleSpeedValid, speedFresh, c.vehicleSpeedRaw);
+  const bool humanMode = nagModeNow == MODE_H;
+  NagHumanStatePure human = {};
+  const NagHumanConfigPure humanConfig = nagHumanRuntimeConfigSnapshot();
+  if (humanMode) human = nagHumanRuntimeSnapshot();
+  const bool humanPaused = humanMode && human.phase == H_PAUSED_STOPPED;
+  const bool stoppedGate = nagPauseAtZeroBlocksPure(pauseAtZero, c.vehicleSpeedValid, speedFresh, c.vehicleSpeedRaw) || humanPaused;
+  const uint16_t humanOutputRaw = human.outputRaw != 0u ? human.outputRaw : NAG_HUMAN_TORQUE_CENTER_RAW;
+  const float humanOutputNm = (float)humanOutputRaw * 0.01f - 20.5f;
   String s;
-  s.reserve(1450);
+  s.reserve(1950);
   s = "{";
   s += "\"rx\":";            s += String(nagRxFrames);
   s += ",\"echo\":";         s += String(nagEchoCount);
@@ -107,6 +120,21 @@ static String nagStatsToJson() {
   s += ",\"vehicleSpeedAgeMs\":"; s += String(speedAgeMs);
   s += ",\"pauseAtZeroSpeed\":"; s += pauseAtZero ? "true" : "false";
   s += ",\"stoppedGate\":"; s += stoppedGate ? "true" : "false";
+  const bool portableMode = nagModeNow == MODE_D || nagModeNow == MODE_E || nagModeNow == MODE_F;
+  s += ",\"portableMode\":"; s += portableMode ? "true" : "false";
+  s += ",\"humanMode\":"; s += humanMode ? "true" : "false";
+  s += ",\"humanPreset\":\"NORMAL_TIMING\"";
+  s += ",\"humanPeakMinNm\":" + String((float)humanConfig.peakMinRaw / 100.0f, 2);
+  s += ",\"humanPeakMaxNm\":" + String((float)humanConfig.peakMaxRaw / 100.0f, 2);
+  s += ",\"humanPhase\":\"" + String(nagHumanPhaseNamePure(human.phase)) + "\"";
+  s += ",\"humanMotion\":\"" + String(nagHumanMotionNamePure(human.motion)) + "\"";
+  s += ",\"humanEventType\":\"" + String(nagHumanEventTypeNamePure(human.event.type)) + "\"";
+  s += ",\"humanEventCount\":" + String((unsigned long)human.eventCount);
+  s += ",\"humanOutputNm\":" + String(humanOutputNm, 2);
+  s += ",\"humanDirection\":" + String((int)human.event.direction);
+  s += ",\"humanCarrier\":" + String(human.carrier ? "true" : "false");
+  s += ",\"humanPaused\":" + String(humanPaused ? "true" : "false");
+  s += ",\"humanSessionAgeMs\":" + String((unsigned long)(human.sessionStartMs ? now - human.sessionStartMs : 0UL));
   s += ",\"apStaleMs\":";    s += String((c.lastApStateMs == 0) ? 999999 : (now - c.lastApStateMs));
   s += ",\"dasAgeMs\":";     s += String((dasLast == 0) ? 999999UL : (uint32_t)(now-dasLast));
   s += ",\"stStaleMs\":";    s += String((c.lastSteeringMs == 0) ? 999999 : (now - c.lastSteeringMs));
@@ -125,6 +153,8 @@ static String nagStatsToJson() {
   s += ",\"skipApInactive\":"; s += String(skInactive);
   s += ",\"skipDecision\":"; s += String(skDecision);
   s += ",\"skipStopped\":"; s += String(skStopped);
+  s += ",\"skipCadence\":"; s += String(skCadence);
+  s += ",\"skipSpeedStale\":"; s += String(skSpeedStale);
   s += ",\"blockMutex\":"; s += String(bMutex);
   s += ",\"blockMcpNotReady\":"; s += String(bMcp);
   s += ",\"blockEpoch\":"; s += String(bEpoch);
@@ -141,9 +171,13 @@ static String nagStatsToJson() {
 
 static String summonStatsToJson() {
     bool tlssc, tlsscHighwayGate, ap, parked, summon, aca, spr, fmode, priorityFreshParked, gateGraceActive;
-    uint8_t priorityState;
+    bool acaStateValid, sprStateValid;
+    uint8_t priorityState, gearSource, authorization, sprRaw;
+    uint8_t confirmedGearState, confirmedGearSource;
     uint32_t prioritySince, priorityTransitions, priorityFullEnter, priorityFullExit, priorityFullInactiveSince;
     uint32_t gateGraceUntil, gateGraceEnter, gateGraceRecover, gateGraceExpire;
+    uint32_t acaObservedMs, sprObservedMs, gearObservedMs, authorizationSinceMs, authorizationTransitions;
+    uint32_t confirmedGearObservedMs, confirmedGearTransitions;
     uint32_t rmx, tok, tfail, r280, r390, r921, r1016;
     const uint32_t now = (uint32_t)millis();
     portENTER_CRITICAL(&stateMux);
@@ -154,6 +188,20 @@ static String summonStatsToJson() {
     summon = gateSummoning;
     aca    = lastAca;
     spr    = sprSeen;
+    acaStateValid = acaValid;
+    sprStateValid = sprValid;
+    acaObservedMs = lastAcaMillis;
+    sprObservedMs = lastSprMillis;
+    sprRaw = lastSprRaw;
+    gearSource = summonGearSource;
+    gearObservedMs = summonGearObservedMs;
+    confirmedGearState = summonConfirmedGearLatch.state;
+    confirmedGearSource = summonConfirmedGearLatch.source;
+    confirmedGearObservedMs = summonConfirmedGearLatch.observedMs;
+    confirmedGearTransitions = summonConfirmedGearTransitions;
+    authorization = summonAuthorization;
+    authorizationSinceMs = summonAuthorizationSinceMs;
+    authorizationTransitions = summonAuthorizationTransitions;
     fmode  = forceMode;
     priorityState = summonPriorityState;
     priorityFreshParked = summonPriorityFreshParkedLocked(now);
@@ -175,6 +223,35 @@ static String summonStatsToJson() {
     r921   = sumRx921;
     r1016  = sumRx1016;
     portEXIT_CRITICAL(&stateMux);
+
+    const SummonRoutePure summonRoute = activeSummonRoute();
+    const uint8_t observedFreshMask = canTxFreshMaskSnapshot();
+    const bool remoteFallbackAllowed = false; // retired from the functional V2.6 gate
+    const uint8_t requiredFreshMask = summonV26CompatRequiredTxFreshMaskPure(
+        summonRoute);
+    const uint32_t gearAge = gearObservedMs ? (uint32_t)(now - gearObservedMs) : 999999UL;
+    const uint32_t confirmedGearAge = confirmedGearObservedMs
+        ? (uint32_t)(now - confirmedGearObservedMs) : 999999UL;
+    const uint32_t acaAge = acaObservedMs ? (uint32_t)(now - acaObservedMs) : 999999UL;
+    const uint32_t sprAge = sprObservedMs ? (uint32_t)(now - sprObservedMs) : 999999UL;
+    const bool acaFresh = acaStateValid &&
+        summonAgeFreshPure(now, acaObservedMs, SUMMON_ACA_FRESH_MS);
+    const bool sprFresh = sprStateValid &&
+        summonAgeFreshPure(now, sprObservedMs, SUMMON_SPR_FRESH_MS);
+    const bool requiredFreshReady = requiredFreshMask != SUMMON_BUS_NONE &&
+        (uint8_t)(observedFreshMask & requiredFreshMask) == requiredFreshMask;
+    const char *gearBusName = summonRoute.gearBusMask == SUMMON_BUS_A
+        ? activeProfileCanAName()
+        : (summonRoute.gearBusMask == SUMMON_BUS_B ? activeProfileCanBName() : "NONE");
+    const char *dasBusName = summonRoute.dasBusMask == SUMMON_BUS_A
+        ? activeProfileCanAName()
+        : (summonRoute.dasBusMask == SUMMON_BUS_B ? activeProfileCanBName() : "NONE");
+    const char *sprBusName = summonRoute.sprBusMask == SUMMON_BUS_A
+        ? activeProfileCanAName()
+        : (summonRoute.sprBusMask == SUMMON_BUS_B ? activeProfileCanBName() : "NONE");
+    const char *transportBusName = summonRoute.transportBusMask == SUMMON_BUS_A
+        ? activeProfileCanAName()
+        : (summonRoute.transportBusMask == SUMMON_BUS_B ? activeProfileCanBName() : "NONE");
 
     bool roadValid, gpsRoadMatch, navRouteActive, controlledAccess, leftOffRamp, rightOffRamp, highwayConfirmed;
     uint8_t roadClass, highwayPositiveCount, highwayNegativeCount;
@@ -201,12 +278,12 @@ static String summonStatsToJson() {
     const uint32_t gateGraceRemaining = (gateGraceActive && (int32_t)(gateGraceUntil - now) > 0)
         ? (uint32_t)(gateGraceUntil - now) : 0;
     const bool gateRaw = parked || summon;
-    const bool gate = gateRaw || gateGraceActive;
+    const bool gate = authorization != SUMMON_AUTH_NONE;
     twai_status_info_t st = {};
     const bool twaiStatusOk = (twai_get_status_info(&st) == ESP_OK);
 
     String s;
-    s.reserve(2800);
+    s.reserve(3900);
     s = "{";
     s += "\"monitoring\":true";
     s += ",\"tlssc\":"   + String(tlssc ? "true" : "false");
@@ -228,6 +305,41 @@ static String summonStatsToJson() {
     s += ",\"tlsscHighwayBlockedCount\":" + String((unsigned long)highwayBlockedCount);
     s += ",\"tlsscHighwayTransitions\":" + String((unsigned long)highwayTransitions);
     s += ",\"monitorMode\":0,\"monitorModeName\":\"ALWAYS_ON\"";
+    s += ",\"summonRouteValid\":" + String(summonRoute.valid ? "true" : "false");
+    s += ",\"gearBusName\":\"" + String(gearBusName) + "\"";
+    s += ",\"dasBusName\":\"" + String(dasBusName) + "\"";
+    s += ",\"sprBusName\":\"" + String(sprBusName) + "\"";
+    s += ",\"transportBusName\":\"" + String(transportBusName) + "\"";
+    s += ",\"allow186Fallback\":" + String(summonRoute.allow186Fallback ? "true" : "false");
+    s += ",\"requiredFreshMask\":" + String((unsigned)requiredFreshMask);
+    s += ",\"requiredFreshMaskName\":\"" + String(summonBusMaskNamePure(requiredFreshMask)) + "\"";
+    s += ",\"observedFreshMask\":" + String((unsigned)observedFreshMask);
+    s += ",\"observedFreshMaskName\":\"" + String(summonBusMaskNamePure(observedFreshMask)) + "\"";
+    s += ",\"requiredFreshReady\":" + String(requiredFreshReady ? "true" : "false");
+    s += ",\"gearSource\":" + String((unsigned)gearSource);
+    s += ",\"gearSourceName\":\"" + String(summonGearSourceNamePure(gearSource)) + "\"";
+    s += ",\"gearAgeMs\":" + String((unsigned long)gearAge);
+    s += ",\"gearFreshMs\":" + String((unsigned long)SUMMON_GEAR_FRESH_MS);
+    s += ",\"confirmedGearState\":" + String((unsigned)confirmedGearState);
+    s += ",\"confirmedGearStateName\":\"" + String(summonConfirmedGearNamePure(confirmedGearState)) + "\"";
+    s += ",\"confirmedGearSource\":" + String((unsigned)confirmedGearSource);
+    s += ",\"confirmedGearSourceName\":\"" + String(summonGearSourceNamePure(confirmedGearSource)) + "\"";
+    s += ",\"confirmedGearAgeMs\":" + String((unsigned long)confirmedGearAge);
+    s += ",\"confirmedGearTransitions\":" + String((unsigned long)confirmedGearTransitions);
+    s += ",\"remoteFallbackAllowed\":" + String(remoteFallbackAllowed ? "true" : "false");
+    s += ",\"acaValid\":" + String(acaStateValid ? "true" : "false");
+    s += ",\"acaFresh\":" + String(acaFresh ? "true" : "false");
+    s += ",\"acaAgeMs\":" + String((unsigned long)acaAge);
+    s += ",\"acaFreshMs\":" + String((unsigned long)SUMMON_ACA_FRESH_MS);
+    s += ",\"sprValid\":" + String(sprStateValid ? "true" : "false");
+    s += ",\"sprRaw\":" + String((unsigned)sprRaw);
+    s += ",\"sprFresh\":" + String(sprFresh ? "true" : "false");
+    s += ",\"sprAgeMs\":" + String((unsigned long)sprAge);
+    s += ",\"sprFreshMs\":" + String((unsigned long)SUMMON_SPR_FRESH_MS);
+    s += ",\"authorization\":" + String((unsigned)authorization);
+    s += ",\"authorizationName\":\"" + String(summonAuthorizationNamePure(authorization)) + "\"";
+    s += ",\"authorizationSinceMs\":" + String((unsigned long)authorizationSinceMs);
+    s += ",\"authorizationTransitions\":" + String((unsigned long)authorizationTransitions);
     s += ",\"gate\":"    + String(gate ? "true" : "false");
     s += ",\"gateRaw\":" + String(gateRaw ? "true" : "false");
     s += ",\"gateGraceMs\":" + String((unsigned long)SUMMON_GATE_DROPOUT_GRACE_MS);
@@ -277,7 +389,7 @@ static String blinkAStatsToJson() {
   bool en, ap, noaRaw, noaEffective, dasStateValid, fmode, alcValid;
   uint8_t dasState4, alcState;
   uint8_t curTurn, pending, behavior;
-  uint32_t delayMs, remain, txOk, txFail, r249, visualLast;
+  uint32_t delayMs, remain, retryIn, requestAge, retryCount, txOk, txFail, r249, visualLast;
   bool armed, seen, selfTest;
   uint8_t rCnt, rTurn, rCk, rDlc;
   uint8_t raw249[8] = {0};
@@ -289,6 +401,9 @@ static String blinkAStatsToJson() {
   armed = autoArmed;
   uint32_t now = millis();
   remain = (autoArmed && (int32_t)(autoFireAt - now) > 0) ? (autoFireAt - now) : 0;
+  retryIn = (autoArmed && (int32_t)(autoRetryAt - now) > 0) ? (autoRetryAt - now) : 0;
+  requestAge = autoRequestLastSeenMs ? (uint32_t)(now - autoRequestLastSeenMs) : 999999UL;
+  retryCount = autoRetryCount;
   txOk = blkATxOk;
   txFail = blkATxFail;
   r249 = rx249;
@@ -321,13 +436,15 @@ static String blinkAStatsToJson() {
   uint8_t rawReqDir = 0;
   if (behavior == 2) rawReqDir = 1;
   else if (behavior == 3) rawReqDir = 2;
-  const bool alcDirectionAllowed = alcValid &&
-      ((rawReqDir == 1 && (alcState == 6 || alcState == 8)) ||
-       (rawReqDir == 2 && (alcState == 7 || alcState == 8)));
+  const bool alcDirectionAllowed = rawReqDir != 0 &&
+      autoBlinkerALCAllowsDirection(rawReqDir, noaNow);
+  const bool pendingAlcAllowed = pending != 0 &&
+      autoBlinkerALCAllowsDirection(pending, noaNow);
+  const bool waitingEligibility = armed && remain == 0 && !pendingAlcAllowed;
   noaEffective = dasStateValid && noaRaw;
 
   String s;
-  s.reserve(2048);
+  s.reserve(2300);
   s = "{";
   s += "\"enabled\":" + String(en ? "true" : "false");
   s += ",\"apActive\":" + String(ap ? "true" : "false");
@@ -352,6 +469,11 @@ static String blinkAStatsToJson() {
   s += ",\"autoArmed\":" + String(armed ? "true" : "false");
   s += ",\"autoPending\":" + String(pending);
   s += ",\"autoRemainMs\":" + String(remain);
+  s += ",\"autoRetryInMs\":" + String(retryIn);
+  s += ",\"autoRetryCount\":" + String(retryCount);
+  s += ",\"autoRequestAgeMs\":" + String(requestAge);
+  s += ",\"autoWaitingEligibility\":" + String(waitingEligibility ? "true" : "false");
+  s += ",\"pendingAlcAllowed\":" + String(pendingAlcAllowed ? "true" : "false");
   s += ",\"txOk\":" + String(txOk);
   s += ",\"txFail\":" + String(txFail);
   s += ",\"rx249\":" + String(r249);
@@ -478,6 +600,10 @@ static String r79LabStatsToJson() {
   uint32_t last3fd, rx3fd, c18, c19, c47, txOk, txFail, blocked, applied;
   uint32_t b18z,b18o,b19z,b19o,b47z,b47o,immOk,immFail,perOk,perFail;
   uint32_t lastAttempt, lastTx, noTemplateSkip, queueSkip;
+  uint32_t pendingRequests, pendingCoalesced, pendingRetries, freshMaskWaits;
+  uint32_t reassertLatencyLast, reassertLatencyMax, lastBlockMs;
+  uint8_t lastRequiredFreshMask, lastObservedFreshMask, lastBlockReason;
+  R79PendingPure pendingSnapshot = {};
   uint8_t stockRaw[8], lastTxRaw[8];
   portENTER_CRITICAL(&r79LabMux);
   smartMode=r79LabSmartMode;
@@ -489,6 +615,12 @@ static String r79LabStatsToJson() {
   immOk=r79LabImmediateTxOk; immFail=r79LabImmediateTxFail; perOk=r79LabPeriodicTxOk; perFail=r79LabPeriodicTxFail;
   txOk=r79LabTxOk; txFail=r79LabTxFail; blocked=r79LabGateBlocked; applied=r79LabAppliedFrames;
   lastAttempt=r79LabLastAttemptMs; lastTx=r79LabLastTxMs; noTemplateSkip=r79LabNoTemplateSkip; queueSkip=r79LabQueueSkip;
+  pendingSnapshot=r79LabPending;
+  pendingRequests=r79LabPendingRequestCount; pendingCoalesced=r79LabPendingCoalesceCount; pendingRetries=r79LabPendingRetryCount;
+  freshMaskWaits=r79LabFreshMaskWaitCount;
+  reassertLatencyLast=r79LabLastReassertLatencyMs; reassertLatencyMax=r79LabMaxReassertLatencyMs;
+  lastRequiredFreshMask=r79LabLastRequiredFreshMask; lastObservedFreshMask=r79LabLastObservedFreshMask;
+  lastBlockReason=r79LabLastBlockReason; lastBlockMs=r79LabLastBlockMs;
   memcpy(stockRaw,r79LabLastStockRaw,8); memcpy(lastTxRaw,r79LabLastEffectiveRaw,8);
   portEXIT_CRITICAL(&r79LabMux);
   uint8_t state4; bool dasStateValid; uint32_t dasLast;
@@ -497,12 +629,21 @@ static String r79LabStatsToJson() {
   snprintf(stockHex,sizeof(stockHex),"%02X %02X %02X %02X %02X %02X %02X %02X",stockRaw[0],stockRaw[1],stockRaw[2],stockRaw[3],stockRaw[4],stockRaw[5],stockRaw[6],stockRaw[7]);
   snprintf(lastTxHex,sizeof(lastTxHex),"%02X %02X %02X %02X %02X %02X %02X %02X",lastTxRaw[0],lastTxRaw[1],lastTxRaw[2],lastTxRaw[3],lastTxRaw[4],lastTxRaw[5],lastTxRaw[6],lastTxRaw[7]);
   const uint8_t liveGateReason = r79LabGateReason(now);
+  const uint8_t currentRequiredFreshMask = activeSummonRequiredTxFreshMask();
+  const uint8_t currentObservedFreshMask = canTxFreshMaskSnapshot();
+  const bool currentFreshReady = currentRequiredFreshMask != SUMMON_BUS_NONE &&
+      (uint8_t)(currentObservedFreshMask & currentRequiredFreshMask) == currentRequiredFreshMask;
   const uint32_t age3fd = last3fd ? (uint32_t)(now-last3fd) : 999999UL;
-  const bool injectionActive = liveGateReason != R79LAB_GATE_BLOCKED && stockValid;
-  String j; j.reserve(2000); j="{";
+  const uint32_t pendingAge = pendingSnapshot.pending && pendingSnapshot.requestedMs
+      ? (uint32_t)(now - pendingSnapshot.requestedMs) : 0;
+  const uint32_t pendingAttemptAge = pendingSnapshot.pending && pendingSnapshot.lastAttemptMs
+      ? (uint32_t)(now - pendingSnapshot.lastAttemptMs) : 999999UL;
+  const uint32_t blockAge = lastBlockMs ? (uint32_t)(now - lastBlockMs) : 999999UL;
+  const bool injectionActive = liveGateReason != R79LAB_GATE_BLOCKED && stockValid && currentFreshReady;
+  String j; j.reserve(3000); j="{";
   j += "\"gateOpen\":" + String(liveGateReason!=R79LAB_GATE_BLOCKED?"true":"false");
   j += ",\"injectionActive\":" + String(injectionActive?"true":"false");
-  j += ",\"gateRule\":\"AP_OR_SUMMON_OR_FRESH_PARK\"";
+  j += ",\"gateRule\":\"SUMMON_OR_AP_OR_PARK_V26_COMPAT\"";
   j += ",\"gateReason\":\"" + String(r79LabGateReasonName(liveGateReason)) + "\"";
   j += ",\"dasState\":" + String((unsigned)state4);
   j += ",\"dasStateValid\":" + String(dasStateValid ? "true" : "false");
@@ -548,6 +689,28 @@ static String r79LabStatsToJson() {
   j += ",\"noTemplateSkip\":" + String((unsigned long)noTemplateSkip);
   j += ",\"staleSkip\":0"; // backward-compatible: stock-age cutoff no longer exists
   j += ",\"queueSkip\":" + String((unsigned long)queueSkip);
+  j += ",\"pending\":" + String(pendingSnapshot.pending ? "true" : "false");
+  j += ",\"pendingKind\":\"" + String(r79PendingKindNamePure(pendingSnapshot.kind)) + "\"";
+  j += ",\"pendingAgeMs\":" + String((unsigned long)pendingAge);
+  j += ",\"pendingAttemptAgeMs\":" + String((unsigned long)pendingAttemptAge);
+  j += ",\"pendingSequence\":" + String((unsigned long)pendingSnapshot.sequence);
+  j += ",\"pendingRequestCount\":" + String((unsigned long)pendingRequests);
+  j += ",\"pendingCoalesceCount\":" + String((unsigned long)pendingCoalesced);
+  j += ",\"pendingRetryCount\":" + String((unsigned long)pendingRetries);
+  j += ",\"freshMaskWaitCount\":" + String((unsigned long)freshMaskWaits);
+  j += ",\"requiredFreshMask\":" + String((unsigned)currentRequiredFreshMask);
+  j += ",\"requiredFreshMaskName\":\"" + String(summonBusMaskNamePure(currentRequiredFreshMask)) + "\"";
+  j += ",\"observedFreshMask\":" + String((unsigned)currentObservedFreshMask);
+  j += ",\"observedFreshMaskName\":\"" + String(summonBusMaskNamePure(currentObservedFreshMask)) + "\"";
+  j += ",\"freshMaskReady\":" + String(currentFreshReady ? "true" : "false");
+  j += ",\"lastAttemptRequiredFreshMask\":" + String((unsigned)lastRequiredFreshMask);
+  j += ",\"lastAttemptRequiredFreshMaskName\":\"" + String(summonBusMaskNamePure(lastRequiredFreshMask)) + "\"";
+  j += ",\"lastAttemptObservedFreshMask\":" + String((unsigned)lastObservedFreshMask);
+  j += ",\"lastAttemptObservedFreshMaskName\":\"" + String(summonBusMaskNamePure(lastObservedFreshMask)) + "\"";
+  j += ",\"lastBlockReason\":\"" + String(r79LabBlockReasonName(lastBlockReason)) + "\"";
+  j += ",\"lastBlockAgeMs\":" + String((unsigned long)blockAge);
+  j += ",\"reassertLatencyLastMs\":" + String((unsigned long)reassertLatencyLast);
+  j += ",\"reassertLatencyMaxMs\":" + String((unsigned long)reassertLatencyMax);
   j += ",\"lastAttemptAgeMs\":" + String((unsigned long)(lastAttempt?now-lastAttempt:999999UL));
   j += ",\"lastTxAgeMs\":" + String((unsigned long)(lastTx?now-lastTx:999999UL));
   j += ",\"stockRaw\":\"" + String(stockHex) + "\"";
@@ -646,7 +809,8 @@ static String systemStatsToJson() {
   s += ",\"stackCanSup\":"   + String(stackCanSup);
   s += ",\"stackWeb\":"      + String(stackWeb);
   s += ",\"stackS3xy\":"     + String(stackS3xy);
-  s += ",\"s3xyLogCapacity\":" + String((unsigned)S3XY_LOG_MAX);
+  s += ",\"s3xyDiagnosticsEnabled\":" + String(S3XY_DIAGNOSTICS_ENABLED ? "true" : "false");
+  s += ",\"s3xyLogCapacity\":" + String(S3XY_DIAGNOSTICS_ENABLED ? (unsigned)S3XY_LOG_MAX : 0U);
   s += ",\"uptimeS\":"      + String((millis() - bootTime) / 1000);
   s += ",\"mcpReady\":"     + String(mcpReady  ? "true" : "false");
   s += ",\"twaiReady\":"    + String(twaiReady ? "true" : "false");
@@ -1290,11 +1454,16 @@ static void httpS3xyAutoDisable() {
 }
 
 static void httpS3xyClear() {
+#if S3XY_DIAGNOSTICS_ENABLED
   s3xyClearLog();
   server.send(200, "application/json", "{\"ok\":true}");
+#else
+  server.send(404, "application/json", "{\"ok\":false,\"error\":\"S3XY diagnostics disabled in this build\"}");
+#endif
 }
 
 static void httpS3xyLogCsv() {
+#if S3XY_DIAGNOSTICS_ENABLED
   server.sendHeader("Content-Disposition", "attachment; filename=T2CAN_S3XY_multi.csv");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/csv", "");
@@ -1358,6 +1527,10 @@ static void httpS3xyLogCsv() {
     server.sendContent(tail, strlen(tail));
   }
   server.sendContent("", 0);
+
+#else
+  server.send(404, "application/json", "{\"ok\":false,\"error\":\"S3XY diagnostics disabled in this build\"}");
+#endif
 }
 
 
@@ -1565,10 +1738,14 @@ static String researchCaptureStatsToJson() {
       ? (100.0f * (float)rawPreFrameCount / (float)RESEARCH_CAPTURE_RAW_PRE_CAPACITY) : 0.0f;
   const float rawArchiveUsagePct = RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY
       ? (100.0f * (float)rawArchiveCount / (float)RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY) : 0.0f;
-  const size_t memoryBytes = RESEARCH_CAPTURE_MAIN_BUFFER_BYTES
-                           + sizeof(ResearchCaptureLatest) * RESEARCH_CAPTURE_STATE_COUNT
-                           + RESEARCH_CAPTURE_AUX_BUFFER_BYTES
-                           + sizeof(uint16_t) * RESEARCH_CAPTURE_STATE_COUNT;
+  size_t allocatedMainBytes, allocatedAuxBytes, allocatedCommonBytes;
+  portENTER_CRITICAL(&researchCaptureMux);
+  allocatedMainBytes = researchCaptureAllocatedMainBytes;
+  allocatedAuxBytes = researchCaptureAllocatedAuxBytes;
+  allocatedCommonBytes = (researchCaptureLatest ? RESEARCH_CAPTURE_LATEST_BYTES : 0U)
+                       + (researchCaptureKnownIndices ? RESEARCH_CAPTURE_KNOWN_BYTES : 0U);
+  portEXIT_CRITICAL(&researchCaptureMux);
+  const size_t memoryBytes = allocatedMainBytes + allocatedAuxBytes + allocatedCommonBytes;
   const size_t psramTotalBytes = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
   const size_t psramFreeBytes = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
   const uint32_t effectiveCapacity = rawMode ? RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY : RESEARCH_CAPTURE_CAPACITY;
@@ -1978,7 +2155,7 @@ static void httpSystemStats() { server.send(200, "application/json", systemStats
 
 
 
-// ─── Universal v3.2 hotfix profile / feature policy APIs ─────────────
+// ─── Universal v3.3 profile / feature policy APIs ───────────────────
 static String vehicleProfileStatusJson() {
   String j;
   j.reserve(420);
@@ -2091,7 +2268,7 @@ static void httpProfileSelect() {
   // Runtime profile changes are boot-boundary only. Close the global TX gate
   // before persistence so no old-profile frame can race the reboot.
   canTxAdministrativeHold = true;
-  if (!vehicleProfileSetupMode) invalidateCanTxState();
+  if (!vehicleProfileSetupMode) invalidateCanTxStateForFullRecovery();
   if (!vehicleProfileSave((uint8_t)profile, topology, turn)) {
     canTxAdministrativeHold = false;
     server.send(500, "application/json", "{\"ok\":false,\"error\":\"profile NVS write failed\"}");
@@ -2225,7 +2402,7 @@ static void httpResetFirmwareSettings() {
     return;
   }
   canTxAdministrativeHold = true;
-  invalidateCanTxState();
+  invalidateCanTxStateForFullRecovery();
   tlsscRestoreEnabled = false;
   if (!resetFirmwareSettingsPreserveProfileAndBle()) {
     canTxAdministrativeHold = false;
@@ -2239,7 +2416,7 @@ static void httpResetFirmwareSettings() {
 
 static void httpFactoryReset() {
   canTxAdministrativeHold = true;
-  if (!vehicleProfileSetupMode && !vehicleProfileNvsError) invalidateCanTxState();
+  if (!vehicleProfileSetupMode && !vehicleProfileNvsError) invalidateCanTxStateForFullRecovery();
   const bool ok = factoryResetAllNvs();
   server.send(ok ? 200 : 500, "application/json",
               ok ? "{\"ok\":true,\"rebooting\":true}"
@@ -2277,11 +2454,15 @@ static void httpNagSetMode() {
   NagConfig nc;
   if      (m == MODE_B) nagCfgDefaultsModeB(nc);
   else if (m == MODE_C) nagCfgDefaultsModeC(nc);
+  else if (m == MODE_D) nagCfgDefaultsModeD(nc);
+  else if (m == MODE_E) nagCfgDefaultsModeE(nc);
+  else if (m == MODE_F) nagCfgDefaultsModeF(nc);
+  else if (m == MODE_H) nagCfgDefaultsModeH(nc);
   else                  nagCfgDefaultsModeA(nc);
   // Pause-at-zero is a common NAG policy, not a mode waveform parameter.
-  // Preserve it when switching A/B/C. Explicit NAG reset still restores OFF.
+  // Preserve it when switching modes. Explicit NAG reset still restores OFF.
   nc.pauseAtZeroSpeed = pauseAtZero;
-  portENTER_CRITICAL(&nagCfgMux); nagCfg = nc; portEXIT_CRITICAL(&nagCfgMux);
+  nagCfgCommit(nc);
   nagCfgSave();
   server.send(200, "application/json", nagCfgToJson());
 }
@@ -2346,7 +2527,7 @@ static void httpNagUpdate() {
     nc.torqueCount = n;
   }
   nagCfgClampAll(nc);
-  portENTER_CRITICAL(&nagCfgMux); nagCfg = nc; portEXIT_CRITICAL(&nagCfgMux);
+  nagCfgCommit(nc);
   nagCfgSave();
   server.send(200, "application/json", nagCfgToJson());
 }
@@ -2354,16 +2535,19 @@ static void httpNagUpdate() {
 static void httpNagReset() {
   NagConfig nc;
   nagCfgDefaultsModeA(nc);
-  portENTER_CRITICAL(&nagCfgMux); nagCfg = nc; portEXIT_CRITICAL(&nagCfgMux);
+  nagCfgCommit(nc);
   nagCfgSave();
   nagRxFrames = nagEchoCount = mcpTxOk = mcpTxFail = 0;
   portENTER_CRITICAL(&nagDiagMux);
   nagTxOk=nagTxFail=0; nagSkipDisabled=nagSkipBootDelay=nagSkipWarmup=nagSkipSelfFrame=0;
-  nagSkipHandsOn=nagSkipApInvalid=nagSkipApInactive=nagSkipDecision=nagSkipStopped=0;
+  nagSkipHandsOn=nagSkipApInvalid=nagSkipApInactive=nagSkipDecision=nagSkipStopped=nagSkipCadence=nagSkipSpeedStale=0;
   nagBlockMutex=nagBlockMcpNotReady=nagBlockEpoch=nagBlockFreshMask=nagBlockInvalidMsg=nagSendError=0;
   nagLastTxOkMs=nagMaxTxGapMs=nagSessionTxOk=0; nagSessionStartMs=0;
   nagLastSkipReason=NAG_SKIP_NONE; nagLastSkipMs=0; nagLastTxBlockReason=MCP_TX_OK; nagLastTxBlockMs=0;
   portEXIT_CRITICAL(&nagDiagMux);
+  portENTER_CRITICAL(&nagPortableMux);
+  nagPortableLastTxValid=false; nagPortableLastTxMs=0; memset(nagPortableLastTxRaw,0,sizeof(nagPortableLastTxRaw));
+  portEXIT_CRITICAL(&nagPortableMux);
   server.send(200, "application/json", nagCfgToJson());
 }
 
@@ -2405,6 +2589,88 @@ static bool httpRequireLab() {
   if (labMenuEnabled) return true;
   server.send(409, "application/json", "{\"ok\":false,\"error\":\"LAB disabled\"}");
   return false;
+}
+
+static String nagHumanLabStatsToJson() {
+  const NagHumanConfigPure c = nagHumanRuntimeConfigSnapshot();
+  const NagHumanStatePure state = nagHumanRuntimeSnapshot();
+  String j;
+  j.reserve(720);
+  j = "{";
+  j += "\"peakMinNm\":" + String((float)c.peakMinRaw / 100.0f, 2);
+  j += ",\"peakMaxNm\":" + String((float)c.peakMaxRaw / 100.0f, 2);
+  j += ",\"allowedMinNm\":" + String((float)NAG_HUMAN_PEAK_ALLOWED_MIN_RAW / 100.0f, 2);
+  j += ",\"allowedMaxNm\":" + String((float)NAG_HUMAN_PEAK_ALLOWED_MAX_RAW / 100.0f, 2);
+  j += ",\"defaultMinNm\":" + String((float)NAG_HUMAN_PEAK_DEFAULT_MIN_RAW / 100.0f, 2);
+  j += ",\"defaultMaxNm\":" + String((float)NAG_HUMAN_PEAK_DEFAULT_MAX_RAW / 100.0f, 2);
+  j += ",\"waitMinMs\":" + String((unsigned)c.waitMinMs);
+  j += ",\"waitMaxMs\":" + String((unsigned)c.waitMaxMs);
+  j += ",\"refractoryMinMs\":" + String((unsigned)c.refractoryMinMs);
+  j += ",\"refractoryMaxMs\":" + String((unsigned)c.refractoryMaxMs);
+  j += ",\"phase\":\"" + String(nagHumanPhaseNamePure(state.phase)) + "\"";
+  j += ",\"eventType\":\"" + String(nagHumanEventTypeNamePure(state.event.type)) + "\"";
+  j += ",\"activeEventPeakNm\":" + String((float)state.event.peakRaw / 100.0f, 2);
+  j += ",\"eventCount\":" + String((unsigned long)state.eventCount);
+  j += "}";
+  return j;
+}
+
+static bool httpParseHumanPeakNm(const String &arg, uint16_t &rawOut) {
+  String text = arg;
+  text.trim();
+  if (text.length() == 0) return false;
+  char *end = nullptr;
+  const double nm = strtod(text.c_str(), &end);
+  if (!end || *end != '\0' || nm != nm || nm < 0.0 || nm > 100.0) return false;
+  const uint32_t rounded = (uint32_t)(nm * 100.0 + 0.5);
+  if (rounded > 0xFFFFu) return false;
+  rawOut = (uint16_t)rounded;
+  return true;
+}
+
+static void httpNagHumanLabStats() {
+  if (!httpRequireLab()) return;
+  if (!activeProfileNagSupported()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"NAG unavailable for current topology\"}");
+    return;
+  }
+  server.send(200, "application/json", nagHumanLabStatsToJson());
+}
+
+static void httpNagHumanLabUpdate() {
+  if (!httpRequireLab()) return;
+  if (!activeProfileNagSupported()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"NAG unavailable for current topology\"}");
+    return;
+  }
+  if (!server.hasArg("minNm") || !server.hasArg("maxNm")) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"minNm and maxNm required\"}");
+    return;
+  }
+  uint16_t minRaw = 0, maxRaw = 0;
+  if (!httpParseHumanPeakNm(server.arg("minNm"), minRaw) ||
+      !httpParseHumanPeakNm(server.arg("maxNm"), maxRaw) ||
+      !nagHumanPeakRangeValidPure(minRaw, maxRaw)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"range must be 1.00..3.00 Nm and min <= max\"}");
+    return;
+  }
+  if (!nagHumanRuntimeSetPeakRange(minRaw, maxRaw)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid peak range\"}");
+    return;
+  }
+  nagCfgSave();
+  server.send(200, "application/json", nagHumanLabStatsToJson());
+}
+
+static void httpNagHumanLabReset() {
+  if (!httpRequireLab()) return;
+  if (!activeProfileNagSupported()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"NAG unavailable for current topology\"}");
+    return;
+  }
+  nagHumanRuntimeResetPeakRange();
+  nagCfgSave();
+  server.send(200, "application/json", nagHumanLabStatsToJson());
 }
 
 static void httpR79LabStats() { server.send(200, "application/json", r79LabStatsToJson()); }
@@ -2521,13 +2787,13 @@ static void httpBlinkAEnable() {
 static void httpBlinkADisable() {
   portENTER_CRITICAL(&blinkAMux);
   blinkAEnabled = false;
-  autoArmed = false;
-  autoPendingDir = 0;
-  autoFireAt = 0;
+  autoBlinkerClearPendingLocked();
   oneShotTurn = STALK_IDLE;
   oneShotUntil = 0;
+  oneShotReleaseAt = 0;
   activeTurn = STALK_IDLE;
   lastReqDir = 0;
+  autoRequestLastSeenMs = 0;
   portEXIT_CRITICAL(&blinkAMux);
   summonCfgSave();
   server.send(200, "application/json", blinkAStatsToJson());
@@ -2547,6 +2813,433 @@ static void httpBlinkADelay() {
   server.send(200, "application/json", blinkAStatsToJson());
 }
 
+
+// Adaptive dashboard snapshots. These serializers are display-only consumers:
+// they never change CAN state, injection decisions, BLE behavior, or recovery state.
+// HOME uses one request at the selected 250/500/1000 ms rate and conditionally
+// includes slow/on-demand groups so HTTP requests never overlap just to refresh UI.
+static String homeFastSnapshotToJson() {
+  const uint32_t now = (uint32_t)millis();
+
+  bool apActive, noaRaw, dasValid, parked, summon, aca, spr, priorityFreshParked, gateGraceActive;
+  uint8_t dasState4, priorityState;
+  portENTER_CRITICAL(&stateMux);
+  apActive = gateAPActive;
+  noaRaw = gateNOAActive;
+  dasValid = dasAutopilotStateValid;
+  dasState4 = dasAutopilotState4;
+  parked = gateParked;
+  summon = gateSummoning;
+  aca = lastAca;
+  spr = sprSeen;
+  priorityState = summonPriorityState;
+  priorityFreshParked = summonPriorityFreshParkedLocked(now);
+  gateGraceActive = summonGateGraceActiveLocked(now);
+  portEXIT_CRITICAL(&stateMux);
+  const bool summonGate = parked || summon || gateGraceActive;
+
+  NagContext nagHomeCtx;
+  portENTER_CRITICAL(&nagCtxMux); nagHomeCtx = nagCtx; portEXIT_CRITICAL(&nagCtxMux);
+  bool nagPauseZero;
+  uint8_t nagModeHome;
+  portENTER_CRITICAL(&nagCfgMux);
+  nagPauseZero = nagCfg.pauseAtZeroSpeed;
+  nagModeHome = nagCfg.mode;
+  portEXIT_CRITICAL(&nagCfgMux);
+  const uint32_t nagSpeedAge = nagHomeCtx.lastVehicleSpeedMs ? (uint32_t)(now - nagHomeCtx.lastVehicleSpeedMs) : 999999UL;
+  const bool nagSpeedFresh = nagHomeCtx.vehicleSpeedValid && nagHomeCtx.lastVehicleSpeedMs != 0 && nagSpeedAge <= NAG_SPEED_FRESH_MS;
+  bool nagHumanPaused = false;
+  if (nagModeHome == MODE_H) {
+    const NagHumanStatePure nagHumanHome = nagHumanRuntimeSnapshot();
+    nagHumanPaused = nagHumanHome.phase == H_PAUSED_STOPPED;
+  }
+  const bool nagStoppedGate = nagPauseAtZeroBlocksPure(nagPauseZero, nagHomeCtx.vehicleSpeedValid, nagSpeedFresh, nagHomeCtx.vehicleSpeedRaw) || nagHumanPaused;
+
+  bool blinkEnabled;
+  portENTER_CRITICAL(&blinkAMux); blinkEnabled = blinkAEnabled; portEXIT_CRITICAL(&blinkAMux);
+  const bool noaActive = dasValid && noaRaw;
+
+  bool r79LastTxValidLocal, r79StockValidLocal;
+  uint32_t r79TxOkLocal, r79TxFailLocal, r79LastTxMsLocal;
+  portENTER_CRITICAL(&r79LabMux);
+  r79LastTxValidLocal = r79LabLastTxValid;
+  r79StockValidLocal = r79LabStockValid;
+  r79TxOkLocal = r79LabTxOk;
+  r79TxFailLocal = r79LabTxFail;
+  r79LastTxMsLocal = r79LabLastTxMs;
+  portEXIT_CRITICAL(&r79LabMux);
+  const uint8_t r79GateReasonLocal = r79LabGateReason(now);
+  const bool r79GateOpenLocal = r79GateReasonLocal != R79LAB_GATE_BLOCKED;
+  const bool r79InjectionActiveLocal = r79GateOpenLocal && r79StockValidLocal;
+
+  const CanTrafficUiSnapshot traffic = canTrafficUiSnapshot();
+  twai_status_info_t twaiHome = {};
+  const bool twaiHomeOk = twai_get_status_info(&twaiHome) == ESP_OK;
+
+  String j; j.reserve(1040);
+  j = "{\"nag\":{";
+  j += "\"torque\":" + String(nagRealTorque, 2);
+  j += ",\"stoppedGate\":" + String(nagStoppedGate ? "true" : "false");
+  j += ",\"apActive\":" + String((dasValid && apActive) ? "true" : "false");
+  j += ",\"canAState\":" + String((int)mcpState);
+  j += "},\"blink\":{";
+  j += "\"enabled\":" + String(blinkEnabled ? "true" : "false");
+  j += ",\"noaActive\":" + String(noaActive ? "true" : "false");
+  j += ",\"dasStateValid\":" + String(dasValid ? "true" : "false");
+  j += ",\"dasState\":" + String((unsigned)dasState4);
+  j += "},\"summon\":{";
+  j += "\"priorityStateName\":\"" + String(summonPriorityStateName(priorityState)) + "\"";
+  j += ",\"gate\":" + String(summonGate ? "true" : "false");
+  j += ",\"gateGraceActive\":" + String(gateGraceActive ? "true" : "false");
+  j += ",\"priorityFreshParked\":" + String(priorityFreshParked ? "true" : "false");
+  j += ",\"parked\":" + String(parked ? "true" : "false");
+  j += ",\"aca\":" + String(aca ? "true" : "false");
+  j += ",\"spr\":" + String(spr ? "true" : "false");
+  j += ",\"txQueueNow\":" + String((unsigned long)twaiTxQueueNow);
+  j += ",\"txQueueMax\":" + String((unsigned long)twaiTxQueueMax);
+  j += ",\"canState\":" + String(twaiHomeOk ? (int)twaiHome.state : -1);
+  j += ",\"canStateName\":\"" + String(twaiHomeOk ? twaiStateName(twaiHome.state) : "UNAVAILABLE") + "\"";
+  j += "},\"cantraffic\":{";
+  j += "\"mcpTrafficSeen\":" + String(traffic.mcpSeen ? "true" : "false");
+  j += ",\"mcpTrafficOnline\":" + String(traffic.mcpOnline ? "true" : "false");
+  j += ",\"mcpTrafficAgeMs\":" + String((unsigned long)traffic.mcpAgeMs);
+  j += ",\"twaiTrafficSeen\":" + String(traffic.twaiSeen ? "true" : "false");
+  j += ",\"twaiTrafficOnline\":" + String(traffic.twaiOnline ? "true" : "false");
+  j += ",\"twaiTrafficAgeMs\":" + String((unsigned long)traffic.twaiAgeMs);
+  j += "},\"r79\":{";
+  j += "\"gateOpen\":" + String(r79GateOpenLocal ? "true" : "false");
+  j += ",\"injectionActive\":" + String(r79InjectionActiveLocal ? "true" : "false");
+  j += ",\"gateReason\":\"" + String(r79LabGateReasonName(r79GateReasonLocal)) + "\"";
+  j += ",\"txOk\":" + String((unsigned long)r79TxOkLocal);
+  j += ",\"txFail\":" + String((unsigned long)r79TxFailLocal);
+  j += ",\"lastTxValid\":" + String(r79LastTxValidLocal ? "true" : "false");
+  j += ",\"lastTxAgeMs\":" + String((unsigned long)(r79LastTxMsLocal ? now - r79LastTxMsLocal : 999999UL));
+  j += "}}";
+  return j;
+}
+
+static String homeSlowSnapshotToJson() {
+  bool blinkEnabled, tlssc;
+  uint32_t blinkDelayMsLocal;
+  portENTER_CRITICAL(&blinkAMux);
+  blinkEnabled = blinkAEnabled;
+  blinkDelayMsLocal = blinkADelayMs;
+  portEXIT_CRITICAL(&blinkAMux);
+  portENTER_CRITICAL(&stateMux); tlssc = tlsscEnabled; portEXIT_CRITICAL(&stateMux);
+
+  bool btEnabled;
+  uint8_t s3Paired = 0, s3Connected = 0;
+  portENTER_CRITICAL(&s3xyMux);
+  btEnabled = s3xyBluetoothEnabled;
+  for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
+    if (!s3xyDevices[i].used) continue;
+    s3Paired++;
+    if (s3xyDevices[i].connected) s3Connected++;
+  }
+  portEXIT_CRITICAL(&s3xyMux);
+
+  uint8_t r79Smart, alcModeLocal;
+  portENTER_CRITICAL(&r79LabMux); r79Smart = r79LabSmartMode; portEXIT_CRITICAL(&r79LabMux);
+  portENTER_CRITICAL(&lab3f8Mux); alcModeLocal = lab3f8AlcMode; portEXIT_CRITICAL(&lab3f8Mux);
+
+  String j; j.reserve(360);
+  j = "{\"blink\":{";
+  j += "\"enabled\":" + String(blinkEnabled ? "true" : "false");
+  j += ",\"delayMs\":" + String((unsigned long)blinkDelayMsLocal);
+  j += "},\"summon\":{\"tlssc\":" + String(tlssc ? "true" : "false") + "}";
+  j += ",\"s3xy\":{\"bluetoothEnabled\":" + String(btEnabled ? "true" : "false");
+  j += ",\"pairedCount\":" + String((unsigned)s3Paired);
+  j += ",\"connectedCount\":" + String((unsigned)s3Connected) + "}";
+  j += ",\"r79\":{\"smartMode\":" + String((unsigned)r79Smart) + "}";
+  j += ",\"lab3f8\":{\"alcMode\":" + String((unsigned)alcModeLocal) + "}}";
+  return j;
+}
+
+static String homeLiveSnapshotToJson() {
+  const uint32_t now = (uint32_t)millis();
+  uint32_t nagTxOkLocal, nagTxFailLocal, nagLastTxLocal, nagMaxGapLocal;
+  portENTER_CRITICAL(&nagDiagMux);
+  nagTxOkLocal = nagTxOk; nagTxFailLocal = nagTxFail;
+  nagLastTxLocal = nagLastTxOkMs; nagMaxGapLocal = nagMaxTxGapMs;
+  portEXIT_CRITICAL(&nagDiagMux);
+
+  uint32_t blinkRx249Local;
+  portENTER_CRITICAL(&blinkAMux); blinkRx249Local = rx249; portEXIT_CRITICAL(&blinkAMux);
+  uint32_t sumTxOkLocal, sumTxFailLocal;
+  portENTER_CRITICAL(&stateMux); sumTxOkLocal = sumTxOk; sumTxFailLocal = sumTxFail; portEXIT_CRITICAL(&stateMux);
+  uint32_t ulcTxOkLocal, ulcTxFailLocal;
+  portENTER_CRITICAL(&ulcSnoozeMux); ulcTxOkLocal = ulcSnoozeTxOk; ulcTxFailLocal = ulcSnoozeTxFail; portEXIT_CRITICAL(&ulcSnoozeMux);
+
+  String j; j.reserve(430);
+  j = "{\"nag\":{";
+  j += "\"ho\":" + String((unsigned)nagRealHo);
+  j += ",\"injNm\":" + String(nagLastInjectedNm, 2);
+  j += ",\"injHo\":" + String((unsigned)nagLastInjectedHo);
+  j += ",\"rx\":" + String((unsigned long)nagRxFrames);
+  j += ",\"txOk\":" + String((unsigned long)nagTxOkLocal);
+  j += ",\"txFail\":" + String((unsigned long)nagTxFailLocal);
+  j += ",\"lastTxAgeMs\":" + String((unsigned long)(nagLastTxLocal ? now - nagLastTxLocal : 999999UL));
+  j += ",\"maxTxGapMs\":" + String((unsigned long)nagMaxGapLocal) + "}";
+  j += ",\"blink\":{\"rx249\":" + String((unsigned long)blinkRx249Local) + "}";
+  j += ",\"summon\":{\"txOk\":" + String((unsigned long)sumTxOkLocal) + ",\"txFail\":" + String((unsigned long)sumTxFailLocal) + "}";
+  j += ",\"s3xy\":{\"ulcTxOk\":" + String((unsigned long)ulcTxOkLocal) + ",\"ulcTxFail\":" + String((unsigned long)ulcTxFailLocal) + "}}";
+  return j;
+}
+
+static String settingsLiteSnapshotToJson() {
+  bool blinkEnabled, tlssc;
+  uint32_t blinkDelayMsLocal;
+  uint8_t priorityState;
+  portENTER_CRITICAL(&blinkAMux);
+  blinkEnabled = blinkAEnabled;
+  blinkDelayMsLocal = blinkADelayMs;
+  portEXIT_CRITICAL(&blinkAMux);
+  portENTER_CRITICAL(&stateMux);
+  tlssc = tlsscEnabled;
+  priorityState = summonPriorityState;
+  portEXIT_CRITICAL(&stateMux);
+
+  bool btEnabled, autoEnabled;
+  uint8_t paired = 0, connected = 0;
+  portENTER_CRITICAL(&s3xyMux);
+  btEnabled = s3xyBluetoothEnabled;
+  autoEnabled = s3xyAutoEnabled;
+  for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
+    if (!s3xyDevices[i].used) continue;
+    paired++;
+    if (s3xyDevices[i].connected) connected++;
+  }
+  portEXIT_CRITICAL(&s3xyMux);
+
+  uint8_t alcModeLocal;
+  portENTER_CRITICAL(&lab3f8Mux); alcModeLocal = lab3f8AlcMode; portEXIT_CRITICAL(&lab3f8Mux);
+
+  String j; j.reserve(500);
+  j = "{\"system\":{\"fwVersion\":\"" + String(FW_VERSION) + "\"}";
+  j += ",\"blink\":{\"enabled\":" + String(blinkEnabled ? "true" : "false") + ",\"delayMs\":" + String((unsigned long)blinkDelayMsLocal) + "}";
+  j += ",\"summon\":{\"tlssc\":" + String(tlssc ? "true" : "false") + ",\"priorityStateName\":\"" + String(summonPriorityStateName(priorityState)) + "\"}";
+  j += ",\"s3xy\":{\"bluetoothEnabled\":" + String(btEnabled ? "true" : "false") + ",\"autoEnabled\":" + String(autoEnabled ? "true" : "false") + ",\"pairedCount\":" + String((unsigned)paired) + ",\"connectedCount\":" + String((unsigned)connected) + "}";
+  j += ",\"lab3f8\":{\"alcMode\":" + String((unsigned)alcModeLocal) + "}}";
+  return j;
+}
+
+static String labLiteSnapshotToJson() {
+  const uint32_t now = (uint32_t)millis();
+  uint8_t dasState4;
+  bool dasStateValid;
+  uint32_t dasLast;
+  portENTER_CRITICAL(&stateMux);
+  dasState4 = dasAutopilotState4;
+  dasStateValid = dasAutopilotStateValid;
+  dasLast = lastDASStatusMillis;
+  portEXIT_CRITICAL(&stateMux);
+  const uint8_t gateReason = r79LabGateReason(now);
+
+  ResearchCaptureLatest lane239 = {};
+  ResearchCaptureLatest alc399 = {};
+  portENTER_CRITICAL(&researchCaptureMux);
+  if (researchCaptureLatest) {
+    lane239 = researchCaptureLatest[researchCaptureStateIndex(RESEARCH_CAPTURE_BUS_PARTY, 0x239)];
+    alc399 = researchCaptureLatest[researchCaptureStateIndex(RESEARCH_CAPTURE_BUS_PARTY, 0x399)];
+  }
+  portEXIT_CRITICAL(&researchCaptureMux);
+
+  const bool laneValid = lane239.valid && lane239.dlc >= 7;
+  const bool alcValid = alc399.valid && alc399.dlc >= 7;
+  const DasLane239Decoded laneDecoded = dasLane239DecodePure(lane239.data, lane239.dlc);
+  const uint8_t alcRaw = alcValid ? das399ReadAlcPure(alc399.data, alc399.dlc) : 0xFF;
+  const uint32_t laneAge = lane239.valid ? (uint32_t)(now - lane239.lastSeenMs) : 999999UL;
+  const uint32_t alcAge = alc399.valid ? (uint32_t)(now - alc399.lastSeenMs) : 999999UL;
+
+  String j; j.reserve(520);
+  j = "{\"r79\":{";
+  j += "\"gateOpen\":" + String(gateReason != R79LAB_GATE_BLOCKED ? "true" : "false");
+  j += ",\"gateReason\":\"" + String(r79LabGateReasonName(gateReason)) + "\"";
+  j += ",\"dasState\":" + String((unsigned)dasState4);
+  j += ",\"dasStateValid\":" + String(dasStateValid ? "true" : "false");
+  j += ",\"dasAgeMs\":" + String((unsigned long)(dasLast ? now - dasLast : 999999UL));
+  j += "},\"alc\":{";
+  j += "\"alcValid\":" + String(alcValid ? "true" : "false");
+  j += ",\"alcRaw\":" + String((unsigned)alcRaw);
+  j += ",\"alcAgeMs\":" + String((unsigned long)alcAge);
+  j += ",\"lane239Valid\":" + String(laneDecoded.valid ? "true" : "false");
+  j += ",\"lane239AgeMs\":" + String((unsigned long)laneAge);
+  j += ",\"leftLaneExists\":" + String((unsigned)(laneDecoded.valid ? (laneDecoded.leftLaneExists ? 1 : 0) : 255));
+  j += ",\"rightLaneExists\":" + String((unsigned)(laneDecoded.valid ? (laneDecoded.rightLaneExists ? 1 : 0) : 255));
+  j += ",\"leftLineUsageRaw\":" + String((unsigned)(laneDecoded.valid ? laneDecoded.leftLineUsage : 255));
+  j += ",\"rightLineUsageRaw\":" + String((unsigned)(laneDecoded.valid ? laneDecoded.rightLineUsage : 255));
+  j += ",\"leftForkRaw\":" + String((unsigned)(laneDecoded.valid ? laneDecoded.leftFork : 255));
+  j += ",\"rightForkRaw\":" + String((unsigned)(laneDecoded.valid ? laneDecoded.rightFork : 255));
+  j += "}}";
+  return j;
+}
+
+// Lightweight HOME snapshot. The HOME page is polled at 250/500/1000 ms,
+// so avoid building the full diagnostics payloads that are only needed inside
+// feature/detail panels. This keeps visible HOME behavior unchanged while
+// reducing transient String allocation, JSON serialization and Wi-Fi payload.
+static String homeSnapshotToJson() {
+  const uint32_t now = (uint32_t)millis();
+
+  // Shared vehicle/AP/Summon state in one short stateMux snapshot.
+  bool apActive, noaRaw, dasValid, parked, summon, aca, spr, priorityFreshParked, gateGraceActive, tlssc;
+  uint8_t dasState4, priorityState;
+  uint32_t sumTxOkLocal, sumTxFailLocal;
+  portENTER_CRITICAL(&stateMux);
+  apActive = gateAPActive;
+  noaRaw = gateNOAActive;
+  dasValid = dasAutopilotStateValid;
+  dasState4 = dasAutopilotState4;
+  parked = gateParked;
+  summon = gateSummoning;
+  aca = lastAca;
+  spr = sprSeen;
+  priorityState = summonPriorityState;
+  priorityFreshParked = summonPriorityFreshParkedLocked(now);
+  gateGraceActive = summonGateGraceActiveLocked(now);
+  tlssc = tlsscEnabled;
+  sumTxOkLocal = sumTxOk;
+  sumTxFailLocal = sumTxFail;
+  portEXIT_CRITICAL(&stateMux);
+  const bool summonGate = parked || summon || gateGraceActive;
+
+  // NAG HOME telemetry only.
+  NagContext nagHomeCtx;
+  portENTER_CRITICAL(&nagCtxMux); nagHomeCtx = nagCtx; portEXIT_CRITICAL(&nagCtxMux);
+  uint32_t nagTxOkLocal, nagTxFailLocal, nagLastTxLocal, nagMaxGapLocal;
+  portENTER_CRITICAL(&nagDiagMux);
+  nagTxOkLocal = nagTxOk; nagTxFailLocal = nagTxFail;
+  nagLastTxLocal = nagLastTxOkMs; nagMaxGapLocal = nagMaxTxGapMs;
+  portEXIT_CRITICAL(&nagDiagMux);
+  bool nagPauseZero;
+  uint8_t nagModeHome;
+  portENTER_CRITICAL(&nagCfgMux);
+  nagPauseZero = nagCfg.pauseAtZeroSpeed;
+  nagModeHome = nagCfg.mode;
+  portEXIT_CRITICAL(&nagCfgMux);
+  const uint32_t nagSpeedAge = nagHomeCtx.lastVehicleSpeedMs ? (uint32_t)(now - nagHomeCtx.lastVehicleSpeedMs) : 999999UL;
+  const bool nagSpeedFresh = nagHomeCtx.vehicleSpeedValid && nagHomeCtx.lastVehicleSpeedMs != 0 && nagSpeedAge <= NAG_SPEED_FRESH_MS;
+  bool nagHumanPaused = false;
+  if (nagModeHome == MODE_H) {
+    const NagHumanStatePure nagHumanHome = nagHumanRuntimeSnapshot();
+    nagHumanPaused = nagHumanHome.phase == H_PAUSED_STOPPED;
+  }
+  const bool nagStoppedGate = nagPauseAtZeroBlocksPure(nagPauseZero, nagHomeCtx.vehicleSpeedValid, nagSpeedFresh, nagHomeCtx.vehicleSpeedRaw) || nagHumanPaused;
+
+  // Auto Blinker HOME telemetry only.
+  bool blinkEnabled;
+  uint32_t blinkDelayMsLocal, blinkRx249Local;
+  portENTER_CRITICAL(&blinkAMux);
+  blinkEnabled = blinkAEnabled;
+  blinkDelayMsLocal = blinkADelayMs;
+  blinkRx249Local = rx249;
+  portEXIT_CRITICAL(&blinkAMux);
+  const bool noaActive = dasValid && noaRaw;
+
+  // S3XY HOME telemetry only; no device registry JSON or diagnostics. Snapshot
+  // the three-device registry in one short lock instead of taking separate
+  // locks for master/registered/connected counts every HOME poll.
+  bool btEnabled;
+  uint8_t s3Paired = 0, s3Connected = 0;
+  portENTER_CRITICAL(&s3xyMux);
+  btEnabled = s3xyBluetoothEnabled;
+  for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
+    if (!s3xyDevices[i].used) continue;
+    s3Paired++;
+    if (s3xyDevices[i].connected) s3Connected++;
+  }
+  portEXIT_CRITICAL(&s3xyMux);
+  uint32_t ulcTxOkLocal, ulcTxFailLocal;
+  portENTER_CRITICAL(&ulcSnoozeMux);
+  ulcTxOkLocal = ulcSnoozeTxOk;
+  ulcTxFailLocal = ulcSnoozeTxFail;
+  portEXIT_CRITICAL(&ulcSnoozeMux);
+
+  // R79 HOME telemetry only.
+  uint8_t r79Smart;
+  bool r79LastTxValidLocal, r79StockValidLocal;
+  uint32_t r79TxOkLocal, r79TxFailLocal, r79LastTxMsLocal;
+  portENTER_CRITICAL(&r79LabMux);
+  r79Smart = r79LabSmartMode;
+  r79LastTxValidLocal = r79LabLastTxValid;
+  r79StockValidLocal = r79LabStockValid;
+  r79TxOkLocal = r79LabTxOk;
+  r79TxFailLocal = r79LabTxFail;
+  r79LastTxMsLocal = r79LabLastTxMs;
+  portEXIT_CRITICAL(&r79LabMux);
+  const uint8_t r79GateReasonLocal = r79LabGateReason(now);
+  const bool r79GateOpenLocal = r79GateReasonLocal != R79LAB_GATE_BLOCKED;
+  const bool r79InjectionActiveLocal = r79GateOpenLocal && r79StockValidLocal;
+
+  uint8_t alcModeLocal;
+  portENTER_CRITICAL(&lab3f8Mux); alcModeLocal = lab3f8AlcMode; portEXIT_CRITICAL(&lab3f8Mux);
+
+  const CanTrafficUiSnapshot traffic = canTrafficUiSnapshot();
+  twai_status_info_t twaiHome = {};
+  const bool twaiHomeOk = twai_get_status_info(&twaiHome) == ESP_OK;
+
+  String j;
+  j.reserve(1550);
+  j = "{\"nag\":{";
+  j += "\"torque\":" + String(nagRealTorque, 2);
+  j += ",\"ho\":" + String((unsigned)nagRealHo);
+  j += ",\"injNm\":" + String(nagLastInjectedNm, 2);
+  j += ",\"injHo\":" + String((unsigned)nagLastInjectedHo);
+  j += ",\"rx\":" + String((unsigned long)nagRxFrames);
+  j += ",\"txOk\":" + String((unsigned long)nagTxOkLocal);
+  j += ",\"txFail\":" + String((unsigned long)nagTxFailLocal);
+  j += ",\"lastTxAgeMs\":" + String((unsigned long)(nagLastTxLocal ? now - nagLastTxLocal : 999999UL));
+  j += ",\"maxTxGapMs\":" + String((unsigned long)nagMaxGapLocal);
+  j += ",\"stoppedGate\":" + String(nagStoppedGate ? "true" : "false");
+  j += ",\"apActive\":" + String((dasValid && apActive) ? "true" : "false");
+  j += ",\"canAState\":" + String((int)mcpState);
+  j += "},\"blink\":{";
+  j += "\"enabled\":" + String(blinkEnabled ? "true" : "false");
+  j += ",\"delayMs\":" + String((unsigned long)blinkDelayMsLocal);
+  j += ",\"noaActive\":" + String(noaActive ? "true" : "false");
+  j += ",\"dasStateValid\":" + String(dasValid ? "true" : "false");
+  j += ",\"dasState\":" + String((unsigned)dasState4);
+  j += ",\"rx249\":" + String((unsigned long)blinkRx249Local);
+  j += "},\"summon\":{";
+  j += "\"tlssc\":" + String(tlssc ? "true" : "false");
+  j += ",\"priorityStateName\":\"" + String(summonPriorityStateName(priorityState)) + "\"";
+  j += ",\"gate\":" + String(summonGate ? "true" : "false");
+  j += ",\"gateGraceActive\":" + String(gateGraceActive ? "true" : "false");
+  j += ",\"priorityFreshParked\":" + String(priorityFreshParked ? "true" : "false");
+  j += ",\"parked\":" + String(parked ? "true" : "false");
+  j += ",\"aca\":" + String(aca ? "true" : "false");
+  j += ",\"spr\":" + String(spr ? "true" : "false");
+  j += ",\"txQueueNow\":" + String((unsigned long)twaiTxQueueNow);
+  j += ",\"txQueueMax\":" + String((unsigned long)twaiTxQueueMax);
+  j += ",\"txOk\":" + String((unsigned long)sumTxOkLocal);
+  j += ",\"txFail\":" + String((unsigned long)sumTxFailLocal);
+  j += ",\"canState\":" + String(twaiHomeOk ? (int)twaiHome.state : -1);
+  j += ",\"canStateName\":\"" + String(twaiHomeOk ? twaiStateName(twaiHome.state) : "UNAVAILABLE") + "\"";
+  j += "},\"s3xy\":{";
+  j += "\"bluetoothEnabled\":" + String(btEnabled ? "true" : "false");
+  j += ",\"pairedCount\":" + String((unsigned)s3Paired);
+  j += ",\"connectedCount\":" + String((unsigned)s3Connected);
+  j += ",\"ulcTxOk\":" + String((unsigned long)ulcTxOkLocal);
+  j += ",\"ulcTxFail\":" + String((unsigned long)ulcTxFailLocal);
+  j += "},\"cantraffic\":{";
+  j += "\"mcpTrafficSeen\":" + String(traffic.mcpSeen ? "true" : "false");
+  j += ",\"mcpTrafficOnline\":" + String(traffic.mcpOnline ? "true" : "false");
+  j += ",\"mcpTrafficAgeMs\":" + String((unsigned long)traffic.mcpAgeMs);
+  j += ",\"twaiTrafficSeen\":" + String(traffic.twaiSeen ? "true" : "false");
+  j += ",\"twaiTrafficOnline\":" + String(traffic.twaiOnline ? "true" : "false");
+  j += ",\"twaiTrafficAgeMs\":" + String((unsigned long)traffic.twaiAgeMs);
+  j += "},\"r79\":{";
+  j += "\"smartMode\":" + String((unsigned)r79Smart);
+  j += ",\"gateOpen\":" + String(r79GateOpenLocal ? "true" : "false");
+  j += ",\"injectionActive\":" + String(r79InjectionActiveLocal ? "true" : "false");
+  j += ",\"gateReason\":\"" + String(r79LabGateReasonName(r79GateReasonLocal)) + "\"";
+  j += ",\"txOk\":" + String((unsigned long)r79TxOkLocal);
+  j += ",\"txFail\":" + String((unsigned long)r79TxFailLocal);
+  j += ",\"lastTxValid\":" + String(r79LastTxValidLocal ? "true" : "false");
+  j += ",\"lastTxAgeMs\":" + String((unsigned long)(r79LastTxMsLocal ? now - r79LastTxMsLocal : 999999UL));
+  j += "},\"lab3f8\":{\"alcMode\":" + String((unsigned)alcModeLocal) + "}}";
+  return j;
+}
 
 static bool snapshotGroupRequested(const String &groups, const char *name) {
   if (!name || !name[0]) return false;
@@ -2577,6 +3270,41 @@ static void httpSnapshot() {
   String groups;
   groups.reserve(80);
   groups = server.hasArg("groups") ? server.arg("groups") : "home";
+  if (groups == "home-fast") {
+    const bool includeSlow = server.hasArg("slow") && server.arg("slow") == "1";
+    const bool includeLive = server.hasArg("live") && server.arg("live") == "1";
+    server.sendHeader("Cache-Control", "no-store");
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+    server.sendContent("{\"fast\":");
+    server.sendContent(homeFastSnapshotToJson());
+    if (includeSlow) { server.sendContent(",\"slow\":"); server.sendContent(homeSlowSnapshotToJson()); }
+    if (includeLive) { server.sendContent(",\"live\":"); server.sendContent(homeLiveSnapshotToJson()); }
+    server.sendContent("}");
+    server.sendContent("");
+    return;
+  }
+  if (groups == "lab-lite") {
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", labLiteSnapshotToJson());
+    return;
+  }
+  if (groups == "settings-lite") {
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", settingsLiteSnapshotToJson());
+    return;
+  }
+  if (groups == "heartbeat") {
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", "{\"ok\":true}");
+    return;
+  }
+  if (groups == "home-lite") {
+    // Backward compatibility for cached v3.3b4 dashboards.
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", homeSnapshotToJson());
+    return;
+  }
   if (groups == "home") groups = "nag,blink,summon,s3xy,cantraffic,r79,lab3f8";
   else if (groups == "lab") groups = "lab3f8,r79,researchcapture";
   else if (groups == "settings") groups = "system,s3xy,lab3f8";
@@ -2611,7 +3339,7 @@ static void resetRuntimeStats() {
   nagEchoLatUs = 0;
   portENTER_CRITICAL(&nagDiagMux);
   nagTxOk=nagTxFail=0; nagSkipDisabled=nagSkipBootDelay=nagSkipWarmup=nagSkipSelfFrame=0;
-  nagSkipHandsOn=nagSkipApInvalid=nagSkipApInactive=nagSkipDecision=nagSkipStopped=0;
+  nagSkipHandsOn=nagSkipApInvalid=nagSkipApInactive=nagSkipDecision=nagSkipStopped=nagSkipCadence=nagSkipSpeedStale=0;
   nagBlockMutex=nagBlockMcpNotReady=nagBlockEpoch=nagBlockFreshMask=nagBlockInvalidMsg=nagSendError=0;
   nagLastTxOkMs=nagMaxTxGapMs=nagSessionTxOk=0; nagSessionStartMs=0;
   nagLastSkipReason=NAG_SKIP_NONE; nagLastSkipMs=0; nagLastTxBlockReason=MCP_TX_OK; nagLastTxBlockMs=0;
@@ -2631,12 +3359,36 @@ static void resetRuntimeStats() {
   summonGateGraceEnterCount = 0;
   summonGateGraceRecoverCount = 0;
   summonGateGraceExpireCount = 0;
+  summonAuthorizationTransitions = 0;
+  summonConfirmedGearTransitions = 0;
   portEXIT_CRITICAL(&stateMux);
+
+  portENTER_CRITICAL(&r79LabMux);
+  r79LabPendingRequestCount = 0;
+  r79LabPendingCoalesceCount = 0;
+  r79LabPendingRetryCount = 0;
+  r79LabFreshMaskWaitCount = 0;
+  r79LabLastReassertLatencyMs = 0;
+  r79LabMaxReassertLatencyMs = 0;
+  r79LabNoTemplateSkip = 0;
+  r79LabQueueSkip = 0;
+  r79LabGateBlocked = 0;
+  r79LabTxOk = 0;
+  r79LabTxFail = 0;
+  r79LabImmediateTxOk = 0;
+  r79LabImmediateTxFail = 0;
+  r79LabPeriodicTxOk = 0;
+  r79LabPeriodicTxFail = 0;
+  r79LabAppliedFrames = 0;
+  r79LabLastBlockReason = R79LAB_BLOCK_NONE;
+  r79LabLastBlockMs = 0;
+  portEXIT_CRITICAL(&r79LabMux);
 
   portENTER_CRITICAL(&blinkAMux);
   rx249 = 0;
   blkATxOk = 0;
   blkATxFail = 0;
+  autoRetryCount = 0;
   portEXIT_CRITICAL(&blinkAMux);
   visualDebugRxCount = 0;
 
@@ -2748,6 +3500,9 @@ static void webTask(void *arg) {
     server.on("/api/r79lab/stats", HTTP_GET, httpR79LabStats);
     server.on("/api/r79lab/update", HTTP_POST, httpR79LabUpdate);
     server.on("/api/r79lab/stock", HTTP_POST, httpR79LabStock);
+    server.on("/api/nag-human-lab/stats", HTTP_GET, httpNagHumanLabStats);
+    server.on("/api/nag-human-lab/update", HTTP_POST, httpNagHumanLabUpdate);
+    server.on("/api/nag-human-lab/reset", HTTP_POST, httpNagHumanLabReset);
     server.on("/api/lab3f8/stats", HTTP_GET, httpLab3f8Stats);
     server.on("/api/lab3f8/update", HTTP_POST, httpLab3f8Update);
     server.on("/api/lab3f8/stock", HTTP_POST, httpLab3f8Stock);

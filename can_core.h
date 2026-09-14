@@ -184,7 +184,7 @@ static void mcpRxOverflowReset() {
 // All feature TX reaches the hardware through these two functions. The caller
 // passes the recovery epoch captured before its authorization decision. The
 // mutex makes epoch validation and the nonblocking hardware enqueue one atomic
-// operation with respect to invalidateCanTxState().
+// operation with respect to recovery-state invalidation.
 static uint32_t canTxEpochSnapshot() {
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return 0;
   const uint32_t epoch = canTxBarrierState.epoch;
@@ -254,7 +254,16 @@ static void canBTraceReset() {
 
 static volatile bool canTxAdministrativeHold = false;
 
-static esp_err_t canTxTwaiTransmit(const twai_message_t *msg, uint32_t expectedEpoch) {
+static uint8_t canTxFreshMaskSnapshot() {
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
+    return __atomic_load_n(&canTxFreshMaskFast, __ATOMIC_ACQUIRE);
+  const uint8_t mask = canTxBarrierState.freshMask;
+  xSemaphoreGive(canTxBarrierMutex);
+  return mask;
+}
+
+static esp_err_t canTxTwaiTransmitWithMask(
+    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
   if (!msg) return ESP_ERR_INVALID_ARG;
   if (canTxAdministrativeHold) {
     canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
@@ -265,21 +274,56 @@ static esp_err_t canTxTwaiTransmit(const twai_message_t *msg, uint32_t expectedE
     return ESP_ERR_TIMEOUT;
   }
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady && canTxBarrierAllowsPure(canTxBarrierState, expectedEpoch))
+  if (!canTxAdministrativeHold && twaiReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask))
     err = twai_transmit(msg, 0);
   xSemaphoreGive(canTxBarrierMutex);
   canBTraceRecordTx(msg, err);
   return err;
 }
 
-static esp_err_t canTxTwaiClearQueue(uint32_t expectedEpoch) {
+static esp_err_t canTxTwaiTransmitWithMaskWait(
+    const twai_message_t *msg, uint32_t expectedEpoch,
+    uint8_t requiredFreshMask, TickType_t waitTicks) {
+  if (!msg) return ESP_ERR_INVALID_ARG;
+  if (canTxAdministrativeHold) {
+    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
+    return ESP_ERR_INVALID_STATE;
+  }
+  if (!canTxBarrierMutex ||
+      xSemaphoreTake(canTxBarrierMutex, waitTicks) != pdTRUE) {
+    canBTraceRecordTx(msg, ESP_ERR_TIMEOUT);
+    return ESP_ERR_TIMEOUT;
+  }
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (!canTxAdministrativeHold && twaiReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch,
+                                   requiredFreshMask))
+    err = twai_transmit(msg, waitTicks);
+  xSemaphoreGive(canTxBarrierMutex);
+  canBTraceRecordTx(msg, err);
+  return err;
+}
+
+static esp_err_t canTxTwaiTransmit(
+    const twai_message_t *msg, uint32_t expectedEpoch) {
+  return canTxTwaiTransmitWithMask(msg, expectedEpoch, CAN_TX_FRESH_BOTH);
+}
+
+static esp_err_t canTxTwaiClearQueueWithMask(
+    uint32_t expectedEpoch, uint8_t requiredFreshMask) {
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
     return ESP_ERR_TIMEOUT;
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (twaiReady && canTxBarrierAllowsPure(canTxBarrierState, expectedEpoch))
+  if (twaiReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask))
     err = twai_clear_transmit_queue();
   xSemaphoreGive(canTxBarrierMutex);
   return err;
+}
+
+static esp_err_t canTxTwaiClearQueue(uint32_t expectedEpoch) {
+  return canTxTwaiClearQueueWithMask(expectedEpoch, CAN_TX_FRESH_BOTH);
 }
 
 static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
@@ -451,7 +495,12 @@ static constexpr uint32_t NAG_MODE_C_STEP_MS = 200;
 static constexpr uint16_t NAG_SPEED_ID = 0x257;
 static constexpr uint32_t NAG_SPEED_FRESH_MS = 1000;
 
-enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_CUSTOM = 2, MODE_C = 3 };
+enum NagMode : uint8_t {
+  MODE_A = 0, MODE_B = 1,
+  // Value 2 was the removed legacy Custom mode; keep the numeric gap so
+  // persisted/public IDs for Mode C..H remain unchanged.
+  MODE_C = 3, MODE_D = 4, MODE_E = 5, MODE_F = 6, MODE_H = 7
+};
 
 struct NagConfig {
   bool     enabled;
@@ -480,6 +529,56 @@ struct NagConfig {
 
 static NagConfig nagCfg;
 static portMUX_TYPE nagCfgMux = portMUX_INITIALIZER_UNLOCKED;
+
+// RX selector cache: Party CAN carries many unrelated frames. Keep the three
+// configurable NAG selector IDs in a tiny lock-free read cache so unrelated RX
+// frames can return before taking nagCfgMux. Writers publish under nagCfgMux;
+// the sequence guard prevents readers from consuming a partially-updated set.
+static uint32_t nagRxSelectorSeq = 0;
+static uint16_t nagRxTargetId = 0x370;
+static uint16_t nagRxApStateId = 0x399;
+static uint16_t nagRxSteeringId = 0x129;
+
+static inline void nagRxSelectorsPublishLocked(const NagConfig &c) {
+  // GCC atomics avoid a C++ data race between the Core-0 web writer and the
+  // Core-1 CAN reader. The odd/even sequence publishes the three IDs as one
+  // coherent snapshot without putting the common RX path behind nagCfgMux.
+  __atomic_add_fetch(&nagRxSelectorSeq, 1U, __ATOMIC_ACQ_REL);  // odd = writer active
+  __atomic_store_n(&nagRxTargetId, c.targetId, __ATOMIC_RELAXED);
+  __atomic_store_n(&nagRxApStateId, c.apStateId, __ATOMIC_RELAXED);
+  __atomic_store_n(&nagRxSteeringId, c.steeringId, __ATOMIC_RELAXED);
+  __atomic_add_fetch(&nagRxSelectorSeq, 1U, __ATOMIC_RELEASE);  // even = published
+}
+
+static inline void nagRxSelectorsSnapshot(uint16_t &targetId, uint16_t &apStateId, uint16_t &steeringId) {
+  const uint32_t seq1 = __atomic_load_n(&nagRxSelectorSeq, __ATOMIC_ACQUIRE);
+  targetId = __atomic_load_n(&nagRxTargetId, __ATOMIC_RELAXED);
+  apStateId = __atomic_load_n(&nagRxApStateId, __ATOMIC_RELAXED);
+  steeringId = __atomic_load_n(&nagRxSteeringId, __ATOMIC_RELAXED);
+  const uint32_t seq2 = __atomic_load_n(&nagRxSelectorSeq, __ATOMIC_ACQUIRE);
+  if ((seq1 & 1U) || seq1 != seq2) {
+    // Config updates are rare. Fall back to the canonical protected copy
+    // instead of spinning inside the high-priority CAN RX task.
+    portENTER_CRITICAL(&nagCfgMux);
+    targetId = nagCfg.targetId;
+    apStateId = nagCfg.apStateId;
+    steeringId = nagCfg.steeringId;
+    portEXIT_CRITICAL(&nagCfgMux);
+  }
+}
+
+static void nagCfgCommit(const NagConfig &c) {
+  portENTER_CRITICAL(&nagCfgMux);
+  nagCfg = c;
+  nagRxSelectorsPublishLocked(nagCfg);
+  portEXIT_CRITICAL(&nagCfgMux);
+}
+
+static void nagRxSelectorsRefreshFromConfig() {
+  portENTER_CRITICAL(&nagCfgMux);
+  nagRxSelectorsPublishLocked(nagCfg);
+  portEXIT_CRITICAL(&nagCfgMux);
+}
 
 struct NagContext {
   uint8_t  apState;
@@ -524,6 +623,8 @@ static volatile uint32_t nagSkipApInvalid = 0;
 static volatile uint32_t nagSkipApInactive = 0;
 static volatile uint32_t nagSkipDecision = 0;
 static volatile uint32_t nagSkipStopped = 0;
+static volatile uint32_t nagSkipCadence = 0;
+static volatile uint32_t nagSkipSpeedStale = 0;
 static volatile uint32_t nagBlockMutex = 0;
 static volatile uint32_t nagBlockMcpNotReady = 0;
 static volatile uint32_t nagBlockEpoch = 0;
@@ -542,6 +643,141 @@ static volatile uint32_t nagLastTxBlockMs = 0;
 // This is intentionally independent of the Original mcpRxCount > 1000 warmup check.
 static volatile uint32_t nagModeBPhaseStartMs = 0;
 
+// Portable D/E/F and event-based Mode H use exact recent-TX payload matching.
+// D/E/F need it for their AP-independent path and dynamic torque; H needs it
+// because WAIT/REFRACTORY preserve arbitrary OEM torque while forcing HO=1.
+// This state is touched only on the Party-CAN RX/TX path and is intentionally
+// separate from the existing diagnostic counters.
+static portMUX_TYPE nagPortableMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool nagPortableLastTxValid = false;
+static volatile uint32_t nagPortableLastTxMs = 0;
+static uint8_t nagPortableLastTxRaw[8] = {0};
+static uint8_t nagPortablePrevMode = 0xFF;
+
+static void nagExactEchoReset() {
+  portENTER_CRITICAL(&nagPortableMux);
+  nagPortableLastTxValid = false;
+  nagPortableLastTxMs = 0;
+  memset(nagPortableLastTxRaw, 0, sizeof(nagPortableLastTxRaw));
+  portEXIT_CRITICAL(&nagPortableMux);
+}
+
+// Mode E cadence learning is session-local and runs ONLY while Mode E is
+// selected. No cadence state is persisted to NVS and no LAB diagnostic path
+// is attached to the RX hot path.
+static NagCadenceStatePure nagCadenceState = {};
+
+// Mode H has a separate fixed-point event engine. The state is isolated from
+// the CAN transport so host tests can exercise every transition deterministically.
+static portMUX_TYPE nagHumanMux = portMUX_INITIALIZER_UNLOCKED;
+static NagHumanConfigPure nagHumanConfig = nagHumanDefaultConfigPure();
+static NagHumanStatePure nagHumanState = {};
+static bool nagHumanInitialized = false;
+
+static uint32_t nagHumanRuntimeSeed() {
+  uint32_t seed = (uint32_t)esp_random() ^ (uint32_t)micros() ^ 0x484D4F44u;
+  return nagHumanSanitizeSeedPure(seed);
+}
+
+static void nagHumanRuntimeReset(bool reseed) {
+  const uint32_t seed = reseed ? nagHumanRuntimeSeed() : 0u;
+  portENTER_CRITICAL(&nagHumanMux);
+  if (!nagHumanInitialized) {
+    nagHumanInitPure(nagHumanState, reseed ? seed : 0x484D4F44u);
+    nagHumanInitialized = true;
+  } else if (reseed) {
+    nagHumanReseedPure(nagHumanState, seed);
+  } else {
+    nagHumanResetRuntimePure(nagHumanState, H_IDLE);
+  }
+  portEXIT_CRITICAL(&nagHumanMux);
+}
+
+static NagHumanStepResultPure nagHumanRuntimeStep(uint32_t nowMs,
+                                                   uint16_t sourceRaw,
+                                                   bool runAllowed,
+                                                   bool speedValid,
+                                                   bool speedFresh,
+                                                   uint16_t speedRaw) {
+  NagHumanStepResultPure result = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  if (!nagHumanInitialized) {
+    nagHumanInitPure(nagHumanState, nagHumanRuntimeSeed());
+    nagHumanInitialized = true;
+  }
+  result = nagHumanStepPure(nagHumanState, nagHumanConfig, nowMs, sourceRaw,
+                            runAllowed, speedValid, speedFresh, speedRaw);
+  portEXIT_CRITICAL(&nagHumanMux);
+  return result;
+}
+
+static NagHumanStatePure nagHumanRuntimeSnapshot() {
+  NagHumanStatePure snapshot = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  snapshot = nagHumanState;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+static NagHumanConfigPure nagHumanRuntimeConfigSnapshot() {
+  NagHumanConfigPure snapshot = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  snapshot = nagHumanConfig;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+// Boot-time restore: timing always comes from the current firmware preset,
+// while only the LAB-editable primary magnitude range is persisted.
+static void nagHumanRuntimeLoadPeakRange(uint16_t minRaw, uint16_t maxRaw) {
+  NagHumanConfigPure config = nagHumanDefaultConfigPure();
+  config.peakMinRaw = minRaw;
+  config.peakMaxRaw = maxRaw;
+  nagHumanSanitizePeakRangePure(config);
+  portENTER_CRITICAL(&nagHumanMux);
+  nagHumanConfig = config;
+  nagHumanState = NagHumanStatePure{};
+  nagHumanInitialized = false;
+  portEXIT_CRITICAL(&nagHumanMux);
+}
+
+// Runtime LAB update. The current descriptor is discarded so one event can
+// never mix two peak ranges. Existing event counters remain preserved through
+// nagHumanReseedPure().
+static bool nagHumanRuntimeSetPeakRange(uint16_t minRaw, uint16_t maxRaw) {
+  if (!nagHumanPeakRangeValidPure(minRaw, maxRaw)) return false;
+  const uint32_t seed = nagHumanRuntimeSeed();
+  portENTER_CRITICAL(&nagHumanMux);
+  nagHumanConfig.peakMinRaw = minRaw;
+  nagHumanConfig.peakMaxRaw = maxRaw;
+  if (!nagHumanInitialized) {
+    nagHumanInitPure(nagHumanState, seed);
+    nagHumanInitialized = true;
+  } else {
+    nagHumanReseedPure(nagHumanState, seed);
+  }
+  portEXIT_CRITICAL(&nagHumanMux);
+  nagExactEchoReset();
+  return true;
+}
+
+static void nagHumanRuntimeResetPeakRange() {
+  (void)nagHumanRuntimeSetPeakRange(NAG_HUMAN_PEAK_DEFAULT_MIN_RAW,
+                                    NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
+}
+
+static void nagHumanRuntimeApTransition(bool apActive, bool wasApActive) {
+  if (apActive == wasApActive) return;
+  uint8_t mode;
+  portENTER_CRITICAL(&nagCfgMux);
+  mode = nagCfg.mode;
+  portEXIT_CRITICAL(&nagCfgMux);
+  if (mode == MODE_H) {
+    nagExactEchoReset();
+    nagHumanRuntimeReset(true);
+  }
+}
+
 // ── Nag helpers ──
 
 static inline const char* nagSkipReasonName(uint8_t reason) {
@@ -555,6 +791,8 @@ static inline const char* nagSkipReasonName(uint8_t reason) {
     case NAG_SKIP_AP_INACTIVE: return "AP_INACTIVE";
     case NAG_SKIP_DECISION: return "MODE_DECISION";
     case NAG_SKIP_STOPPED: return "STOPPED_0_KPH";
+    case NAG_SKIP_CADENCE: return "CADENCE_UNSTABLE";
+    case NAG_SKIP_SPEED_STALE: return "SPEED_STALE";
     default: return "NONE";
   }
 }
@@ -584,13 +822,16 @@ static void nagDiagRecordSkip(NagSkipReasonPure reason, uint32_t now) {
     case NAG_SKIP_AP_INACTIVE: nagSkipApInactive++; break;
     case NAG_SKIP_DECISION: nagSkipDecision++; break;
     case NAG_SKIP_STOPPED: nagSkipStopped++; break;
+    case NAG_SKIP_CADENCE: nagSkipCadence++; break;
+    case NAG_SKIP_SPEED_STALE: nagSkipSpeedStale++; break;
     default: break;
   }
   // Routine self-echo and startup/disabled skips would otherwise mask the last
   // driving-relevant interruption. Preserve them in counters, not Last Skip.
   if (reason == NAG_SKIP_HANDS_ON || reason == NAG_SKIP_AP_INVALID ||
       reason == NAG_SKIP_AP_INACTIVE || reason == NAG_SKIP_DECISION ||
-      reason == NAG_SKIP_STOPPED) {
+      reason == NAG_SKIP_STOPPED || reason == NAG_SKIP_CADENCE ||
+      reason == NAG_SKIP_SPEED_STALE) {
     nagLastSkipReason = (uint8_t)reason;
     nagLastSkipMs = now;
   }
@@ -689,8 +930,56 @@ static void nagCfgDefaultsModeC(NagConfig& c) {
   c.pauseMs     = 0;    // Mode C is continuous by default.
 }
 
+// Mode D — Portable Burst / HO1. Same waveform/envelope as Mode B,
+// but Party-CAN-local and forces HO=1 on active injected frames.
+static void nagCfgDefaultsModeD(NagConfig& c) {
+  nagCfgSetCommonDefaults(c);
+  c.mode        = MODE_D;
+  c.targetId    = 0x370;
+  c.torqueCount = 4;
+  c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
+  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0x98;
+  c.torqueB2[2] = 0x07; c.torqueB3[2] = 0x6C;
+  c.torqueB2[3] = 0x07; c.torqueB3[3] = 0x4E;
+  c.hoRatePct   = 100; // Active injected frames force handsOnLevel=1.
+}
+
+// Mode E — Cadence-Aware Burst. Payload behavior matches Mode D including
+// HO=1; cadence learning/gating runs only while Mode E is selected.
+static void nagCfgDefaultsModeE(NagConfig& c) {
+  nagCfgDefaultsModeD(c);
+  c.mode = MODE_E;
+}
+
+// Mode F — EPAS-Faithful Hold/Walk. Active injected frames force HO=1 with a
+// bounded same-direction 1.50..1.80 Nm walk inside each burst, alternating
+// direction on each new burst cycle.
+static void nagCfgDefaultsModeF(NagConfig& c) {
+  nagCfgSetCommonDefaults(c);
+  c.mode        = MODE_F;
+  c.targetId    = 0x370;
+  c.torqueCount = 1;
+  c.torqueB2[0] = 0x08;
+  c.torqueB3[0] = 0x98;
+  c.hoRatePct   = 100;
+}
+
+// Mode H — AP-gated Human Interaction Model. Event timing uses the fixed
+// NORMAL preset in nag_human_pure.h; LAB may adjust only the primary-event
+// magnitude range, persisted in the NAG namespace.
+static void nagCfgDefaultsModeH(NagConfig& c) {
+  nagCfgSetCommonDefaults(c);
+  c.mode        = MODE_H;
+  c.targetId    = 0x370;
+  c.torqueCount = 1;
+  c.torqueB2[0] = 0x08;
+  c.torqueB3[0] = 0x02; // 0 Nm placeholder; runtime output comes from Mode H.
+  c.hoRatePct   = 100;
+}
+
 
 static void nagCfgClampAll(NagConfig& c) {
+  if (c.mode == MODE_D || c.mode == MODE_E || c.mode == MODE_F || c.mode == MODE_H) c.hoRatePct = 100;
   if (c.torqueCount < 1) c.torqueCount = 1;
   if (c.torqueCount > NAG_MAX_TORQUE_ENTRIES) c.torqueCount = NAG_MAX_TORQUE_ENTRIES;
   if (c.hoRatePct > 100) c.hoRatePct = 100;
@@ -705,18 +994,24 @@ static void nagCfgLoad() {
   if (!prefs.begin("nag", true)) {
     Serial.println("NVS: No existing nag config, using defaults");
     nagCfgDefaultsModeA(nagCfg);
+    nagHumanRuntimeLoadPeakRange(NAG_HUMAN_PEAK_DEFAULT_MIN_RAW,
+                                 NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
+    nagRxSelectorsRefreshFromConfig();
     return;
   }
   if (!prefs.isKey("v")) {
     prefs.end();
     nagCfgDefaultsModeA(nagCfg);
+    nagHumanRuntimeLoadPeakRange(NAG_HUMAN_PEAK_DEFAULT_MIN_RAW,
+                                 NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
+    nagRxSelectorsRefreshFromConfig();
     return;
   }
   nagCfgSetCommonDefaults(nagCfg);
   nagCfg.enabled        = prefs.getBool("en", true);
   nagCfg.pauseAtZeroSpeed = prefs.getBool("p0", false);
   nagCfg.mode           = prefs.getUChar("mode", 0);
-  if (nagCfg.mode > MODE_C) nagCfg.mode = MODE_A;
+  if (nagCfg.mode == 2 || nagCfg.mode > MODE_H) nagCfg.mode = MODE_A;
   nagCfg.targetId       = prefs.getUShort("id", 0x370);
   nagCfg.torqueCount    = prefs.getUChar("tc", 1);
   size_t n = prefs.getBytes("tb2", nagCfg.torqueB2, NAG_MAX_TORQUE_ENTRIES);
@@ -728,16 +1023,23 @@ static void nagCfgLoad() {
   nagCfg.pauseMs        = prefs.getUShort("pms", 1500);
   nagCfg.apStateId      = prefs.getUShort("apid", 0x399);
   nagCfg.steeringId     = prefs.getUShort("stid", 0x129);
+  const uint16_t humanPeakMinRaw = prefs.getUShort("hpkmin", NAG_HUMAN_PEAK_DEFAULT_MIN_RAW);
+  const uint16_t humanPeakMaxRaw = prefs.getUShort("hpkmax", NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
   prefs.end();
   nagCfgClampAll(nagCfg);
+  nagHumanRuntimeLoadPeakRange(humanPeakMinRaw, humanPeakMaxRaw);
+  nagRxSelectorsRefreshFromConfig();
   Serial.println("NVS: Nag config loaded OK");
 }
 
 static void nagCfgSave() {
   NagConfig snapshot;
+  NagHumanConfigPure humanSnapshot;
   portENTER_CRITICAL(&nagCfgMux);
   snapshot = nagCfg;
   portEXIT_CRITICAL(&nagCfgMux);
+  humanSnapshot = nagHumanRuntimeConfigSnapshot();
+  nagHumanSanitizePeakRangePure(humanSnapshot);
   nagCfgClampAll(snapshot);
   if (!prefs.begin("nag", false)) {
     Serial.println("NVS: Nag save failed - could not open");
@@ -755,7 +1057,9 @@ static void nagCfgSave() {
   prefs.putUShort("pms",  snapshot.pauseMs);
   prefs.putUShort("apid", snapshot.apStateId);
   prefs.putUShort("stid", snapshot.steeringId);
-  prefs.putUChar("v",     3);
+  prefs.putUShort("hpkmin", humanSnapshot.peakMinRaw);
+  prefs.putUShort("hpkmax", humanSnapshot.peakMaxRaw);
+  prefs.putUChar("v",     5);
   prefs.end();
 }
 
@@ -800,7 +1104,7 @@ static bool nagDecideInjection(uint8_t dlc,
     }
   }
 
-  if (mode == MODE_A || mode == MODE_CUSTOM) {
+  if (mode == MODE_A) {
     out_b2 = tB2[tIdx % tCount];
     out_b3 = tB3[tIdx % tCount];
     tIdx++;
@@ -823,6 +1127,31 @@ static bool nagDecideInjection(uint8_t dlc,
     if (now - lastChangeMs >= 200) { tIdx = (tIdx + 1) % tCount; lastChangeMs = now; }
     out_b2 = tB2[tIdx];
     out_b3 = tB3[tIdx];
+    out_setHo = true;
+    return true;
+  }
+
+  if (mode == MODE_D || mode == MODE_E) {
+    uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
+    if (cycleMs == 0) cycleMs = 1;
+    // Portable modes intentionally use a boot-time phase and do not sync to AP.
+    uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
+    if (phase >= burstMs) return false;
+    if (now - lastChangeMs >= 200) {
+      tIdx = (tIdx + 1) % tCount;
+      lastChangeMs = now;
+    }
+    out_b2 = tB2[tIdx];
+    out_b3 = tB3[tIdx];
+    out_setHo = true;
+    return true;
+  }
+
+  if (mode == MODE_F) {
+    uint16_t raw = 0;
+    if (!nagModeFFaithfulRawPure((uint32_t)(now - bootTime), burstMs, pauseMs, raw)) return false;
+    out_b2 = (uint8_t)((raw >> 8) & 0x0F);
+    out_b3 = (uint8_t)(raw & 0xFF);
     out_setHo = true;
     return true;
   }
@@ -920,14 +1249,15 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   // Defense in depth: never let extended or RTR frames alias a standard
   // Tesla ID and reach status parsing or an actuation path.
   if ((rxf.can_id & 0xC0000000UL) != 0) return;
-  uint16_t id = rxf.can_id & 0x7FF;
-  uint8_t dlc = rxf.can_dlc;
+  const uint16_t id = rxf.can_id & 0x7FF;
+  const uint8_t dlc = rxf.can_dlc;
   if (dlc < 1) return;
 
+  const bool ylProfile = activeProfileIsYl();
   // Model Y L reads DAS/Summon status on CAN A / Party. Standard 3/Y
   // receives the corresponding status from Chassis CAN B regardless of whether
   // CAN A is configured as Body or Party, so only YL runs these handlers here.
-  if (activeProfileIsYl()) {
+  if (ylProfile) {
     switch (id) {
       case 280: if (dlc >= 7) handle280(rxf.data); break;
       case 390: if (dlc >= 8) handle390(rxf.data); break;
@@ -940,35 +1270,72 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   if (!activeProfileNagSupported()) return;
 
   uint16_t targetId, apStateId, steeringId;
-  bool en;
-  portENTER_CRITICAL(&nagCfgMux);
-  targetId   = nagCfg.targetId;
-  apStateId  = nagCfg.apStateId;
-  steeringId = nagCfg.steeringId;
-  en         = nagCfg.enabled;
-  portEXIT_CRITICAL(&nagCfgMux);
+  nagRxSelectorsSnapshot(targetId, apStateId, steeringId);
+
+  // Most Party frames are unrelated to NAG. Reject them before touching
+  // nagCfgMux; only speed/context/target frames enter the NAG processing path.
+  if (id != NAG_SPEED_ID && id != targetId && id != apStateId && id != steeringId) return;
 
   if (id == NAG_SPEED_ID) nagUpdateVehicleSpeed(rxf.data, dlc);
   // YL's proven Party layout exposes the legacy 0x399 context used by these
   // diagnostics. Standard Party+Chassis authorizes NAG from Chassis CAN B
   // 0x399 instead; do not misparse a Party frame with the same numeric ID.
-  if (activeProfileIsYl() && id == apStateId) nagUpdateApState(rxf.data, dlc);
+  if (ylProfile && id == apStateId) nagUpdateApState(rxf.data, dlc);
   if (id == steeringId) nagUpdateSteering(rxf.data, dlc);
 
   if (id != targetId) return;
-  nagRxFrames++;
 
+  bool en;
+  uint8_t modeNow;
+  portENTER_CRITICAL(&nagCfgMux);
+  // Revalidate the configurable target after taking the lock. A dashboard
+  // config update can race the lock-free selector cache by at most this frame.
+  if (id != nagCfg.targetId) {
+    portEXIT_CRITICAL(&nagCfgMux);
+    return;
+  }
+  en = nagCfg.enabled;
+  modeNow = nagCfg.mode;
+  portEXIT_CRITICAL(&nagCfgMux);
+
+  nagRxFrames++;
   if (dlc < 5) return;
   uint8_t ho = (rxf.data[4] >> 6) & 0x03;
   uint16_t tRaw = ((rxf.data[2] & 0x0F) << 8) | rxf.data[3];
   nagRealHo     = ho;
   nagRealTorque = tRaw * 0.01f - 20.5f;
+  const bool portableMode = (modeNow == MODE_D || modeNow == MODE_E || modeNow == MODE_F);
+  const bool exactEchoMode = portableMode || modeNow == MODE_H;
+
+  // Invalidate exact-echo state on every mode transition. Mode E starts a
+  // fresh cadence learner on entry; Mode H starts a new event session and
+  // discards any event from the previous mode.
+  if (modeNow != nagPortablePrevMode) {
+    const uint8_t previousMode = nagPortablePrevMode;
+    nagExactEchoReset();
+    if (modeNow == MODE_E) nagCadenceResetPure(nagCadenceState);
+    if (modeNow == MODE_H) nagHumanRuntimeReset(true);
+    else if (previousMode == MODE_H) nagHumanRuntimeReset(false);
+    nagPortablePrevMode = modeNow;
+  }
 
   bool isOurs = false;
-  if (ho == 1) {
-    uint8_t modeNow;
+  if (exactEchoMode) {
+    bool lastValid;
+    uint32_t lastMs;
+    uint8_t lastRaw[8];
+    portENTER_CRITICAL(&nagPortableMux);
+    lastValid = nagPortableLastTxValid;
+    lastMs = nagPortableLastTxMs;
+    memcpy(lastRaw, nagPortableLastTxRaw, 8);
+    portEXIT_CRITICAL(&nagPortableMux);
+    const uint32_t ageMs = lastMs ? (uint32_t)((uint32_t)millis() - lastMs) : 0xFFFFFFFFu;
+    isOurs = nagPortableRecentTxEchoPure(exactEchoMode, lastValid, ageMs, rxf.data, lastRaw, dlc);
+  }
+
+  // Preserve the v3.2 hotfix A/B/C self-frame heuristic unchanged.
+  if (!isOurs && !exactEchoMode && ho == 1) {
     portENTER_CRITICAL(&nagCfgMux);
-    modeNow = nagCfg.mode;
     if (modeNow != MODE_C) {
       for (uint8_t i = 0; i < nagCfg.torqueCount; i++) {
         uint16_t cfgRaw = ((nagCfg.torqueB2[i] & 0x0F) << 8) | nagCfg.torqueB3[i];
@@ -985,14 +1352,30 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     }
   }
 
+  // Mode E is the only mode that observes/learns OEM 0x370 cadence.
+  if (modeNow == MODE_E && !isOurs && dlc >= 8) {
+    const uint32_t rxUs = (uint32_t)micros();
+    const uint8_t sourceCounter = (uint8_t)(rxf.data[6] & 0x0Fu);
+    nagCadenceObservePure(nagCadenceState, rxUs, sourceCounter);
+  }
+
   const uint32_t nowMs = (uint32_t)millis();
   bool bootDelayPassed = (nowMs - canInitTime) >= NAG_INJECTION_DELAY_MS;
   bool canSeen = mcpRxCount > 1000;  // Retain the established MCP warmup threshold.
-  bool apValid, apActiveForNag;
-  nagApGateSnapshot(apValid, apActiveForNag);
-  const NagSkipReasonPure eligibility = nagEligibilityReasonPure(
-      en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag);
+  NagSkipReasonPure eligibility;
+  if (portableMode) {
+    eligibility = nagPortableEligibilityReasonPure(en, bootDelayPassed, canSeen, isOurs, ho);
+  } else {
+    bool apValid, apActiveForNag;
+    nagApGateSnapshot(apValid, apActiveForNag);
+    eligibility = nagEligibilityReasonPure(
+        en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag);
+  }
   if (eligibility != NAG_SKIP_NONE) {
+    // A real gate closure cancels a Mode H event. A local self-echo is merely
+    // ignored and must not tear down the live event session.
+    if (modeNow == MODE_H && eligibility != NAG_SKIP_SELF_FRAME)
+      nagHumanRuntimeReset(false);
     nagDiagRecordSkip(eligibility, nowMs);
     return;
   }
@@ -1010,9 +1393,29 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   speedLastMs = nagCtx.lastVehicleSpeedMs;
   portEXIT_CRITICAL(&nagCtxMux);
   const bool speedFresh = speedLastMs != 0 && (uint32_t)(nowMs - speedLastMs) <= NAG_SPEED_FRESH_MS;
-  if (nagPauseAtZeroBlocksPure(pauseAtZero, speedValid, speedFresh, speedRaw)) {
+
+  NagHumanStepResultPure humanDecision = {};
+  if (modeNow == MODE_H) {
+    humanDecision = nagHumanRuntimeStep(nowMs, tRaw, true, speedValid, speedFresh, speedRaw);
+    if (!humanDecision.tx) {
+      const NagSkipReasonPure reason = humanDecision.blockReason == H_BLOCK_SPEED_STALE
+          ? NAG_SKIP_SPEED_STALE
+          : NAG_SKIP_STOPPED;
+      nagDiagRecordSkip(reason, nowMs);
+      return;
+    }
+  } else if (nagPauseAtZeroBlocksPure(pauseAtZero, speedValid, speedFresh, speedRaw)) {
     nagDiagRecordSkip(NAG_SKIP_STOPPED, nowMs);
     return;
+  }
+
+  uint8_t counterStep = 1u;
+  if (modeNow == MODE_E) {
+    if (!(nagCadenceState.stable && nagCadenceState.haveStep)) {
+      nagDiagRecordSkip(NAG_SKIP_CADENCE, nowMs);
+      return;
+    }
+    counterStep = nagCadenceState.counterStep;
   }
 
   const uint32_t txEpoch = canTxEpochSnapshot();
@@ -1022,7 +1425,16 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   }
   {
     uint8_t b2 = 0, b3 = 0; bool setHo = false;
-    if (nagDecideInjection(dlc, b2, b3, setHo)) {
+    bool shouldInject = false;
+    if (modeNow == MODE_H) {
+      b2 = (uint8_t)((humanDecision.raw >> 8) & 0x0Fu);
+      b3 = (uint8_t)(humanDecision.raw & 0xFFu);
+      setHo = humanDecision.setHo;
+      shouldInject = humanDecision.tx;
+    } else {
+      shouldInject = nagDecideInjection(dlc, b2, b3, setHo);
+    }
+    if (shouldInject) {
       struct can_frame txf;
       txf.can_id = rxf.can_id;
       txf.can_dlc = rxf.can_dlc;
@@ -1030,7 +1442,8 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
       txf.data[2] = (txf.data[2] & 0xF0) | (b2 & 0x0F);
       txf.data[3] = b3;
       txf.data[4] = setHo ? (txf.data[4] | 0x40) : txf.data[4];
-      txf.data[6] = (txf.data[6] & 0xF0) | (((txf.data[6] & 0x0F) + 1) & 0x0F);
+      txf.data[6] = (txf.data[6] & 0xF0) |
+                    (((txf.data[6] & 0x0F) + counterStep) & 0x0F);
       uint16_t s = txf.data[0] + txf.data[1] + txf.data[2] + txf.data[3]
                  + txf.data[4] + txf.data[5] + txf.data[6];
       txf.data[7] = (uint8_t)((s + 0x73) & 0xFF);
@@ -1049,9 +1462,18 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
       if (txOk) {
         mcpTxOk++; nagEchoCount++;
         mcpTxFailConsecutive = 0;
-        nagLastInjectedHo = setHo ? 1 : 0;
+        nagLastInjectedHo = exactEchoMode
+            ? (uint8_t)((txf.data[4] >> 6) & 0x03u)
+            : (setHo ? 1 : 0);
         uint16_t raw = ((b2 & 0x0F) << 8) | b3;
         nagLastInjectedNm = raw * 0.01f - 20.5f;
+        if (exactEchoMode) {
+          portENTER_CRITICAL(&nagPortableMux);
+          memcpy(nagPortableLastTxRaw, txf.data, 8);
+          nagPortableLastTxMs = nowMs;
+          nagPortableLastTxValid = true;
+          portEXIT_CRITICAL(&nagPortableMux);
+        }
         portENTER_CRITICAL(&nagDiagMux);
         nagTxOk++;
         nagMaxTxGapMs = nagGapMaxUpdatePure(nagLastTxOkMs, nowMs, nagMaxTxGapMs);

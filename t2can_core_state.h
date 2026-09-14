@@ -42,8 +42,22 @@ static inline void canTxBarrierMarkFreshPure(CanTxBarrierState &state, uint8_t b
   state.freshMask = (uint8_t)(state.freshMask | busBit);
 }
 
-static inline bool canTxBarrierAllowsPure(const CanTxBarrierState &state, uint32_t expectedEpoch) {
-  return state.epoch == expectedEpoch && state.freshMask == CAN_TX_FRESH_BOTH;
+static inline bool canTxBarrierAllowsMaskedPure(
+    const CanTxBarrierState &state, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
+  return summonTxBarrierAllowsPure(
+      state.epoch, state.freshMask, expectedEpoch, requiredFreshMask);
+}
+
+static inline bool canTxBarrierAllowsPure(
+    const CanTxBarrierState &state, uint32_t expectedEpoch) {
+  return canTxBarrierAllowsMaskedPure(state, expectedEpoch, CAN_TX_FRESH_BOTH);
+}
+
+static inline void canTxBarrierInvalidatePreservePure(
+    CanTxBarrierState &state, uint8_t preservedFreshMask) {
+  state.epoch++;
+  if (state.epoch == 0) state.epoch = 1;
+  state.freshMask = (uint8_t)(preservedFreshMask & CAN_TX_FRESH_BOTH);
 }
 
 static inline bool manualDasStatePure(uint8_t state4) {
@@ -115,7 +129,7 @@ static volatile uint32_t runtimeStatsResetCount = 0;
 static volatile uint32_t runtimeStatsLastResetMs = 0;
 RTC_DATA_ATTR uint32_t rtcBootCount = 0;
 static Preferences prefs;
-// v3.2 hotfix top-level feature switches loaded before CAN/BLE runtime starts.
+// v3.3 top-level feature switches loaded before CAN/BLE runtime starts.
 static volatile bool labMenuEnabled = false;
 static volatile bool bannedCar = false;
 static volatile bool tlsscRestoreEnabled = false;

@@ -49,11 +49,37 @@ static inline bool autoBlinkerAlcAllowsDirectionPure(
   return false;
 }
 
-// Once a valid planner request has armed the regulatory delay, a transient
-// 0x24A drop/IN_LANE observation does not erase the pending request. Fail closed
-// on NOA loss, lane eligibility loss, or an explicit opposite-direction request.
-static inline bool autoBlinkerPendingShouldCancelPure(
-    bool noaGateOpen, uint8_t pendingDir, uint8_t currentReqDir, bool pendingAlcAllowed) {
-  if (!noaGateOpen || pendingDir == 0 || !pendingAlcAllowed) return true;
-  return currentReqDir != 0 && currentReqDir != pendingDir;
+// v3.4b3 request-session model. The planner request is latched independently
+// from temporary ALC eligibility. Once the delay expires, a blocked lane does
+// not cancel the session; the caller keeps the request pending and retries at a
+// bounded cadence until the lane opens or the request session really ends.
+struct AutoBlinkerSessionDecisionPure {
+  bool cancel;
+  bool fire;
+  bool retry;
+};
+
+static inline AutoBlinkerSessionDecisionPure autoBlinkerSessionDecisionPure(
+    bool noaGateOpen,
+    uint8_t pendingDir,
+    uint8_t currentReqDir,
+    bool requestSeenRecently,
+    bool delayElapsed,
+    bool pendingAlcAllowed,
+    bool retryDue) {
+  AutoBlinkerSessionDecisionPure out = {};
+  if (!noaGateOpen || pendingDir == 0 || !requestSeenRecently ||
+      (currentReqDir != 0 && currentReqDir != pendingDir)) {
+    out.cancel = true;
+    return out;
+  }
+  if (!delayElapsed || !retryDue) return out;
+  if (pendingAlcAllowed) out.fire = true;
+  else out.retry = true;
+  return out;
+}
+
+static inline bool autoBlinkerShouldStartSessionPure(
+    uint8_t currentReqDir, uint8_t lastReqDir, bool pending, bool pulseActive) {
+  return currentReqDir != 0 && !pending && !pulseActive && currentReqDir != lastReqDir;
 }
