@@ -8,26 +8,23 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.2 by LP_YL
+# T2CAN Universal Unlock v3.5a1 by LP_YL  
 
 **Major Universal Release**  
 **Release date:** September 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
-**Changes from v3.1**
-**Auto Blinker
-- Fixed some ignored highway exits
-- EXITING_HIGHWAY is now accepted when the navigation route and off-ramp direction match
-- Improved lane-change request latching during the Auto Blinker delay
-- Brief IN_LANE / stale planner states no longer immediately cancel a valid pending request
+**v3.5 Highlights**
+- New Nag Killer Mode H — Human Interaction
+- Improved Mode D / E / F
+- Auto Blinker retry logic
+- Summon / R79 reliability improvements
+- 1.00–3.00 Nm Mode H torque range
+- Full mobile dashboard redesign
+- Performance and resource optimizations
 
-**R79
-- Fixed R79 runtime being unintentionally dependent on the LAB menu
-- Production R79 handling now works independently of LAB
-- Experimental R79 controls remain LAB-only
-
-## 📋 Release Highlights  
+## 📋3.0 Release Highlights  
 
 - **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
 - **multiple operating modes:**  
