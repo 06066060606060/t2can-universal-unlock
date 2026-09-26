@@ -32,11 +32,6 @@ static inline uint16_t nagModeCNextRawPure(uint16_t previousRaw, uint16_t &seed)
   return (uint16_t)(low + (seed % span));
 }
 
-static inline void canTxBarrierInvalidatePure(CanTxBarrierState &state) {
-  state.epoch++;
-  if (state.epoch == 0) state.epoch = 1;
-  state.freshMask = 0;
-}
 
 static inline void canTxBarrierMarkFreshPure(CanTxBarrierState &state, uint8_t busBit) {
   state.freshMask = (uint8_t)(state.freshMask | busBit);
@@ -44,8 +39,9 @@ static inline void canTxBarrierMarkFreshPure(CanTxBarrierState &state, uint8_t b
 
 static inline bool canTxBarrierAllowsMaskedPure(
     const CanTxBarrierState &state, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
-  return summonTxBarrierAllowsPure(
-      state.epoch, state.freshMask, expectedEpoch, requiredFreshMask);
+  if (requiredFreshMask == 0) return false;
+  return state.epoch == expectedEpoch &&
+         (uint8_t)(state.freshMask & requiredFreshMask) == requiredFreshMask;
 }
 
 static inline bool canTxBarrierAllowsPure(
@@ -60,9 +56,12 @@ static inline void canTxBarrierInvalidatePreservePure(
   state.freshMask = (uint8_t)(preservedFreshMask & CAN_TX_FRESH_BOTH);
 }
 
-static inline bool manualDasStatePure(uint8_t state4) {
-  return state4 == 0 || state4 == 1 || state4 == 8 || state4 == 9 || state4 == 14;
+static inline uint8_t canTxPreservedFreshMaskPure(
+    uint8_t currentFreshMask, uint8_t invalidatedBusMask,
+    uint8_t physicallyFreshMask) {
+  return (uint8_t)(currentFreshMask & (uint8_t)~invalidatedBusMask & physicallyFreshMask);
 }
+
 
 struct RoadContext238Pure {
   bool valid;
@@ -129,6 +128,13 @@ static volatile uint32_t runtimeStatsResetCount = 0;
 static volatile uint32_t runtimeStatsLastResetMs = 0;
 RTC_DATA_ATTR uint32_t rtcBootCount = 0;
 static Preferences prefs;
+
+// Shared vehicle/AP state is consumed by can_core.h before vehicle_logic.h is
+// included. Keep the mutex and the ALC snapshot in the common-state header so
+// the Arduino translation unit sees these declarations before Mode H uses them.
+static portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint8_t dasAutoLaneChangeState = 0xFF;
+static volatile bool dasAutoLaneChangeStateValid = false;
 // v3.3 top-level feature switches loaded before CAN/BLE runtime starts.
 static volatile bool labMenuEnabled = false;
 static volatile bool bannedCar = false;

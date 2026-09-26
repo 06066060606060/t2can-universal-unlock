@@ -2,6 +2,24 @@
 #include <stdint.h>
 
 
+// v3.6c1 ULC / Confirm-Free targeted RAW capture.
+// Keep this list deliberately narrow so the 3 s PRE + 7 s POST archive stays
+// focused on the state-machine chain under test. Both physical CAN buses use
+// the same ID filter; bus identity is preserved separately by the recorder.
+static inline bool researchUlcConfirmTargetIdPure(uint16_t id) {
+  switch (id) {
+    case 0x247:  // DAS_autopilotDebug / lane-change + fork state candidate
+    case 0x3F8:  // UI_driverAssistControl / ULC stalk-confirm input
+    case 0x3E9:  // DAS_bodyControls / ULC confirmation-request candidate
+    case 0x24A:  // DAS_visualDebug / ULC progress candidate (mapping under test on YL)
+    case 0x3FD:  // UI_autopilotControl / ULC UI/control candidate
+    case 0x293:  // UI_chassisControl / auto-lane-change enable
+      return true;
+    default:
+      return false;
+  }
+}
+
 enum ResearchAlcTransitionKind : uint8_t {
   RESEARCH_ALC_NONE = 0,
   RESEARCH_ALC_CLOSE = 1,

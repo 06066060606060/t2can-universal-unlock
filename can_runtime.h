@@ -27,7 +27,7 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   const bool barrierLocked = canTxBarrierMutex &&
                              xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE;
   if (barrierLocked) {
-    const uint8_t preserved = summonPreservedFreshMaskPure(
+    const uint8_t preserved = canTxPreservedFreshMaskPure(
         canTxBarrierState.freshMask, invalidatedBusMask, physicalFreshMask);
     canTxBarrierInvalidatePreservePure(canTxBarrierState, preserved);
     __atomic_store_n(&canTxFreshMaskFast, preserved, __ATOMIC_RELEASE);
@@ -37,31 +37,30 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   const SummonInvalidationPure inv =
       summonInvalidationPure(route, invalidatedBusMask);
 
-  bool requestR79Reassert = false;
   portENTER_CRITICAL(&stateMux);
   if (inv.invalidateDas) {
     gateAPActive = false;
     gateNOAActive = false;
-    forceMode = false;
     dasAutopilotStateValid = false;
     dasAutopilotState4 = 0xFF;
     dasAutoLaneChangeState = 0xFF;
-    dasAutoLaneChangePrevState = 0xFF;
     dasAutoLaneChangeStateValid = false;
     lastDASStatusMillis = 0;
   }
   if (inv.invalidateGear) {
-    // V2.6 compatibility: a gear-source reset returns the R79 gate to the
-    // same permissive PARK-open state used at boot.
+    // Recovery clears fresh gear evidence. v3.6 R79 remains default-on until
+    // a new valid D/R + manual state positively proves manual driving.
     gateParked = true;
     lastAca = false;
     acaValid = false;
     lastAcaMillis = 0;
     last280Millis = 0;
-    priorityGear280State = -1;
-    priorityGear390State = -1;
-    priorityGear280Ms = 0;
-    priorityGear390Ms = 0;
+    gear118State = -1;
+    gear186State = -1;
+    gear118Raw = TESLA_GEAR_INVALID;
+    gear186Raw = TESLA_GEAR_INVALID;
+    gear118Ms = 0;
+    gear186Ms = 0;
     summonGearSource = SUMMON_GEAR_NONE;
     summonGearObservedMs = 0;
   }
@@ -73,15 +72,13 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   }
   if (inv.invalidateGear || inv.invalidateSpr) {
     gateSummoning = false;
-    summonGateGraceUntilMs = 0;
-    summonPriorityState = SUMMON_PRIORITY_NORMAL;
-    summonPriorityStateSinceMs = 0;
-    summonPriorityFullInactiveSinceMs = 0;
   }
-  // Fresh source observations remain recovery-scoped. R79 authorization itself
-  // follows the requested Summon-Unlock V2.6 compatibility policy, so loss of
-  // the gear-source controller returns the gate to PARK-open.
-  requestR79Reassert = refreshSummonDerivedStateLocked(now);
+  if (inv.invalidateGear || inv.invalidateDas) {
+    // Recovery of the signals that prove manual driving fails R79 back ON.
+    r79ManualSuppression = {};
+  }
+  // Keep Summon monitor and the R79 manual latch coherent after source reset.
+  refreshSummonDerivedStateLocked(now);
   portEXIT_CRITICAL(&stateMux);
 
   if (inv.invalidateTemplate) {
@@ -91,21 +88,31 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
     r79LabLastAttemptMs = 0;
     r79LabLastPeriodicRequestMs = 0;
     r79LabLastPeriodicTxMs = 0;
+    r79FixedQuietState = {};
+    r79RetryPending = false;
+    r79RetryIndex = 0;
+    r79RetryOriginKind = R79LAB_TX_NONE;
+    r79RetryDueMs = 0;
     r79LabLastTxValid = false;
-    r79LabLastGateReason = R79LAB_GATE_BLOCKED;
-    r79LabPending = {};
+    r79LabLastBlockReason = R79LAB_BLOCK_TEMPLATE;
+    r79LabLastBlockMs = now;
     memset(r79LabLastStockRaw, 0, sizeof(r79LabLastStockRaw));
     memset(r79LabLastEffectiveRaw, 0, sizeof(r79LabLastEffectiveRaw));
     portEXIT_CRITICAL(&r79LabMux);
   }
+  apRightScrollRuntimeReset(false);
 
   // These transient feature requests are inexpensive to restart and are cleared
   // at either controller recovery so they cannot cross a changed CAN epoch.
   portENTER_CRITICAL(&blinkAMux);
+  autoBlinkerTimingResetPure(autoBlinkerTimingState);
   autoBlinkerClearPendingLocked();
   oneShotTurn = STALK_IDLE;
+  oneShotDirect = false;
+  oneShotSource = BLINKER_TX_SOURCE_NONE_PURE;
   oneShotUntil = 0;
   oneShotReleaseAt = 0;
+  blinkerTxRequestState = {};
   activeTurn = STALK_IDLE;
   lastReqDir = 0;
   autoRequestLastSeenMs = 0;
@@ -126,28 +133,42 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   portENTER_CRITICAL(&s3xyMux);
   s3xyActionPending = 0;
   s3xyAccelActionPending = 0;
+  s3xyPerformanceActionPending = 0;
   s3xyResearchCaptureAPending = 0;
   s3xyResearchCaptureBPending = 0;
   s3xyResearchCaptureCPending = 0;
   s3xyResearchCaptureDPending = 0;
+  s3xyResearchCaptureResetPending = 0;
+  s3xyTlsscActionPending = 0;
+  s3xyAutoBlinkerActionPending = 0;
   portEXIT_CRITICAL(&s3xyMux);
 
   portENTER_CRITICAL(&pedalMapMux);
   pedalMapStockValid = false;
-  pedalMapStockRaw = 0xFF;
+  pedalMapStockDataValid = false;
+  pedalMapStockRaw = PEDAL_MAP_RAW_STOCK;
   pedalMapStockMs = 0;
-  pedalMapOverrideActive = false;
-  pedalMapTargetRaw = 0xFF;
-  pedalMapOriginRaw = 0xFF;
+  memset(pedalMapStockData, 0, sizeof(pedalMapStockData));
+  // Keep the user-selected drive-session target across a transient CAN
+  // recovery. The next fresh 0x334 re-establishes the template; confirmed
+  // Park, explicit STOCK, or reboot owns session release.
   portEXIT_CRITICAL(&pedalMapMux);
 
+  if ((invalidatedBusMask & SUMMON_BUS_A) != 0) {
+    portENTER_CRITICAL(&autoLc293Mux);
+    uiAutoLaneChangeStockAValid = false;
+    uiAutoLaneChangeStockAMs = 0;
+    portEXIT_CRITICAL(&autoLc293Mux);
+  }
   if ((invalidatedBusMask & SUMMON_BUS_B) != 0) {
+    portENTER_CRITICAL(&autoLc293Mux);
+    uiAutoLaneChangeStockBValid = false;
+    uiAutoLaneChangeStockBMs = 0;
+    portEXIT_CRITICAL(&autoLc293Mux);
     portENTER_CRITICAL(&lab3f8Mux);
     uiDriverAssistLastRxMs = 0;
     uiUlcBlindSpotConfig = 0;
-    uiUlcSpeedConfig = 0;
     uiAlcOffHighwayEnable = false;
-    uiAccFollowDistanceRaw = 0;
     portEXIT_CRITICAL(&lab3f8Mux);
   }
 
@@ -219,6 +240,36 @@ static void canBTraceFreezeBusOff(uint32_t now) {
   portEXIT_CRITICAL(&canBTxTraceMux);
 }
 
+static void canATraceFreezeBusOff(uint32_t now, uint8_t eflg, uint8_t txFailConsecutive) {
+  uint32_t overflowCount = 0, overflowLastMs = 0;
+  uint8_t overflowFlags = 0;
+  mcpRxOverflowSnapshot(overflowCount, overflowLastMs, overflowFlags);
+  (void)overflowLastMs;
+  (void)overflowFlags;
+  const uint32_t ordinal = __atomic_add_fetch(&canAMcpBusOffCount, 1U, __ATOMIC_RELAXED);
+  const uint32_t lastA = lastCanAFrameMs;
+
+  portENTER_CRITICAL(&canATxTraceMux);
+  const uint8_t count = canATxTraceLiveCount;
+  const uint8_t start = (uint8_t)((canATxTraceLiveHead + CAN_A_TX_TRACE_CAPACITY - count) % CAN_A_TX_TRACE_CAPACITY);
+  for (uint8_t i = 0; i < count; i++)
+    canATxTraceFrozen[i] = canATxTraceLive[(uint8_t)((start + i) % CAN_A_TX_TRACE_CAPACITY)];
+  for (uint8_t i = count; i < CAN_A_TX_TRACE_CAPACITY; i++) canATxTraceFrozen[i] = {};
+  canATxTraceFrozenCount = count;
+  canATxTraceFrozenMs = now;
+  canATxTraceFrozenBusOffOrdinal = ordinal;
+  canALastBusOffSnapshot.valid = true;
+  canALastBusOffSnapshot.capturedMs = now;
+  canALastBusOffSnapshot.eflg = eflg;
+  canALastBusOffSnapshot.txFailConsecutive = txFailConsecutive;
+  canALastBusOffSnapshot.rxAgeMs = lastA ? (uint32_t)(now - lastA) : 0;
+  canALastBusOffSnapshot.rxOverflowCount = overflowCount;
+  canALastBusOffSnapshot.txOk = mcpTxOk;
+  canALastBusOffSnapshot.txFail = mcpTxFail;
+  portEXIT_CRITICAL(&canATxTraceMux);
+  canBusOffPersistenceMarkDirty(CAN_BUS_OFF_BUS_A_PURE);
+}
+
 // Initialize the MCP2515 and publish readiness only after every stage succeeds.
 // All setup/recovery paths use the same checked sequence and MCP_CLOCK.
 static bool mcpInitChecked() {
@@ -240,7 +291,7 @@ static bool mcpInitChecked() {
     mcpState = 0;
   } else {
     mcpState = 2;
-    Serial.printf("[CAN A] init failed: reset=%d bitrate=%d mode=%d\n",
+    T2CAN_SERIAL_PRINTF("[CAN A] init failed: reset=%d bitrate=%d mode=%d\n",
                   (int)resetErr, (int)rateErr, (int)modeErr);
   }
   return ok;
@@ -250,8 +301,25 @@ static bool mcpReinit() {
   return mcpInitChecked();
 }
 
+static void canTwaiHandleAlerts() {
+  uint32_t twaiAlerts = 0;
+  if (twai_read_alerts(&twaiAlerts, 0) != ESP_OK || twaiAlerts == 0) return;
+  const int64_t observedUs = esp_timer_get_time();
+  if (twaiAlerts & TWAI_ALERT_TX_IDLE) canBTxObserveTxIdleAlert();
+  if (twaiAlerts & TWAI_ALERT_TX_SUCCESS) {
+    const uint32_t serialNow = canBTxAcceptedSerialSnapshot();
+    r79FastReactiveObserveTxSuccessAlert(observedUs, serialNow);
+  }
+  if (twaiAlerts & TWAI_ALERT_BUS_OFF) {
+    const uint32_t alertNow = (uint32_t)millis();
+    twai_status_info_t alertSt = {};
+    canBTraceFreezeBusOff(alertNow);
+    if (twai_get_status_info(&alertSt) == ESP_OK) recordTwaiBusOffSnapshot(alertSt, alertNow);
+  }
+}
+
 static void canTaskMcp(void* arg) {
-  Serial.println("[CAN A] MCP2515 task started");
+  T2CAN_SERIAL_PRINTLN("[CAN A] MCP2515 task started");
   for (;;) {
     canTaskMcpHeartbeatMs = (uint32_t)millis();
     if (canTasksStopping) {
@@ -261,13 +329,26 @@ static void canTaskMcp(void* arg) {
       continue;
     }
     // ── BOUNDED READ LOOP ──
-    // Never drain more than MCP_RX_BUDGET frames without yielding the
-    // task. If an RX buffer gets stuck (uncleared overflow -> same
-    // frame repeated in a loop), the task still exits: no more
-    // infinite loop -> no freeze / watchdog.
-    struct can_frame rxf;
-    uint8_t budget = MCP_RX_BUDGET;
-    while (budget-- && Can_A.readMessage(&rxf) == MCP2515::ERROR_OK) {
+    // d3 prefetches the tiny MCP2515 hardware RX buffers before running the
+    // heavier observers/decoders. This shortens the time an unread frame sits
+    // in RXB0/RXB1 during burst traffic without changing the total 32-frame
+    // yield budget or task priority.
+    static constexpr uint8_t MCP_PREFETCH_BUDGET = 4;
+    struct can_frame prefetched[MCP_PREFETCH_BUDGET];
+    uint8_t processed = 0;
+    bool noMoreFrames = false;
+    while (processed < MCP_RX_BUDGET && !noMoreFrames) {
+      uint8_t batch = 0;
+      while (batch < MCP_PREFETCH_BUDGET &&
+             processed + batch < MCP_RX_BUDGET &&
+             Can_A.readMessage(&prefetched[batch]) == MCP2515::ERROR_OK) {
+        batch++;
+      }
+      if (batch == 0) break;
+      noMoreFrames = batch < MCP_PREFETCH_BUDGET;
+      for (uint8_t bi = 0; bi < batch; ++bi) {
+      const struct can_frame &rxf = prefetched[bi];
+      processed++;
       const uint32_t frameNow = (uint32_t)millis();
       lastCanAFrameMs = frameNow;
       mcpRxCount++;
@@ -280,6 +361,9 @@ static void canTaskMcp(void* arg) {
       if (partyId == 0x7FF) r79LabObserve7ff(T2CAN_BUS_PARTY, rxf.can_dlc, rxf.data);
       bootCaptureObservePartyFrame(partyId, rxf.can_dlc, rxf.data);
       researchCaptureObserveParty(partyId, rxf.can_dlc, rxf.data);
+      driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_A, partyId, rxf.can_dlc, rxf.data);
+      if (partyId == UI_CHASSIS_CONTROL_ID && rxf.can_dlc >= 8)
+        uiAutoLaneChangeObserveAndInjectCanA(rxf);
       if (activeCanAIsParty()) {
         // Party CAN on CAN A: Nag Killer is topology-gated. Keep YL-only
         // DAS/Summon/visual-debug behavior explicitly model-gated so selecting
@@ -303,6 +387,7 @@ static void canTaskMcp(void* arg) {
         if (partyId == DOOR_SWITCH_ID && rxf.can_dlc >= 4)
           handle102LaneChangeCancel(rxf.data, rxf.can_dlc);
       }
+      }
     }
 
     // ── STATUS CHECK / RECOVERY (1 Hz) ──
@@ -312,13 +397,15 @@ static void canTaskMcp(void* arg) {
 
       // Read the REAL MCP2515 error flags (EFLG register).
       uint8_t eflg = Can_A.getErrorFlags();
+      mcpLastErrorFlags = eflg;
+      mcpLastErrorFlagsMs = (uint32_t)now;
 
       // 1) RX overflow: MUST be cleared, otherwise the controller stops
       //    receiving in this buffer and the Nag Killer appears frozen.
       if (eflg & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR)) {
         mcpRxOverflowObserve((uint32_t)now, eflg);
         Can_A.clearRXnOVR();
-        Serial.println("[CAN A] RX overflow flags cleared");
+        T2CAN_SERIAL_PRINTLN("[CAN A] RX overflow flags cleared");
       }
 
       // 2) REAL bus-off via EFLG_TXBO (not only TX failures).
@@ -326,10 +413,12 @@ static void canTaskMcp(void* arg) {
       bool busOff = (eflg & MCP2515::EFLG_TXBO) || (consecutive > 5);
 
       if (busOff) {
+        const bool newlyObservedBusOff = mcpState != 2;
+        if (newlyObservedBusOff) canATraceFreezeBusOff((uint32_t)now, eflg, consecutive);
         mcpState = 2; // BUS-OFF
         if (now - lastMcpRecoverMs > 3000) {
           lastMcpRecoverMs = now;
-          Serial.printf("[CAN A] MCP2515 bus-off (eflg=0x%02X txFailSeq=%u), reset...\n",
+          T2CAN_SERIAL_PRINTF("[CAN A] MCP2515 bus-off (eflg=0x%02X txFailSeq=%u), reset...\n",
                         eflg, consecutive);
           invalidateCanTxStateForCanARecovery();
           if (!mcpReinit()) requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_MCP_REINIT_FAIL);
@@ -346,7 +435,7 @@ static void canTaskMcp(void* arg) {
 }
 
 static void canTaskTwai(void* arg) {
-  Serial.println("[CAN B] TWAI task started");
+  T2CAN_SERIAL_PRINTLN("[CAN B] TWAI task started");
   unsigned long lastTwaiStatusMs = 0;
   unsigned long lastNoCanWarn = 0;
   uint32_t lastQueueStatusMs = 0;
@@ -359,11 +448,27 @@ static void canTaskTwai(void* arg) {
       canTaskTwaiQuiesced = false;
       continue;
     }
+    // Drain completion/error alerts before the potentially busy RX batch so
+    // TX_SUCCESS observation latency stays bounded by one task loop.
+    canTwaiHandleAlerts();
     twai_message_t f;
     uint8_t rxBudget = 0;
     esp_err_t rxResult = twai_receive(&f, pdMS_TO_TICKS(2));
     while (rxBudget < TWAI_RX_DRAIN_BUDGET && rxResult == ESP_OK) {
       rxBudget++;
+      // d2 latency origin: this is the earliest software timestamp available
+      // after the TWAI driver dequeues the received frame. It is not a hardware
+      // wire timestamp, but it lets us measure software dispatch -> TX request.
+      const int64_t frameRxDequeueUs = esp_timer_get_time();
+      // v3.6d2 R79 fast path: this is deliberately before millis(), RX-gap
+      // accounting, capture, and normal decoding. Preserve the existing d1
+      // fail-open/manual-latch authorization policy inside the fast function.
+      if (!f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
+        const uint8_t timingMux = readMuxID(f.data);
+        const uint32_t r79FrameNowMs = (uint32_t)millis();
+        if (timingMux == 1u) (void)r79FixedFastEcho(f, frameRxDequeueUs);
+        r79FixedObserveStock(timingMux, r79FrameNowMs);
+      }
       // Keep the supervisor heartbeat alive even under sustained CAN B traffic.
       const uint32_t frameNow = (uint32_t)millis();
       canTaskTwaiHeartbeatMs = frameNow;
@@ -381,7 +486,11 @@ static void canTaskTwai(void* arg) {
         if (f.identifier == 0x7FF) r79LabObserve7ff(T2CAN_BUS_VH, f.data_length_code, f.data);
         bootCaptureObserveVhFrame(f.identifier, f.data_length_code);
         researchCaptureObserveVh((uint16_t)f.identifier, f.data_length_code, f.data);
+        driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_B, (uint16_t)f.identifier, f.data_length_code, f.data);
         switch (f.identifier) {
+        case UI_CHASSIS_CONTROL_ID:
+          uiAutoLaneChangeObserveAndInjectCanB(f);
+          break;
         case UI_POWERTRAIN_ID:
           // Model Y L carries the pedal-map frame on VH / CAN B. Standard 3/Y
           // Body+Chassis uses the CAN-A Body copy instead and must ignore any
@@ -391,6 +500,10 @@ static void canTaskTwai(void* arg) {
         case LEFTSTALK_ID:
           if (activeProfileIsYl() && activeTurnSignalVariant == TURN_SIGNAL_STALK && f.data_length_code >= 3)
             handle249OnCanB(f.data, f.data_length_code);
+          break;
+        case VCLEFT_SWITCH_ID:
+          if (activeProfileApRightScrollSupported() && f.data_length_code >= 8)
+            handle3C2OnCanBRightScroll(f);
           break;
         case DOOR_SWITCH_ID:
           if (activeProfileIsYl() && f.data_length_code >= 4)
@@ -411,7 +524,9 @@ static void canTaskTwai(void* arg) {
           if (activeCanBIsChassis() && f.data_length_code >= 8) handle390(f.data);
           break;
         case 921:
-          if (activeCanBIsChassis() && f.data_length_code >= 1) handle921(f.data, f.data_length_code);
+          if (activeCanBIsChassis() && f.data_length_code >= 1) {
+            handle921(f.data, f.data_length_code);
+          }
           break;
         case 0x331:
           if (activeCanBIsChassis()) doInjectTlsscRestore(f);
@@ -432,7 +547,7 @@ static void canTaskTwai(void* arg) {
             uint8_t mux = readMuxID(f.data);
             if (mux == 1) {
               r79LabObserve3fdMux1(f.data, f.data_length_code);
-              injectSummon(f);
+              injectUlcSnooze3fdMux1(f);
             } else if (mux == 0) injectTLSSC(f);
           }
           break;
@@ -444,11 +559,14 @@ static void canTaskTwai(void* arg) {
       rxResult = rxBudget < TWAI_RX_DRAIN_BUDGET ? twai_receive(&f, 0) : ESP_ERR_TIMEOUT;
     }
 
-    // Refresh the V2.6 compatibility gate, including the 5 s 0x118-stale
-    // PARK fallback, before periodic R79 servicing.
-    refreshSummonPriorityState();
-    r79LabPeriodicTick();
-    researchCaptureTick((uint32_t)millis());
+    // Refresh Summon evidence before R79 retry/periodic servicing. The 5 s
+    // V2.6 PARK fallback remains gate-compatible, but d1 queue priority uses
+    // fresh real gear rather than gateParked.
+    refreshSummonState();
+    r79FixedTick();
+    const uint32_t captureNow = (uint32_t)millis();
+    researchCaptureTick(captureNow);
+    driverMonitorCaptureTick(captureNow);
     const uint32_t queueNow = (uint32_t)millis();
     if ((uint32_t)(queueNow - lastQueueStatusMs) >= TWAI_QUEUE_TELEMETRY_PERIOD_MS) {
       lastQueueStatusMs = queueNow;
@@ -456,16 +574,9 @@ static void canTaskTwai(void* arg) {
     }
     blinkATxTick();
 
-    // Capture BUS_OFF at the controller alert boundary, before the 1 s
-    // recovery poll can observe a later RECOVERING/STOPPED status. This is
-    // diagnostic-only: recovery behavior below remains unchanged.
-    uint32_t twaiAlerts = 0;
-    if (twai_read_alerts(&twaiAlerts, 0) == ESP_OK && (twaiAlerts & TWAI_ALERT_BUS_OFF)) {
-      const uint32_t alertNow = (uint32_t)millis();
-      twai_status_info_t alertSt = {};
-      canBTraceFreezeBusOff(alertNow);
-      if (twai_get_status_info(&alertSt) == ESP_OK) recordTwaiBusOffSnapshot(alertSt, alertNow);
-    }
+    // Read alerts again after RX/tick work. BUS_OFF snapshot behavior is
+    // preserved; d3 additionally consumes TX_IDLE/TX_SUCCESS for diagnostics.
+    canTwaiHandleAlerts();
 
     // TWAI status / recovery. Recovery ends in STOPPED, so explicitly
     // restart the driver instead of leaving CAN B silent after BUS_OFF.
@@ -491,7 +602,8 @@ static void canTaskTwai(void* arg) {
             canBTraceFreezeBusOff((uint32_t)now);
             recordTwaiBusOffSnapshot(st, (uint32_t)now);
           }
-          Serial.println("[CAN B] TWAI bus-off -> recovery started");
+          canBusOffPersistenceMarkDirty(CAN_BUS_OFF_BUS_B_PURE);
+          T2CAN_SERIAL_PRINTLN("[CAN B] TWAI bus-off -> recovery started");
           invalidateCanTxStateForCanBRecovery();
           const esp_err_t recoveryErr = twai_initiate_recovery();
           if (recoveryErr == ESP_OK) {
@@ -500,7 +612,7 @@ static void canTaskTwai(void* arg) {
             canTwaiRecoveryStartFailCount++;
             canTwaiLastEventReason = CAN_REC_TWAI_RECOVERY_FAIL;
             canTwaiLastEventMs = (uint32_t)now;
-            Serial.printf("[CAN B] TWAI recovery start failed: %s\n", esp_err_to_name(recoveryErr));
+            T2CAN_SERIAL_PRINTF("[CAN B] TWAI recovery start failed: %s\n", esp_err_to_name(recoveryErr));
             requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_TWAI_RECOVERY_FAIL);
           }
         } else if (st.state == TWAI_STATE_STOPPED) {
@@ -515,12 +627,13 @@ static void canTaskTwai(void* arg) {
           if (rs == ESP_OK) {
             canTwaiRestartOkCount++;
             twaiReady = true;
-            Serial.println("[CAN B] TWAI recovery complete -> restarted");
+            canBTxObserveTxIdleAlert();
+            T2CAN_SERIAL_PRINTLN("[CAN B] TWAI recovery complete -> restarted");
           } else {
             canTwaiRestartFailCount++;
             canTwaiLastEventReason = CAN_REC_TWAI_RESTART_FAIL;
             canTwaiLastEventMs = (uint32_t)now;
-            Serial.printf("[CAN B] TWAI restart failed: %s\n", esp_err_to_name(rs));
+            T2CAN_SERIAL_PRINTF("[CAN B] TWAI restart failed: %s\n", esp_err_to_name(rs));
             requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_TWAI_RESTART_FAIL);
           }
         } else {
@@ -532,7 +645,7 @@ static void canTaskTwai(void* arg) {
     // No-CAN warning (shared counter)
     if ((millis() - bootTime) > 20000 && canRxTotal() == 0) {
       if (millis() - lastNoCanWarn > 5000) {
-        Serial.println("No CAN frames yet on either bus, staying alive.");
+        T2CAN_SERIAL_PRINTLN("No CAN frames yet on either bus, staying alive.");
         lastNoCanWarn = millis();
       }
     }
@@ -548,6 +661,27 @@ static void canTaskTwai(void* arg) {
 
 static inline bool recoveryFresh(uint32_t now, uint32_t ts, uint32_t timeoutMs) {
   return ts != 0 && (uint32_t)(now - ts) <= timeoutMs;
+}
+
+static void recordCanTaskHeartbeatTimeout(uint32_t now, bool aDead, bool bDead) {
+  const uint8_t cause = aDead
+      ? (bDead ? CAN_TASK_HEARTBEAT_BOTH : CAN_TASK_HEARTBEAT_A)
+      : (bDead ? CAN_TASK_HEARTBEAT_B : CAN_TASK_HEARTBEAT_NONE);
+  if (cause == CAN_TASK_HEARTBEAT_NONE) return;
+  portENTER_CRITICAL(&canRecoveryMux);
+  // Snapshot once for the restart request that is about to be queued. The
+  // supervisor may loop again before reinitialization starts.
+  if (canSupervisorCommand < CAN_SUP_HARD_STALE) {
+    canTaskHeartbeatLastCause = cause;
+    canTaskHeartbeatLastAgeAms = canTaskMcpHeartbeatMs
+        ? (uint32_t)(now - canTaskMcpHeartbeatMs) : 0xFFFFFFFFUL;
+    canTaskHeartbeatLastAgeBms = canTaskTwaiHeartbeatMs
+        ? (uint32_t)(now - canTaskTwaiHeartbeatMs) : 0xFFFFFFFFUL;
+    if (cause == CAN_TASK_HEARTBEAT_A) canTaskHeartbeatTimeoutCountA++;
+    else if (cause == CAN_TASK_HEARTBEAT_B) canTaskHeartbeatTimeoutCountB++;
+    else canTaskHeartbeatTimeoutCountBoth++;
+  }
+  portEXIT_CRITICAL(&canRecoveryMux);
 }
 
 static void requestCanSubsystemRestart(uint8_t reason, uint8_t diagReason) {
@@ -597,13 +731,13 @@ static bool recoveryTwaiInstallFresh() {
   esp_err_t ie = twai_driver_install(&g, &t, &f);
   if (ie != ESP_OK) {
     twaiReady = false;
-    Serial.printf("[CAN B] fresh install failed: %s\n", esp_err_to_name(ie));
+    T2CAN_SERIAL_PRINTF("[CAN B] fresh install failed: %s\n", esp_err_to_name(ie));
     return false;
   }
   esp_err_t se = twai_start();
   if (se != ESP_OK) {
     twaiReady = false;
-    Serial.printf("[CAN B] fresh start failed: %s\n", esp_err_to_name(se));
+    T2CAN_SERIAL_PRINTF("[CAN B] fresh start failed: %s\n", esp_err_to_name(se));
     twai_driver_uninstall();
     return false;
   }
@@ -613,6 +747,7 @@ static bool recoveryTwaiInstallFresh() {
                     TWAI_ALERT_RX_DATA | TWAI_ALERT_RX_QUEUE_FULL;
   twai_reconfigure_alerts(alerts, NULL);
   twaiReady = true;
+  canBTxObserveTxIdleAlert();
   return true;
 }
 
@@ -625,14 +760,14 @@ static bool recoveryTwaiFullReinit() {
     if (st.state == TWAI_STATE_RUNNING) {
       esp_err_t e = twai_stop();
       if (e != ESP_OK) {
-        Serial.printf("[CAN B] hard stop failed: %s\n", esp_err_to_name(e));
+        T2CAN_SERIAL_PRINTF("[CAN B] hard stop failed: %s\n", esp_err_to_name(e));
         return false;
       }
     } else if (st.state == TWAI_STATE_BUS_OFF || st.state == TWAI_STATE_RECOVERING) {
       if (st.state == TWAI_STATE_BUS_OFF) {
         esp_err_t e = twai_initiate_recovery();
         if (e != ESP_OK) {
-          Serial.printf("[CAN B] hard recovery start failed: %s\n", esp_err_to_name(e));
+          T2CAN_SERIAL_PRINTF("[CAN B] hard recovery start failed: %s\n", esp_err_to_name(e));
           return false;
         }
       }
@@ -645,7 +780,7 @@ static bool recoveryTwaiFullReinit() {
       }
       twai_status_info_t cur = {};
       if (twai_get_status_info(&cur) == ESP_OK && cur.state != TWAI_STATE_STOPPED) {
-        Serial.println("[CAN B] recovery did not reach STOPPED");
+        T2CAN_SERIAL_PRINTLN("[CAN B] recovery did not reach STOPPED");
         return false;
       }
     }
@@ -653,7 +788,7 @@ static bool recoveryTwaiFullReinit() {
 
   esp_err_t ue = twai_driver_uninstall();
   if (ue != ESP_OK && ue != ESP_ERR_INVALID_STATE) {
-    Serial.printf("[CAN B] uninstall failed: %s\n", esp_err_to_name(ue));
+    T2CAN_SERIAL_PRINTF("[CAN B] uninstall failed: %s\n", esp_err_to_name(ue));
     return false;
   }
 
@@ -712,7 +847,7 @@ static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason) {
   canLastHardReinitReason = reason;
   canLastHardDiagReason = diagReason;
   canHardReinitCount++;
-  Serial.printf("[CAN SUP] hard CAN reinitialize #%lu reason=%u diag=%s\n",
+  T2CAN_SERIAL_PRINTF("[CAN SUP] hard CAN reinitialize #%lu reason=%u diag=%s\n",
                 (unsigned long)canHardReinitCount, (unsigned)reason,
                 canRecoveryDiagnosticReasonName(diagReason));
 
@@ -733,19 +868,24 @@ static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason) {
   if (!(aOk && bOk && tasksOk)) {
     bootCaptureHardFinish(bootCapHardIdx, false);
     canHardReinitFailCount++;
-    Serial.printf("[CAN SUP] hard CAN reinitialize FAILED A=%u B=%u tasks=%u\n",
+    T2CAN_SERIAL_PRINTF("[CAN SUP] hard CAN reinitialize FAILED A=%u B=%u tasks=%u\n",
                   aOk ? 1 : 0, bOk ? 1 : 0, tasksOk ? 1 : 0);
     return false;
   }
   bootCaptureHardFinish(bootCapHardIdx, true);
-  Serial.println("[CAN SUP] hard CAN reinitialize complete");
+  T2CAN_SERIAL_PRINTLN("[CAN SUP] hard CAN reinitialize complete");
   return true;
 }
 
+static void canRecoverySupervisorTick(uint32_t now) {
+  canBusOffPersistenceService(now);
+}
+
 static void canSupervisorTask(void* arg) {
-  Serial.println("[CAN SUP] recovery-only supervisor started");
+  T2CAN_SERIAL_PRINTLN("[CAN SUP] recovery-only supervisor started");
   for (;;) {
     uint32_t now = (uint32_t)millis();
+    canRecoverySupervisorTick(now);
 
     if (!canSubsystemBusy) {
       // Independent task heartbeat: still advances while the vehicle is asleep.
@@ -758,7 +898,8 @@ static void canSupervisorTask(void* arg) {
                        (canTaskTwaiHeartbeatMs == 0 ||
                         (uint32_t)(now - canTaskTwaiHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
       if (aTaskDead || bTaskDead) {
-        Serial.printf("[CAN SUP] task heartbeat stale A=%u B=%u\n", aTaskDead ? 1 : 0, bTaskDead ? 1 : 0);
+        T2CAN_SERIAL_PRINTF("[CAN SUP] task heartbeat stale A=%u B=%u\n", aTaskDead ? 1 : 0, bTaskDead ? 1 : 0);
+        recordCanTaskHeartbeatTimeout(now, aTaskDead, bTaskDead);
         requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_TASK_HEARTBEAT_TIMEOUT);
       }
 
@@ -769,7 +910,7 @@ static void canSupervisorTask(void* arg) {
 
       if (bothFresh) {
         if (!recoveryEverBothActive || recoverySleeping || recoveryWakeAcquireStartMs != 0) {
-          Serial.println("[CAN SUP] CAN A+B active");
+          T2CAN_SERIAL_PRINTLN("[CAN SUP] CAN A+B active");
         }
         recoveryEverBothActive = true;
         recoverySleeping = false;
@@ -788,7 +929,7 @@ static void canSupervisorTask(void* arg) {
             recoverySleeping = true;
             recoveryWakeAcquireStartMs = 0;
             canRecoverySleepCount++;
-            Serial.printf("[CAN SUP] vehicle CAN sleep #%lu -> passive wait\n",
+            T2CAN_SERIAL_PRINTF("[CAN SUP] vehicle CAN sleep #%lu -> passive wait\n",
                           (unsigned long)canRecoverySleepCount);
           }
         } else {
@@ -796,7 +937,7 @@ static void canSupervisorTask(void* arg) {
             recoverySleeping = false;
             recoveryWakeAcquireStartMs = now;
             canRecoveryWakeCount++;
-            Serial.printf("[CAN SUP] vehicle CAN wake #%lu -> acquire other bus\n",
+            T2CAN_SERIAL_PRINTF("[CAN SUP] vehicle CAN wake #%lu -> acquire other bus\n",
                           (unsigned long)canRecoveryWakeCount);
           }
 
@@ -842,7 +983,7 @@ static void canSupervisorTask(void* arg) {
           recoveryColdRetryCount++;
           recoveryLastHardRequestMs = now;
           recoveryWakeAcquireStartMs = 0;
-          Serial.printf("[CAN SUP] cold acquire retry %u/%u\n",
+          T2CAN_SERIAL_PRINTF("[CAN SUP] cold acquire retry %u/%u\n",
                         (unsigned)recoveryColdRetryCount,
                         (unsigned)RECOVERY_COLD_MAX_RETRIES);
           requestCanSubsystemRestart(CAN_SUP_HARD_ACQUIRE, CAN_REC_COLD_ACQUIRE_TIMEOUT);
@@ -850,7 +991,7 @@ static void canSupervisorTask(void* arg) {
                    !recoveryColdRetriesExhausted) {
           recoveryColdRetriesExhausted = true;
           recoverySleeping = true;
-          Serial.println("[CAN SUP] no RX after bounded retries -> passive sleep/wake wait");
+          T2CAN_SERIAL_PRINTLN("[CAN SUP] no RX after bounded retries -> passive sleep/wake wait");
         }
 
         // If a real frame arrives after passive wait, resume bounded acquisition.
@@ -874,7 +1015,7 @@ static void canSupervisorTask(void* arg) {
 
     if (cmd != CAN_SUP_NONE && !canSubsystemBusy) {
       if (!recoveryHardReinitialize(cmd, diagReason)) {
-        Serial.println("[CAN SUP] subsystem recovery failed -> reboot T-2CAN");
+        T2CAN_SERIAL_PRINTLN("[CAN SUP] subsystem recovery failed -> reboot T-2CAN");
         vTaskDelay(pdMS_TO_TICKS(500));
         ESP.restart();
       }
