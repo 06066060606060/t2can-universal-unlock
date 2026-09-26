@@ -15,7 +15,7 @@
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
-- 3.5b fix cancel lane change 
+- 3.5b only fix cancel lane change 
 
 **v3.5 Highlights**
 - New Nag Killer Mode H — Human Interaction
