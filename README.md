@@ -15,7 +15,7 @@
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
 ## 📋v3.7 changes  
-**[More detail in changelog](https://github.com/06066060606060/t2can-universal-unlock/CHANGELOG.md)**
+**[More detail in changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)**
 
 - R79 / Summon rebuilt  
 - Improved  Nag Killer Mode H — Human Interaction  
