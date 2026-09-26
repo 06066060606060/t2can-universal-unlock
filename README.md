@@ -8,12 +8,14 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.5a1 by LP_YL  
+# T2CAN Universal Unlock v3.5b  
 
 **Major Universal Release**  
 **Release date:** September 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
+
+- 3.5b fix cancel lane change 
 
 **v3.5 Highlights**
 - New Nag Killer Mode H — Human Interaction
