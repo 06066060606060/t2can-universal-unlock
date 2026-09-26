@@ -33,7 +33,7 @@
 #include "runtime_gate_pure.h"
 #include "nag_human_pure.h"
 
-#define FW_VERSION "v3.5a1"
+#define FW_VERSION "v3.5b"
 
 #include "t2can_core_state.h"
 #include "t2can_forward.h"
