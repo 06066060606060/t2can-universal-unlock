@@ -3,7 +3,9 @@
 // CAN Research Capture
 // RX-only CAN A + CAN B recorder for general CAN research.
 // SNAPSHOT mode keeps the v2.7b3 full-state snapshot workflow.
-// RAW modes use an independent rolling 5 s RX PRE ring plus an append-only archive.
+// RAW modes use an independent rolling RX PRE ring plus an append-only archive.
+// ULC_CONFIRM is a targeted RX-only RAW mode for 0x247/0x3F8/0x3E9/0x24A/0x3FD/0x293
+// on both physical CAN buses with fixed PRE 3 s + POST 7 s.
 // Manual RAW copies up to 5 s PRE; AUTO ALC events copy 2 s PRE and record 2 s POST.
 // In RAW_AUTO_ALC mode, manual C/D captures remain available between AUTO episodes
 // and use the full 5 s manual PRE window; A/B stay reserved for automatic OPEN/BLOCKED labels.
@@ -14,7 +16,7 @@
 // of consuming another segment. OPEN events require a fresh LEFT 0x239 lane with
 // FUSED line usage; BLOCKED events intentionally do not, so the recorder can capture
 // the very lane/topology loss that may be causing the block. The RIGHT lane is not required.
-// Existing 0x3F8 VH and 0x399 Party overlay attempts are observable metadata;
+// Existing 0x3F8 VH overlay attempts are observable metadata;
 // this module never transmits or replays CAN.
 
 static constexpr uint32_t RESEARCH_CAPTURE_PRE_DEFAULT_MS = 2000;
@@ -34,13 +36,13 @@ static constexpr uint8_t  RESEARCH_CAPTURE_LABEL_SLOTS = 4;
 static constexpr size_t   RESEARCH_CAPTURE_LABEL_BYTES = 64;
 static constexpr uint8_t  RESEARCH_CAPTURE_BUS_PARTY = 0;
 static constexpr uint8_t  RESEARCH_CAPTURE_BUS_VH = 1;
-static constexpr uint8_t  RESEARCH_CAPTURE_BUS_PARTY_TX_OK = 2;
-static constexpr uint8_t  RESEARCH_CAPTURE_BUS_PARTY_TX_FAIL = 3;
 static constexpr uint8_t  RESEARCH_CAPTURE_FLAG_TX = 0x01;
 static constexpr uint8_t  RESEARCH_CAPTURE_FLAG_TX_OK = 0x02;
 static constexpr uint32_t RESEARCH_CAPTURE_RAW_MANUAL_PRE_MS = 5000;
 static constexpr uint32_t RESEARCH_CAPTURE_RAW_AUTO_PRE_MS = 2000;
 static constexpr uint32_t RESEARCH_CAPTURE_RAW_POST_MS = 2000;
+static constexpr uint32_t RESEARCH_CAPTURE_ULC_CONFIRM_PRE_MS = 3000;
+static constexpr uint32_t RESEARCH_CAPTURE_ULC_CONFIRM_POST_MS = 7000;
 static constexpr uint32_t RESEARCH_CAPTURE_AUTO_LANE_FRESH_MS = 1000;
 static constexpr uint32_t RESEARCH_CAPTURE_AUTO_PERSIST_MS = 300;
 static constexpr uint32_t RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY = 360448;
@@ -50,7 +52,8 @@ static constexpr uint8_t  RESEARCH_CAPTURE_RAW_MAX_SEGMENTS = 8;
 enum ResearchCaptureMode : uint8_t {
   RESEARCH_CAPTURE_MODE_SNAPSHOT = 0,
   RESEARCH_CAPTURE_MODE_RAW_TRANSITION = 1,
-  RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC = 2
+  RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC = 2,
+  RESEARCH_CAPTURE_MODE_ULC_CONFIRM = 3
 };
 
 static constexpr uint8_t RESEARCH_CAPTURE_LABEL_A = 0;
@@ -116,11 +119,11 @@ static constexpr size_t RESEARCH_CAPTURE_KNOWN_BYTES = sizeof(uint16_t) * RESEAR
 // selected capture mode instead of permanently reserving the RAW maximum.
 // Snapshot capacity and RAW capacity are unchanged.
 static inline size_t researchCaptureMainBytesForMode(uint8_t mode) {
-  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) ? RESEARCH_CAPTURE_RAW_MAIN_BYTES : RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES;
+  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC || mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM) ? RESEARCH_CAPTURE_RAW_MAIN_BYTES : RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES;
 }
 
 static inline size_t researchCaptureAuxBytesForMode(uint8_t mode) {
-  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) ? RESEARCH_CAPTURE_RAW_AUX_BYTES : RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES;
+  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC || mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM) ? RESEARCH_CAPTURE_RAW_AUX_BYTES : RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES;
 }
 
 struct __attribute__((packed)) ResearchCapturePreSlot {
@@ -204,7 +207,6 @@ static volatile uint32_t researchCaptureRawPostDeadlineMs = 0;
 static volatile uint32_t researchCaptureRawEvicted = 0;
 static volatile bool researchCaptureRawTriggered = false;
 static volatile uint8_t researchCaptureRawLabelSlot = RESEARCH_CAPTURE_LABEL_NONE;
-static volatile uint32_t researchCaptureRawFirstFrameMs = 0;
 static ResearchAlcPersistenceState researchCaptureAutoPersistence = researchAlcPersistenceInitialPure();
 static volatile uint8_t researchCaptureAutoLastEvent = 0; // 1=AUTO_CLOSE, 2=AUTO_OPEN
 static volatile uint8_t researchCaptureAutoLastFrom = 0xFF;
@@ -231,10 +233,23 @@ static volatile uint8_t researchCaptureTx3f8Valid = 0;
 static uint8_t researchCaptureTx3f8Data[8] = {};
 
 static inline bool researchCaptureModeIsRaw(uint8_t mode) {
-  return mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC;
+  return mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION ||
+         mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC ||
+         mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM;
+}
+
+static inline uint32_t researchCaptureRawManualPreMsForMode(uint8_t mode) {
+  return mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM
+      ? RESEARCH_CAPTURE_ULC_CONFIRM_PRE_MS : RESEARCH_CAPTURE_RAW_MANUAL_PRE_MS;
+}
+
+static inline uint32_t researchCaptureRawPostMsForMode(uint8_t mode) {
+  return mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM
+      ? RESEARCH_CAPTURE_ULC_CONFIRM_POST_MS : RESEARCH_CAPTURE_RAW_POST_MS;
 }
 
 static const char *researchCaptureModeName(uint8_t mode) {
+  if (mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM) return "ULC_CONFIRM";
   if (mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) return "RAW_AUTO_ALC";
   if (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION) return "RAW_TRANSITION";
   return "SNAPSHOT";
@@ -336,7 +351,8 @@ static void researchCaptureLoadConfig() {
   if (!researchCapturePreWindowSupported(preMs)) preMs = RESEARCH_CAPTURE_PRE_DEFAULT_MS;
   if (!researchCapturePostWindowSupported(postMs)) postMs = RESEARCH_CAPTURE_POST_DEFAULT_MS;
   if (mode != RESEARCH_CAPTURE_MODE_SNAPSHOT && mode != RESEARCH_CAPTURE_MODE_RAW_TRANSITION &&
-      mode != RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) mode = RESEARCH_CAPTURE_MODE_SNAPSHOT;
+      mode != RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC && mode != RESEARCH_CAPTURE_MODE_ULC_CONFIRM)
+    mode = RESEARCH_CAPTURE_MODE_SNAPSHOT;
   // RAW AUTO ALC decodes YL-specific CAN A (Party) 0x239/0x399 semantics.
   // If a stored YL mode follows a later profile change, fail closed at runtime.
   if (mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC && !activeProfileIsYl())
@@ -392,7 +408,7 @@ static bool researchCaptureEnsureBuffer();
 
 static bool researchCaptureSetMode(uint8_t mode) {
   if (mode != RESEARCH_CAPTURE_MODE_SNAPSHOT && mode != RESEARCH_CAPTURE_MODE_RAW_TRANSITION &&
-      mode != RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC) return false;
+      mode != RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC && mode != RESEARCH_CAPTURE_MODE_ULC_CONFIRM) return false;
   uint8_t oldMode;
   portENTER_CRITICAL(&researchCaptureMux);
   if (researchCaptureState == RESEARCH_CAPTURE_CAPTURING || researchCaptureConfigUpdating || researchCaptureExporting) {
@@ -565,7 +581,7 @@ static bool researchCaptureInit() {
   mainBytes = researchCaptureAllocatedMainBytes;
   auxBytes = researchCaptureAllocatedAuxBytes;
   portEXIT_CRITICAL(&researchCaptureMux);
-  Serial.printf("CAN Research Capture: %s · %s · main=%u KiB · aux=%u KiB · state=%u KiB · snapshot=%lu rows · raw=%lu frames/%u segments\n",
+  T2CAN_SERIAL_PRINTF("CAN Research Capture: %s · %s · main=%u KiB · aux=%u KiB · state=%u KiB · snapshot=%lu rows · raw=%lu frames/%u segments\n",
                 ok ? "PSRAM READY" : "DISABLED", researchCaptureModeName(mode),
                 (unsigned)(mainBytes / 1024U), (unsigned)(auxBytes / 1024U),
                 (unsigned)((RESEARCH_CAPTURE_LATEST_BYTES + RESEARCH_CAPTURE_KNOWN_BYTES) / 1024U),
@@ -740,9 +756,6 @@ static void researchCaptureRawPreAppendLocked(uint8_t bus, uint16_t id, uint8_t 
   if (data && e.dlc) memcpy(e.data, data, e.dlc);
   researchCaptureRawPreFrameCount++;
 
-  if (researchCaptureRawPreFrameCount > 0) {
-    researchCaptureRawFirstFrameMs = pre[researchCaptureRawPreStartIndex].timestampMs;
-  }
 }
 
 static bool researchCaptureRawArchiveAppendLocked(const ResearchCaptureRawEntry &src) {
@@ -983,7 +996,7 @@ static bool researchCaptureRawRequestAtLocked(uint8_t labelSlot, uint32_t trigge
   researchCaptureLastLabelSlot = labelSlot;
   researchCaptureStartMs = triggerNow;
   researchCaptureRawTriggerMs = triggerNow;
-  researchCaptureRawPostDeadlineMs = triggerNow + RESEARCH_CAPTURE_RAW_POST_MS;
+  researchCaptureRawPostDeadlineMs = triggerNow + researchCaptureRawPostMsForMode(researchCaptureMode);
   researchCaptureRawTriggered = true;
   researchCaptureRawLabelSlot = labelSlot;
   researchCaptureState = RESEARCH_CAPTURE_CAPTURING;
@@ -1095,8 +1108,9 @@ static bool researchCaptureRequest(uint8_t labelSlot) {
       portEXIT_CRITICAL(&researchCaptureMux);
       return false;
     }
+    const uint32_t manualPreMs = researchCaptureRawManualPreMsForMode(researchCaptureMode);
     if (researchCaptureConfigUpdating ||
-        !researchCaptureRawRequestLocked(labelSlot, triggerNow, RESEARCH_CAPTURE_RAW_MANUAL_PRE_MS)) {
+        !researchCaptureRawRequestLocked(labelSlot, triggerNow, manualPreMs)) {
       researchCaptureIgnored++;
       portEXIT_CRITICAL(&researchCaptureMux);
       return false;
@@ -1205,10 +1219,15 @@ static void researchCaptureObserve(uint8_t bus, uint16_t id, uint8_t dlc, const 
     portEXIT_CRITICAL(&researchCaptureMux);
     return;
   }
+  if (researchCaptureMode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM && !researchUlcConfirmTargetIdPure(id)) {
+    portEXIT_CRITICAL(&researchCaptureMux);
+    return;
+  }
   // Timestamp under the capture lock so Party/VH task preemption cannot append
   // out-of-order RAW entries and violate the bulk-copy planner's chronology.
   const uint32_t now = (uint32_t)millis();
   const bool researchCaptureRawTracksLatest = !researchCaptureModeIsRaw(researchCaptureMode) ||
+      researchCaptureMode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM ||
       (bus == RESEARCH_CAPTURE_BUS_PARTY && (id == 0x239 || id == 0x399));
   if (researchCaptureRawTracksLatest) {
     ResearchCaptureLatest &s = researchCaptureLatest[stateIdx];
@@ -1252,23 +1271,6 @@ static inline void researchCaptureObserveTxVh(uint16_t id, uint8_t dlc, const ui
   portEXIT_CRITICAL(&researchCaptureMux);
 }
 
-static inline void researchCaptureObserveTxParty(uint16_t id, uint8_t dlc,
-                                                  const uint8_t *data, bool txOk) {
-  if (!labMenuEnabled) return;
-  if (id != 0x399 || !data) return;
-  const uint8_t n = dlc > 8 ? 8 : dlc;
-  portENTER_CRITICAL(&researchCaptureMux);
-  if (researchCaptureConfigUpdating || !researchCaptureEntries || !researchCapturePreStates) {
-    portEXIT_CRITICAL(&researchCaptureMux);
-    return;
-  }
-  const uint32_t now = (uint32_t)millis();
-  researchCaptureRawObserveLocked(txOk ? RESEARCH_CAPTURE_BUS_PARTY_TX_OK
-                                       : RESEARCH_CAPTURE_BUS_PARTY_TX_FAIL,
-                                  id, n, data, now);
-  portEXIT_CRITICAL(&researchCaptureMux);
-}
-
 static void researchCaptureReset() {
   portENTER_CRITICAL(&researchCaptureMux);
   if (researchCaptureExporting) {
@@ -1294,7 +1296,6 @@ static void researchCaptureReset() {
   researchCaptureRawEvicted = 0;
   researchCaptureRawTriggered = false;
   researchCaptureRawLabelSlot = RESEARCH_CAPTURE_LABEL_NONE;
-  researchCaptureRawFirstFrameMs = 0;
   researchCaptureAutoPersistence = researchAlcPersistenceInitialPure();
   researchCaptureAutoLastEvent = 0;
   researchCaptureAutoLastFrom = 0xFF;

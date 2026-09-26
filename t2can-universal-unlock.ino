@@ -1,4 +1,4 @@
-// T2CAN Universal v3.5a1 - Model 3/Y firmware
+// T2CAN Universal v3.7.2 - Model 3/Y / Model YL firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -7,6 +7,7 @@
 #include <nvs_flash.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <freertos/semphr.h>
 #include <Update.h>
 #include <BLEDevice.h>
@@ -25,31 +26,60 @@
 #include "pin_config.h"
 #include <mcp2515.h>
 #include <SPI.h>
+
+#ifndef T2CAN_SERIAL_DIAGNOSTICS
+#define T2CAN_SERIAL_DIAGNOSTICS 0
+#endif
+#include "serial_diag.h"
 #include "index_html.h"
 #include "vehicle_profile.h"
 #include "summon_state_pure.h"
 #include "auto_blinker_pure.h"
+#include "blinker_tx_policy_pure.h"
 #include "can_research_capture_pure.h"
+#include "das_status_pure.h"
 #include "runtime_gate_pure.h"
-#include "nag_human_pure.h"
+#include "nag_human_v1_pure.h"
+#include "nag_human_v2_pure.h"
+#include "nag_human_v3_pure.h"
+#include "nag_human_v4_pure.h"
+#include "nag_mode_h_variant_pure.h"
+#include "pedal_map_session_pure.h"
+#include "ap_drive_profile_pure.h"
+#include "ulc_stalk_confirm_pure.h"
+#include "ulc_policy_pure.h"
+#include "ulc_compositor_pure.h"
+#include "feature_config_migration_pure.h"
+#include "can_busoff_persistence_pure.h"
+#include "auto_lane_change_enable_pure.h"
+#include "ap_right_scroll_pure.h"
+#include "driver_monitor_capture_pure.h"
+#include "r79_fixed_policy_pure.h"
+#include "r79_dms_nag_lab_pure.h"
+#include "fixed_point_pure.h"
+#include "fixed_point_arduino.h"
+#include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.5b"
+#define FW_VERSION "v3.7.2"
 
 #include "t2can_core_state.h"
 #include "t2can_forward.h"
 #include "can_research_capture.h"
+#include "driver_monitor_capture.h"
 #include "s3xy_ble.h"
 #include "can_core.h"
+#include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
 #include "web_api.h"
 #include "can_runtime.h"
 
 void setup() {
   bootTime = millis();
-  Serial.begin(115200);
-  delay(100); // Serial settle only; CAN startup is not held here
+  T2CAN_SERIAL_BEGIN(115200);
+  delay(100); // Boot settle retained for behavior compatibility; CAN startup is not held here
 
   rtcBootCount++;
+#if T2CAN_SERIAL_DIAGNOSTICS
   esp_reset_reason_t reset_reason = esp_reset_reason();
   Serial.printf("\n=== T2CAN Unified BOOT ===\n");
   Serial.printf("Reset reason: %d (%s)\n", reset_reason, resetReasonName(reset_reason));
@@ -58,6 +88,7 @@ void setup() {
     Serial.println("WARNING: Brownout detected!");
   }
   Serial.printf("IDF version: %s\n", esp_get_idf_version());
+#endif
 
   // NVS init. Universal v3.x never auto-erases a configured profile because of an
   // initialization error. An explicit first-Universal migration or Factory
@@ -66,7 +97,7 @@ void setup() {
   if (err != ESP_OK) {
     vehicleProfileNvsError = true;
     vehicleProfileSetupMode = true;
-    Serial.printf("NVS: Init failed %d (%s) -> SAFE SETUP MODE, no CAN/BLE\n",
+    T2CAN_SERIAL_PRINTF("NVS: Init failed %d (%s) -> SAFE SETUP MODE, no CAN/BLE\n",
                   (int)err, esp_err_to_name(err));
   } else {
     Preferences profileProbe;
@@ -81,25 +112,25 @@ void setup() {
 
     if (!vehicleProfileValid(storedProfile)) {
       if (!universalInitialized) {
-        Serial.println("Universal first boot: erasing previous NVS configuration...");
+        T2CAN_SERIAL_PRINTLN("Universal first boot: erasing previous NVS configuration...");
         if (nvs_flash_erase() == ESP_OK && nvs_flash_init() == ESP_OK &&
             vehicleProfileWriteBootstrapMarker(true)) {
           vehicleProfileMigrationNotice = true;
         } else {
           vehicleProfileNvsError = true;
-          Serial.println("Universal migration erase/re-init failed -> SAFE SETUP MODE");
+          T2CAN_SERIAL_PRINTLN("Universal migration erase/re-init failed -> SAFE SETUP MODE");
         }
       }
       vehicleProfileSetupMode = true;
     } else if (!vehicleProfileLoadFromNvs()) {
       vehicleProfileSetupMode = true;
-      Serial.println("Vehicle profile invalid/incomplete -> SAFE SETUP MODE");
+      T2CAN_SERIAL_PRINTLN("Vehicle profile invalid/incomplete -> SAFE SETUP MODE");
     }
   }
 
   canTxBarrierMutex = xSemaphoreCreateMutex();
   if (!canTxBarrierMutex) {
-    Serial.println("CAN TX recovery barrier allocation failed! Rebooting...");
+    T2CAN_SERIAL_PRINTLN("CAN TX recovery barrier allocation failed! Rebooting...");
     delay(3000);
     ESP.restart();
   }
@@ -108,20 +139,20 @@ void setup() {
   // selection only. CAN controllers, CAN tasks, recovery supervisor and BLE
   // are not initialized.
   if (vehicleProfileSetupMode || vehicleProfileNvsError) {
-    Serial.printf("PROFILE SETUP MODE profile=%u nvsError=%s migrationNotice=%s\n",
+    T2CAN_SERIAL_PRINTF("PROFILE SETUP MODE profile=%u nvsError=%s migrationNotice=%s\n",
                   (unsigned)activeVehicleProfile, vehicleProfileNvsError ? "YES" : "NO",
                   vehicleProfileMigrationNotice ? "YES" : "NO");
     BaseType_t retWeb = xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, &webTaskHandle, 0);
     if (retWeb != pdPASS) {
-      Serial.printf("Web task creation failed in setup mode: %d\n", retWeb);
+      T2CAN_SERIAL_PRINTF("Web task creation failed in setup mode: %d\n", retWeb);
       delay(3000);
       ESP.restart();
     }
-    Serial.println("BOOT SAFE SETUP MODE");
+    T2CAN_SERIAL_PRINTLN("BOOT SAFE SETUP MODE");
     return;
   }
 
-  Serial.printf("Vehicle Profile=%s CAN A=%s CAN B=%s Turn=%s\n",
+  T2CAN_SERIAL_PRINTF("Vehicle Profile=%s CAN A=%s CAN B=%s Turn=%s\n",
                 vehicleProfileName(activeVehicleProfile),
                 activeProfileCanAName(),
                 activeProfileCanBName(),
@@ -130,39 +161,51 @@ void setup() {
   // Load configs. Universal v3.x starts from a full fresh NVS on first Universal boot,
   // so only the Universal schema/default interpretation is required here.
   nvsSchemaRead();
+  (void)(featureConfigMigrateToSchema2() && featureConfigMigrateToSchema3());
   featureCfgLoad();
+  // Blinker TX production default is profile-specific and intentionally
+  // volatile: Model YL uses stock-synchronized SINGLE TX; every other
+  // supported Model 3/Y profile uses the legacy repeated transmitter.
+  blinkerTxMode = blinkerTxDefaultModePure(activeProfileIsYl());
   nagCfgLoad();
   summonCfgLoad();
-  lab3f8CfgLoad();
-  r79LabCfgLoad();
+  ulcCfgLoadAndMigrate();
+  autoLaneChangeLabCfgLoadAndMigrate();
+  r79CfgLoad();
   s3xyAutoLoadConfig();
   nvsSchemaFinalize();
-  if (labMenuEnabled) researchCaptureInit();
-  else Serial.println("CAN Research Capture: LAB OFF · resources not allocated");
+  canBusOffPersistenceLoad();
+  if (labMenuEnabled) {
+    researchCaptureInit();
+    driverMonitorCaptureInit();
+  } else {
+    T2CAN_SERIAL_PRINTLN("CAN Research Capture: LAB OFF · resources not allocated");
+    T2CAN_SERIAL_PRINTLN("Driver Monitoring Capture: LAB OFF · resources not allocated");
+  }
 
-  Serial.printf("Nag mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
+  T2CAN_SERIAL_PRINTF("Nag mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
     nagCfg.mode, nagCfg.targetId, nagCfg.torqueCount, nagCfg.enabled);
-  Serial.println("Summon Monitor=ALWAYS_ON (state/capture/priority only)");
-  Serial.printf("TLSSC enabled=%s highwayGate=%s (0x3FD mux0 bit38/39)\n",
+  T2CAN_SERIAL_PRINTLN("Summon Monitor=ALWAYS_ON (state/capture/priority only)");
+  T2CAN_SERIAL_PRINTF("TLSSC enabled=%s highwayGate=%s (0x3FD mux0 bit38/39)\n",
                 tlsscEnabled ? "true" : "false",
                 tlsscHighwayGateEnabled ? "true" : "false");
-  Serial.printf("LAB enabled=%s 0x3F8 alc=%u ulcBlind=%u acc=%u gate=AUTOSTEER_ONLY\n",
+  T2CAN_SERIAL_PRINTF("LAB enabled=%s ULC alcOff=%u blind=%u ulcOff=%u confirmTiming=%u legacyGate=AUTOSTEER policyGate=AP_ACTIVE\n",
                 labMenuEnabled ? "ON" : "OFF",
                 (unsigned)lab3f8AlcMode, (unsigned)lab3f8UlcBlindMode,
-                (unsigned)lab3f8AccFollowRaw);
-  Serial.printf("R79 policy bit19=0 bit47=1 bit18Mode=%u period=%ums scheduler=V26_COMPAT parkPolicy=BOOT_PARK_AND_0x118_STALE_5S gate=SUMMON_OR_AP_OR_PARK\n",
-                (unsigned)r79LabSmartMode, (unsigned)r79LabPeriodMs);
-  Serial.printf("S3XY bluetooth=%s auto-connect=%s registry=%u/%u\n",
+                (unsigned)lab3f8UlcOffHighwayMode, (unsigned)ulcNoConfirmTimingMode);
+  T2CAN_SERIAL_PRINTF("R79 fixed bit19=0 bit47=1 bit18Mode=%u fast=MUX1_2MS periodic=MUX2_PLUS_150MS_1X policy=DEFAULT_ON_MANUAL_DR_SUSPEND\n",
+                (unsigned)r79Bit18Policy);
+  T2CAN_SERIAL_PRINTF("S3XY bluetooth=%s auto-connect=%s registry=%u/%u\n",
                 s3xyBluetoothEnabled ? "ON" : "OFF",
                 s3xyAutoEnabled ? "true" : "false",
                 (unsigned)s3xyRegisteredCount(), (unsigned)S3XY_MAX_DEVICES);
 
   // Board power-on is treated as the wake signal for RX.
   // Existing per-feature validity gates still control every injection/TX path.
-  Serial.println("Driver-wake power detected. Starting CAN init immediately...");
+  T2CAN_SERIAL_PRINTLN("Driver-wake power detected. Starting CAN init immediately...");
 
   // ══ Init CAN A (MCP2515) ══
-  Serial.println("[CAN A] Initializing MCP2515...");
+  T2CAN_SERIAL_PRINTLN("[CAN A] Initializing MCP2515...");
   pinMode(MCP2515_RST, OUTPUT);
   digitalWrite(MCP2515_RST, HIGH);
   delay(1);
@@ -175,16 +218,16 @@ void setup() {
   mcpSpiStarted = true;
 
   if (!mcpInitChecked()) {
-    Serial.println("[CAN A] MCP2515 init failed! Rebooting...");
+    T2CAN_SERIAL_PRINTLN("[CAN A] MCP2515 init failed! Rebooting...");
     delay(3000);
     ESP.restart();
   }
-  Serial.printf("[CAN A] MCP2515 ready (500 kbps, clk=%s)\n",
+  T2CAN_SERIAL_PRINTF("[CAN A] MCP2515 ready (500 kbps, clk=%s)\n",
                 (MCP_CLOCK == MCP_16MHZ) ? "16MHz" :
                 (MCP_CLOCK == MCP_8MHZ)  ? "8MHz" : "20MHz");
 
   // ══ Init CAN B (TWAI) ══
-  Serial.println("[CAN B] Initializing TWAI...");
+  T2CAN_SERIAL_PRINTLN("[CAN B] Initializing TWAI...");
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
       (gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX, TWAI_MODE_NORMAL);
   g.rx_queue_len = 256;
@@ -194,10 +237,10 @@ void setup() {
 
   esp_err_t err1 = twai_driver_install(&g, &t, &f);
   esp_err_t err2 = twai_start();
-  Serial.printf("[CAN B] TWAI: %s / %s\n", esp_err_to_name(err1), esp_err_to_name(err2));
+  T2CAN_SERIAL_PRINTF("[CAN B] TWAI: %s / %s\n", esp_err_to_name(err1), esp_err_to_name(err2));
 
   if (err1 != ESP_OK || err2 != ESP_OK) {
-    Serial.println("[CAN B] TWAI init failed! Rebooting...");
+    T2CAN_SERIAL_PRINTLN("[CAN B] TWAI init failed! Rebooting...");
     delay(3000);
     ESP.restart();
   }
@@ -207,7 +250,7 @@ void setup() {
                               TWAI_ALERT_BUS_ERROR | TWAI_ALERT_BUS_OFF |
                               TWAI_ALERT_RX_DATA | TWAI_ALERT_RX_QUEUE_FULL;
   if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK) {
-    Serial.println("[CAN B] TWAI alerts configured");
+    T2CAN_SERIAL_PRINTLN("[CAN B] TWAI alerts configured");
   }
 
   canInitTime = millis();
@@ -217,14 +260,14 @@ void setup() {
   // Start CAN tasks immediately after both controllers are ready/running.
   BaseType_t retMcp = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, 5, &canTaskMcpHandle, 1);
   if (retMcp != pdPASS) {
-    Serial.printf("CAN A task creation failed: %d\n", retMcp);
+    T2CAN_SERIAL_PRINTF("CAN A task creation failed: %d\n", retMcp);
     delay(3000);
     ESP.restart();
   }
 
   BaseType_t retTwai = xTaskCreatePinnedToCore(canTaskTwai, "canB", 8192, nullptr, 4, &canTaskTwaiHandle, 1);
   if (retTwai != pdPASS) {
-    Serial.printf("CAN B task creation failed: %d\n", retTwai);
+    T2CAN_SERIAL_PRINTF("CAN B task creation failed: %d\n", retTwai);
     delay(3000);
     ESP.restart();
   }
@@ -232,17 +275,17 @@ void setup() {
 
   BaseType_t retSup = xTaskCreatePinnedToCore(canSupervisorTask, "canSup", 6144, nullptr, 3, &canSupervisorHandle, 0);
   if (retSup != pdPASS) {
-    Serial.printf("CAN supervisor task creation failed: %d\n", retSup);
+    T2CAN_SERIAL_PRINTF("CAN supervisor task creation failed: %d\n", retSup);
     delay(3000);
     ESP.restart();
   }
 
-  Serial.printf("[BOOT] CAN RX tasks started at %lu ms\n", (unsigned long)(millis() - bootTime));
+  T2CAN_SERIAL_PRINTF("[BOOT] CAN RX tasks started at %lu ms\n", (unsigned long)(millis() - bootTime));
 
   // Start Wi-Fi/web after the CAN receive path is live.
   BaseType_t retWeb = xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, &webTaskHandle, 0);
   if (retWeb != pdPASS) {
-    Serial.printf("Web task creation failed: %d\n", retWeb);
+    T2CAN_SERIAL_PRINTF("Web task creation failed: %d\n", retWeb);
     delay(3000);
     ESP.restart();
   }
@@ -253,26 +296,27 @@ void setup() {
   if (s3xyBluetoothEnabled) {
     BaseType_t retS3xy = xTaskCreatePinnedToCore(s3xyMapperTask, "s3xyMap", 8192, nullptr, 1, &s3xyTaskHandle, 0);
     if (retS3xy != pdPASS) {
-      Serial.printf("S3XY mapper task creation failed: %d\n", retS3xy);
+      T2CAN_SERIAL_PRINTF("S3XY mapper task creation failed: %d\n", retS3xy);
       // Mapping is diagnostic only; do not reboot or disturb proven CAN logic.
     }
   } else {
     s3xyTaskHandle = nullptr;
-    Serial.println("S3XY: OFF · BLE task not started");
+    T2CAN_SERIAL_PRINTLN("S3XY: OFF · BLE task not started");
   }
 
-  Serial.println("BOOT OK");
+  T2CAN_SERIAL_PRINTLN("BOOT OK");
 }
 
 void loop() {
+#if T2CAN_SERIAL_DIAGNOSTICS
   static unsigned long lastBeatLog = 0;
   static uint32_t loopBeat = 0;
   loopBeat++;
-  unsigned long now = millis();
+  const unsigned long now = millis();
 
   if (now - lastBeatLog >= 5000) {
     lastBeatLog = now;
-    unsigned long canAgeMs = (lastCanFrameMs == 0) ? 999999 : (now - lastCanFrameMs);
+    const unsigned long canAgeMs = (lastCanFrameMs == 0) ? 999999 : (now - lastCanFrameMs);
     Serial.printf(
       "[BEAT] uptime=%lu loop=%lu canBeat=%lu canRxTotal=%lu webBeat=%lu canFrames=%lu canAgeMs=%lu mcpTxOk=%lu mcpTxFail=%lu sumTxOk=%lu sumTxFail=%lu heap=%u\n",
       now / 1000,
@@ -289,5 +333,6 @@ void loop() {
       ESP.getFreeHeap()
     );
   }
+#endif
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
