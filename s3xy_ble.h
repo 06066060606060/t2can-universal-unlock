@@ -20,8 +20,8 @@
 //     available through the dashboard/API.
 //   - The implemented vehicle action is NOA Lane Change Cancel. Unknown or
 //     unimplemented mappings do not transmit to the vehicle.
-//   - CAN-side NOA cancel is fail-closed: fresh NOA state 5 and a fresh 0x24A
-//     LEFT/RIGHT request are both required.
+//   - CAN-side NOA cancel is fail-closed on fresh NOA state 5 and fresh 0x24A
+//     context. DAS_behaviorType is intentionally not used by the manual cancel gate.
 // ═══════════════════════════════════════════════════════════════
 
 static const char *S3XY_SERVICE_UUID = "00003d46-87d2-479e-7e45-8551415a6de1";
@@ -94,7 +94,12 @@ enum S3xyAction : uint8_t {
   S3XY_ACTION_RESEARCH_CAPTURE_A = 4,
   S3XY_ACTION_RESEARCH_CAPTURE_B = 5,
   S3XY_ACTION_RESEARCH_CAPTURE_D = 6,
-  S3XY_ACTION_RESEARCH_CAPTURE_RESET = 7
+  S3XY_ACTION_RESEARCH_CAPTURE_RESET = 7,
+  S3XY_ACTION_TLSSC_TOGGLE = 8,
+  S3XY_ACTION_AUTO_BLINKER_TOGGLE = 9,
+  S3XY_ACTION_PERFORMANCE_MODE = 10,
+  S3XY_ACTION_LEFT_BLINKER = 11,
+  S3XY_ACTION_RIGHT_BLINKER = 12
 };
 
 enum S3xyCommandType : uint8_t {
@@ -226,11 +231,16 @@ static volatile uint32_t s3xyLogDropped = 0;
 #endif
 static volatile uint32_t s3xyActionPending = 0;
 static volatile uint32_t s3xyAccelActionPending = 0;
+static volatile uint32_t s3xyPerformanceActionPending = 0;
 static volatile uint32_t s3xyResearchCaptureAPending = 0;
 static volatile uint32_t s3xyResearchCaptureBPending = 0;
 static volatile uint32_t s3xyResearchCaptureCPending = 0;
 static volatile uint32_t s3xyResearchCaptureDPending = 0;
 static volatile uint32_t s3xyResearchCaptureResetPending = 0;
+static volatile uint32_t s3xyTlsscActionPending = 0;
+static volatile uint32_t s3xyAutoBlinkerActionPending = 0;
+static volatile uint32_t s3xyLeftBlinkerActionPending = 0;
+static volatile uint32_t s3xyRightBlinkerActionPending = 0;
 
 static volatile bool s3xyAutoEnabled = true;
 static volatile bool s3xyBluetoothEnabled = false;
@@ -294,39 +304,65 @@ static const char *s3xyStateName(uint8_t st) {
 static const char *s3xyActionCode(uint8_t action) {
   if (action == S3XY_ACTION_NOA_CANCEL) return "noa_cancel";
   if (action == S3XY_ACTION_ACCEL_MODE_TOGGLE) return "accel_mode_toggle";
+  if (action == S3XY_ACTION_PERFORMANCE_MODE) return "performance_mode";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_A) return "research_capture_a";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_B) return "research_capture_b";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_C) return "research_capture_c";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_D) return "research_capture_d";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_RESET) return "research_capture_reset";
+  if (action == S3XY_ACTION_TLSSC_TOGGLE) return "tlssc_toggle";
+  if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) return "auto_blinker_toggle";
+  if (action == S3XY_ACTION_LEFT_BLINKER) return "left_blinker";
+  if (action == S3XY_ACTION_RIGHT_BLINKER) return "right_blinker";
   return "none";
 }
 
 static const char *s3xyActionLabel(uint8_t action) {
   if (action == S3XY_ACTION_NOA_CANCEL) return "NOA Lane Change Cancel";
   if (action == S3XY_ACTION_ACCEL_MODE_TOGGLE) return "Acceleration Mode Toggle";
+  if (action == S3XY_ACTION_PERFORMANCE_MODE) return "Performance Mode";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_A) return "Research Capture A";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_B) return "Research Capture B";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_C) return "Research Capture C";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_D) return "Research Capture D";
   if (action == S3XY_ACTION_RESEARCH_CAPTURE_RESET) return "Research Capture Reset";
+  if (action == S3XY_ACTION_TLSSC_TOGGLE) return "TLSSC Toggle";
+  if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) return "Auto Blinker Toggle";
+  if (action == S3XY_ACTION_LEFT_BLINKER) return "Left Blinker";
+  if (action == S3XY_ACTION_RIGHT_BLINKER) return "Right Blinker";
   return "None";
 }
 
 static bool s3xyActionSupportedForCurrentProfile(uint8_t action) {
   if (action == S3XY_ACTION_ACCEL_MODE_TOGGLE) return activeProfilePedalMapSupported();
+  if (action == S3XY_ACTION_PERFORMANCE_MODE) return activeProfilePedalMapSupported();
+  if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) return activeProfileAdvancedEapSupported();
+  if (action == S3XY_ACTION_LEFT_BLINKER || action == S3XY_ACTION_RIGHT_BLINKER)
+    return activeTurnSignalVariant != TURN_SIGNAL_UNSET;
   return true;
 }
 
+static bool s3xyActionParseKnown(const String &s, uint8_t &out) {
+  if (s == "none" || s == "None") { out = S3XY_ACTION_NONE; return true; }
+  if (s == "noa_cancel" || s == "NOA Lane Change Cancel") { out = S3XY_ACTION_NOA_CANCEL; return true; }
+  if (s == "accel_mode_toggle" || s == "Acceleration Mode Toggle") { out = S3XY_ACTION_ACCEL_MODE_TOGGLE; return true; }
+  if (s == "performance_mode" || s == "Performance Mode") { out = S3XY_ACTION_PERFORMANCE_MODE; return true; }
+  if (s == "research_capture_a" || s == "Research Capture A" || s == "alc_capture_left_open" || s == "CAN Research Capture - LEFT OPEN") { out = S3XY_ACTION_RESEARCH_CAPTURE_A; return true; }
+  if (s == "research_capture_b" || s == "Research Capture B" || s == "alc_capture_left_blocked" || s == "CAN Research Capture - LEFT BLOCKED") { out = S3XY_ACTION_RESEARCH_CAPTURE_B; return true; }
+  if (s == "research_capture_c" || s == "Research Capture C" || s == "alc_capture" || s == "CAN Research Capture (Unlabeled)") { out = S3XY_ACTION_RESEARCH_CAPTURE_C; return true; }
+  if (s == "research_capture_d" || s == "Research Capture D") { out = S3XY_ACTION_RESEARCH_CAPTURE_D; return true; }
+  if (s == "research_capture_reset" || s == "Research Capture Reset") { out = S3XY_ACTION_RESEARCH_CAPTURE_RESET; return true; }
+  if (s == "tlssc_toggle" || s == "TLSSC Toggle") { out = S3XY_ACTION_TLSSC_TOGGLE; return true; }
+  if (s == "auto_blinker_toggle" || s == "Auto Blinker Toggle") { out = S3XY_ACTION_AUTO_BLINKER_TOGGLE; return true; }
+  if (s == "left_blinker" || s == "Left Blinker") { out = S3XY_ACTION_LEFT_BLINKER; return true; }
+  if (s == "right_blinker" || s == "Right Blinker") { out = S3XY_ACTION_RIGHT_BLINKER; return true; }
+  return false;
+}
+
 static uint8_t s3xyParseAction(const String &s) {
-  if (s == "noa_cancel" || s == "NOA Lane Change Cancel") return S3XY_ACTION_NOA_CANCEL;
-  if (s == "accel_mode_toggle" || s == "Acceleration Mode Toggle") return S3XY_ACTION_ACCEL_MODE_TOGGLE;
-  if (s == "research_capture_a" || s == "Research Capture A" || s == "alc_capture_left_open" || s == "CAN Research Capture - LEFT OPEN") return S3XY_ACTION_RESEARCH_CAPTURE_A;
-  if (s == "research_capture_b" || s == "Research Capture B" || s == "alc_capture_left_blocked" || s == "CAN Research Capture - LEFT BLOCKED") return S3XY_ACTION_RESEARCH_CAPTURE_B;
-  if (s == "research_capture_c" || s == "Research Capture C" || s == "alc_capture" || s == "CAN Research Capture (Unlabeled)") return S3XY_ACTION_RESEARCH_CAPTURE_C;
-  if (s == "research_capture_d" || s == "Research Capture D") return S3XY_ACTION_RESEARCH_CAPTURE_D;
-  if (s == "research_capture_reset" || s == "Research Capture Reset") return S3XY_ACTION_RESEARCH_CAPTURE_RESET;
-  return S3XY_ACTION_NONE;
+  uint8_t out = S3XY_ACTION_NONE;
+  (void)s3xyActionParseKnown(s, out);
+  return out;
 }
 
 #if S3XY_DIAGNOSTICS_ENABLED
@@ -772,7 +808,6 @@ static void s3xyAutoLoadConfig() {
   bool bluetoothEnabled = false;
   String oldAddr;
   bool migrateRawId[S3XY_MAX_DEVICES] = {};
-  bool sanitizeActions[S3XY_MAX_DEVICES] = {};
   Preferences legacy;
   if (legacy.begin("s3xy", true)) {
     autoEnabled = legacy.getBool("auto", true);
@@ -822,16 +857,9 @@ static void s3xyAutoLoadConfig() {
 
       const uint8_t addressType = p.getUChar(st.c_str(), 0);
       const bool addressTypeKnown = p.getBool(sv.c_str(), false);
-      const uint8_t storedS = p.getUChar(ss.c_str(), S3XY_ACTION_NONE);
-      const uint8_t storedD = p.getUChar(sd.c_str(), S3XY_ACTION_NONE);
-      const uint8_t storedL = p.getUChar(sl.c_str(), S3XY_ACTION_NONE);
-      uint8_t s = storedS;
-      uint8_t d = storedD;
-      uint8_t l = storedL;
-      if (!s3xyActionSupportedForCurrentProfile(s)) s = S3XY_ACTION_NONE;
-      if (!s3xyActionSupportedForCurrentProfile(d)) d = S3XY_ACTION_NONE;
-      if (!s3xyActionSupportedForCurrentProfile(l)) l = S3XY_ACTION_NONE;
-      sanitizeActions[i] = (s != storedS) || (d != storedD) || (l != storedL);
+      const uint8_t s = p.getUChar(ss.c_str(), S3XY_ACTION_NONE);
+      const uint8_t d = p.getUChar(sd.c_str(), S3XY_ACTION_NONE);
+      const uint8_t l = p.getUChar(sl.c_str(), S3XY_ACTION_NONE);
       const bool c = p.getBool(sc.c_str(), true);
       portENTER_CRITICAL(&s3xyMux);
       s3xyDevices[i].used = true;
@@ -863,7 +891,7 @@ static void s3xyAutoLoadConfig() {
   // Upgrade legacy hex-string 3D49 identity into the raw-byte key
   // immediately. s3xyRegistrySaveSlot re-opens NVS and verifies the bytes.
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
-    if (migrateRawId[i] || sanitizeActions[i]) s3xyRegistrySaveSlot(i);
+    if (migrateRawId[i]) s3xyRegistrySaveSlot(i);
   }
 
   // One-time compatibility migration from the previous single-target build.
@@ -1009,11 +1037,16 @@ static void s3xyRequestRuntimeStop() {
   s3xyDiscoveryScanning = false;
   s3xyActionPending = 0;
   s3xyAccelActionPending = 0;
+  s3xyPerformanceActionPending = 0;
   s3xyResearchCaptureAPending = 0;
   s3xyResearchCaptureBPending = 0;
   s3xyResearchCaptureCPending = 0;
   s3xyResearchCaptureDPending = 0;
   s3xyResearchCaptureResetPending = 0;
+  s3xyTlsscActionPending = 0;
+  s3xyAutoBlinkerActionPending = 0;
+  s3xyLeftBlinkerActionPending = 0;
+  s3xyRightBlinkerActionPending = 0;
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
     if (!s3xyDevices[i].used) continue;
     s3xyDevices[i].nextAttemptMs = 0;
@@ -1090,14 +1123,21 @@ static void s3xyRunMappedAction(uint8_t slot, uint8_t action, const char *gestur
   portENTER_CRITICAL(&s3xyMux);
   if (action == S3XY_ACTION_NOA_CANCEL) s3xyActionPending++;
   else if (action == S3XY_ACTION_ACCEL_MODE_TOGGLE) s3xyAccelActionPending++;
+  else if (action == S3XY_ACTION_PERFORMANCE_MODE) s3xyPerformanceActionPending++;
   else if (action == S3XY_ACTION_RESEARCH_CAPTURE_A) s3xyResearchCaptureAPending++;
   else if (action == S3XY_ACTION_RESEARCH_CAPTURE_B) s3xyResearchCaptureBPending++;
   else if (action == S3XY_ACTION_RESEARCH_CAPTURE_C) s3xyResearchCaptureCPending++;
   else if (action == S3XY_ACTION_RESEARCH_CAPTURE_D) s3xyResearchCaptureDPending++;
   else if (action == S3XY_ACTION_RESEARCH_CAPTURE_RESET) s3xyResearchCaptureResetPending++;
+  else if (action == S3XY_ACTION_TLSSC_TOGGLE) s3xyTlsscActionPending++;
+  else if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) s3xyAutoBlinkerActionPending++;
+  else if (action == S3XY_ACTION_LEFT_BLINKER) s3xyLeftBlinkerActionPending++;
+  else if (action == S3XY_ACTION_RIGHT_BLINKER) s3xyRightBlinkerActionPending++;
   portEXIT_CRITICAL(&s3xyMux);
+#if S3XY_DIAGNOSTICS_ENABLED
   String d = String(gesture ? gesture : "gesture") + " -> " + s3xyActionLabel(action);
   s3xyLogPush(S3XY_LOG_INFO, d.c_str(), nullptr, 0, -127, (int8_t)slot);
+#endif
 }
 
 // Gen2 button notifications are normally the bare two-byte tokens validated in
@@ -1172,8 +1212,10 @@ static void s3xyNotifyCallbackForSlot(uint8_t slot, BLERemoteCharacteristic *chr
   if (gestureMatches > 1) {
     s3xyLogPush(S3XY_LOG_NOTIFY, "ambiguous button notify", data, len, rssi, (int8_t)slot);
   } else if (gesture) {
+#if S3XY_DIAGNOSTICS_ENABLED
     String detail = String("button ") + gesture;
     s3xyLogPush(S3XY_LOG_NOTIFY, detail.c_str(), data, len, rssi, (int8_t)slot);
+#endif
   } else if (ack) {
     s3xyLogPush(S3XY_LOG_NOTIFY, "B6 ACK notify", data, len, rssi, (int8_t)slot);
   } else {
@@ -1271,8 +1313,10 @@ class S3xyAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
         s3xyDevices[foundSlot].addressType = addressType;
         s3xyDevices[foundSlot].addressTypeKnown = true;
         portEXIT_CRITICAL(&s3xyMux);
+#if S3XY_DIAGNOSTICS_ENABLED
         String detail = String("batch addr=") + addr + " t=" + String((unsigned)addressType) + " raw-match";
         s3xyLogPush(S3XY_LOG_SCAN_HIT, detail.c_str(), nullptr, 0, rssi, (int8_t)foundSlot);
+#endif
         uint8_t batchFound = 0;
         for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) if (s3xyBatchTargets[i]) batchFound++;
         if (s3xyBatchExpectedCount > 0 && batchFound >= s3xyBatchExpectedCount) {
@@ -1292,8 +1336,10 @@ class S3xyAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
       if (foundSlot < 0 && (nameMatch || svcMatch) && s3xyHasEligibleSavedIdentity() &&
           !s3xyIdentityCandidateCoolingDown(addr) && !s3xyBatchIdentityTarget) {
         s3xyBatchIdentityTarget = new BLEAdvertisedDevice(dev);
+#if S3XY_DIAGNOSTICS_ENABLED
         String detail = String("batch identity candidate addr=") + addr + " t=" + String((unsigned)addressType);
         s3xyLogPush(S3XY_LOG_SCAN_HIT, detail.c_str(), nullptr, 0, rssi, -1);
+#endif
       }
       return;
     }
@@ -1321,8 +1367,10 @@ class S3xyAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
         s3xyDevices[foundSlot].addressType = addressType;
         s3xyDevices[foundSlot].addressTypeKnown = true;
         portEXIT_CRITICAL(&s3xyMux);
+#if S3XY_DIAGNOSTICS_ENABLED
         String detail = String("wake addr=") + addr + " t=" + String((unsigned)addressType) + " raw-match";
         s3xyLogPush(S3XY_LOG_SCAN_HIT, detail.c_str(), nullptr, 0, rssi, (int8_t)foundSlot);
+#endif
         BLEDevice::getScan()->stop();
         return;
       }
@@ -1344,9 +1392,11 @@ class S3xyAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
             s3xyScanTargetFound = true;
             s3xyScanSlot = -2; // identity candidate; slot selected by encrypted 3D49
             portEXIT_CRITICAL(&s3xyMux);
+#if S3XY_DIAGNOSTICS_ENABLED
             String detail = String("identity candidate addr=") + addr + " t=" + String((unsigned)addressType) +
                             " N" + (nameMatch ? "1" : "0") + " S" + (svcMatch ? "1" : "0");
             s3xyLogPush(S3XY_LOG_SCAN_HIT, detail.c_str(), nullptr, 0, rssi, -1);
+#endif
             BLEDevice::getScan()->stop();
             return;
           }
@@ -1355,8 +1405,10 @@ class S3xyAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
           // Never guess between multiple buttons; tell diagnostics exactly why the
           // changed-address candidate was not adopted. One normal READY connection
           // after READY seeds the stable ID for subsequent reboot recovery.
+#if S3XY_DIAGNOSTICS_ENABLED
           String detail = String("identity candidate ignored: no saved 3D49 addr=") + addr;
           s3xyLogPush(S3XY_LOG_INFO, detail.c_str(), nullptr, 0, rssi, -1);
+#endif
         }
       }
       return;
@@ -1374,8 +1426,10 @@ class S3xyAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
         s3xyDevices[slot].addressTypeKnown = true;
       }
       portEXIT_CRITICAL(&s3xyMux);
+#if S3XY_DIAGNOSTICS_ENABLED
       String detail = String("target addr=") + addr + " t=" + String((unsigned)addressType) + " raw-match";
       s3xyLogPush(S3XY_LOG_SCAN_HIT, detail.c_str(), nullptr, 0, rssi, slot);
+#endif
       BLEDevice::getScan()->stop();
       return;
     }
@@ -1389,8 +1443,10 @@ class S3xyAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
       if (dev.haveServiceUUID()) svcMatch = dev.isAdvertisingService(BLEUUID(S3XY_SERVICE_UUID));
       if (!nameMatch && !svcMatch) return;
       s3xyDiscoveryAdd(addr, name.length() ? name.c_str() : "ENH_BTN", rssi);
+#if S3XY_DIAGNOSTICS_ENABLED
       String detail = String("discover addr=") + addr + " t=" + String((unsigned)addressType);
       s3xyLogPush(S3XY_LOG_SCAN_HIT, detail.c_str(), nullptr, 0, rssi, -1);
+#endif
     }
   }
 };
@@ -1401,6 +1457,7 @@ static bool s3xyMapperInit() {
   // Keep compatibility with Arduino-ESP32 BLEDevice versions where init()
   // returns void. Master OFF is implemented as a boot-time no-init state.
   BLEDevice::init("T2CAN_S3XY_MULTI");
+#if S3XY_DIAGNOSTICS_ENABLED
   // Compile-time stack name keeps this diagnostic compatible with Arduino-ESP32
   // releases that predate BLEDevice::getBLEStackString().
 #if defined(CONFIG_BLUEDROID_ENABLED)
@@ -1414,6 +1471,7 @@ static bool s3xyMapperInit() {
   strncpy(s3xyBleStackName, stack.c_str(), sizeof(s3xyBleStackName) - 1);
   s3xyBleStackName[sizeof(s3xyBleStackName) - 1] = '\0';
   portEXIT_CRITICAL(&s3xyMux);
+#endif
 
   BLESecurity::setCapability(ESP_IO_CAP_NONE);
   BLESecurity::setAuthenticationMode(true, false, true);  // bond + LE Secure Connections, Just Works
@@ -1448,10 +1506,12 @@ static bool s3xyMapperInit() {
   s3xyBootBondRepairArmed = (registryCount > 0 && bootBonds == 0);
   portEXIT_CRITICAL(&s3xyMux);
 
+#if S3XY_DIAGNOSTICS_ENABLED
   String initDetail = String("BLE mapper initialized stack=") + stack +
                       " bonds=" + String(bootBonds) +
                       " registry=" + String(registryCount);
   s3xyLogPush(S3XY_LOG_INFO, initDetail.c_str());
+#endif
   if (registryCount > 0 && bootBonds == 0) {
     s3xyLogPush(S3XY_LOG_SECURITY,
                 "boot bond store empty with saved registry; automatic re-pair recovery armed");
@@ -1770,8 +1830,10 @@ static int s3xyProbeTargetIdentity() {
   BLESecurity::resetSecurity();
   BLESecurity::setForceAuthentication(true);
   if (!s3xyProbeClient->connect(s3xyTarget)) {
+#if S3XY_DIAGNOSTICS_ENABLED
     String d = String("identity probe connect failed addr=") + candidateAddr;
     s3xyLogPush(S3XY_LOG_ERROR, d.c_str(), nullptr, 0, candidateRssi, -1);
+#endif
     s3xyRejectIdentityCandidate(candidateAddr);
     s3xyClearTarget();
     return -1;
@@ -1826,16 +1888,20 @@ static int s3xyProbeTargetIdentity() {
   uint8_t raw[S3XY_LOG_DATA_MAX] = {};
   const size_t n = min((size_t)idv.length(), (size_t)S3XY_LOG_DATA_MAX);
   for (size_t i = 0; i < n; i++) raw[i] = (uint8_t)idv[i];
+#if S3XY_DIAGNOSTICS_ENABLED
   char idHex[64] = {};
   s3xyBytesToHex(raw, n, idHex, sizeof(idHex));
+#endif
   const int matchedSlot = s3xyFindSlotByPeerId(raw, n);
 
   if (matchedSlot < 0) {
     portENTER_CRITICAL(&s3xyMux);
     s3xyIdentityProbeMismatches++;
     portEXIT_CRITICAL(&s3xyMux);
+#if S3XY_DIAGNOSTICS_ENABLED
     String d = String("identity probe no registry match addr=") + candidateAddr + " id=" + idHex;
     s3xyLogPush(S3XY_LOG_ID_READ, d.c_str(), raw, n, rssi, -1);
+#endif
     s3xyProbeClient->disconnect();
     vTaskDelay(pdMS_TO_TICKS(S3XY_DISCONNECT_SETTLE_MS));
     s3xyRejectIdentityCandidate(candidateAddr);
@@ -1865,9 +1931,11 @@ static int s3xyProbeTargetIdentity() {
   // A successful encrypted ID match is authoritative enough to persist even if
   // the following operational reconnect needs another retry.
   s3xyRegistrySaveSlot((uint8_t)matchedSlot);
+#if S3XY_DIAGNOSTICS_ENABLED
   String detail = String("identity match slot=") + String(matchedSlot + 1) +
                   " old=" + oldAddr + " new=" + candidateAddr + " id=" + idHex;
   s3xyLogPush(S3XY_LOG_ID_READ, detail.c_str(), raw, n, rssi, (int8_t)matchedSlot);
+#endif
 
   s3xyProbeClient->disconnect();
   vTaskDelay(pdMS_TO_TICKS(S3XY_DISCONNECT_SETTLE_MS));
@@ -2020,6 +2088,7 @@ static bool s3xyConnectSlot(uint8_t slot) {
   }
   s3xyLogPush(S3XY_LOG_GATT, "service 3D46 found", nullptr, 0, rssi, (int8_t)slot);
 
+#if S3XY_DIAGNOSTICS_ENABLED
   std::map<std::string, BLERemoteCharacteristic *> *chars = svc->getCharacteristics();
   if (chars) {
     for (auto &kv : *chars) {
@@ -2033,6 +2102,7 @@ static bool s3xyConnectSlot(uint8_t slot) {
       s3xyLogPush(S3XY_LOG_GATT, detail.c_str(), nullptr, 0, rssi, (int8_t)slot);
     }
   }
+#endif
 
   BLERemoteCharacteristic *notifyChar = svc->getCharacteristic(BLEUUID(S3XY_NOTIFY_UUID));
   BLERemoteCharacteristic *idChar = svc->getCharacteristic(BLEUUID(S3XY_ID_UUID));
@@ -2152,6 +2222,7 @@ static bool s3xyConnectSlot(uint8_t slot) {
     else s3xyBondPersistStillMissing++;
   }
   portEXIT_CRITICAL(&s3xyMux);
+#if S3XY_DIAGNOSTICS_ENABLED
   if (wasRepairArmed) {
     String d = String("boot bond repair READY; local bonds=") + String(bondsAfterReady) +
                " registry=" + String(registeredAfterReady) +
@@ -2159,6 +2230,7 @@ static bool s3xyConnectSlot(uint8_t slot) {
     s3xyLogPush(bondStoreCoversRegistry ? S3XY_LOG_SECURITY : S3XY_LOG_ERROR,
                 d.c_str(), nullptr, 0, rssi, (int8_t)slot);
   }
+#endif
   return true;
 }
 
@@ -2189,9 +2261,13 @@ static void s3xyBestEffortRemoveBond(const char *address) {
   unsigned int b[6] = {};
   if (sscanf(address, "%02x:%02x:%02x:%02x:%02x:%02x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6) return;
   esp_bd_addr_t bd = {(uint8_t)b[0], (uint8_t)b[1], (uint8_t)b[2], (uint8_t)b[3], (uint8_t)b[4], (uint8_t)b[5]};
-  esp_err_t err = esp_ble_remove_bond_device(bd);
+#if S3XY_DIAGNOSTICS_ENABLED
+  const esp_err_t err = esp_ble_remove_bond_device(bd);
   String d = String("remove bond bluedroid: ") + esp_err_to_name(err);
   s3xyLogPush(S3XY_LOG_INFO, d.c_str());
+#else
+  (void)esp_ble_remove_bond_device(bd);
+#endif
 #elif defined(CONFIG_NIMBLE_ENABLED)
   ble_addr_t peers[8] = {};
   int n = 0;
@@ -2202,8 +2278,10 @@ static void s3xyBestEffortRemoveBond(const char *address) {
       BLEAddress pa(peers[i]);
       if (!s3xyAddressEquals(pa.toString().c_str(), address)) continue;
       const int rc = ble_gap_unpair(&peers[i]);
+#if S3XY_DIAGNOSTICS_ENABLED
       String d = String("remove bond nimble rc=") + String(rc);
       s3xyLogPush(rc == 0 ? S3XY_LOG_INFO : S3XY_LOG_ERROR, d.c_str());
+#endif
       removed = (rc == 0);
       break;
     }
@@ -2321,8 +2399,10 @@ static uint16_t s3xyRemoveAllLocalBonds() {
       if (esp_ble_remove_bond_device(list[i].bd_addr) == ESP_OK) removed++;
     }
   } else {
+#if S3XY_DIAGNOSTICS_ENABLED
     String d = String("reset all: bond list failed: ") + esp_err_to_name(listErr);
     s3xyLogPush(S3XY_LOG_ERROR, d.c_str());
+#endif
   }
   free(list);
 #elif defined(CONFIG_NIMBLE_ENABLED)
@@ -2330,8 +2410,10 @@ static uint16_t s3xyRemoveAllLocalBonds() {
   const int rc = ble_store_clear();
   if (rc == 0 && before > 0) removed = (uint16_t)before;
   if (rc != 0) {
+#if S3XY_DIAGNOSTICS_ENABLED
     String d = String("reset all: nimble ble_store_clear rc=") + String(rc);
     s3xyLogPush(S3XY_LOG_ERROR, d.c_str());
+#endif
   }
 #endif
   return removed;
@@ -2350,7 +2432,7 @@ static void s3xyResetAllBluetoothData() {
   s3xyScanTargetFound = false;
   s3xyScanSlot = -1;
   s3xyScanTargetAddress[0] = '\0';
-  s3xyActionPending = 0; s3xyAccelActionPending = 0; s3xyResearchCaptureAPending = 0; s3xyResearchCaptureBPending = 0; s3xyResearchCaptureCPending = 0; s3xyResearchCaptureDPending = 0; s3xyResearchCaptureResetPending = 0;
+  s3xyActionPending = 0; s3xyAccelActionPending = 0; s3xyPerformanceActionPending = 0; s3xyResearchCaptureAPending = 0; s3xyResearchCaptureBPending = 0; s3xyResearchCaptureCPending = 0; s3xyResearchCaptureDPending = 0; s3xyResearchCaptureResetPending = 0; s3xyTlsscActionPending = 0; s3xyAutoBlinkerActionPending = 0; s3xyLeftBlinkerActionPending = 0; s3xyRightBlinkerActionPending = 0;
   s3xyIdentityProbeAttempts = 0;
   s3xyIdentityProbeMatches = 0;
   s3xyIdentityProbeMismatches = 0;
@@ -2421,7 +2503,7 @@ static void s3xyResetAllBluetoothData() {
 #endif
   portEXIT_CRITICAL(&s3xyMux);
 
-  Serial.printf("S3XY: Bluetooth data reset complete; removed bonds=%u; rebooting\n", (unsigned)removedBonds);
+  T2CAN_SERIAL_PRINTF("S3XY: Bluetooth data reset complete; removed bonds=%u; rebooting\n", (unsigned)removedBonds);
   vTaskDelay(pdMS_TO_TICKS(500));
   ESP.restart();
 }
@@ -2921,11 +3003,14 @@ static void s3xyMapperTask(void *arg) {
       }
     }
 
-    bool runAction = false, runAccel = false, runResearchCapture = false, runResearchReset = false;
+    bool runAction = false, runAccel = false, runPerformance = false, runResearchCapture = false, runResearchReset = false;
+    bool runTlsscToggle = false, runAutoBlinkerToggle = false;
+    bool runLeftBlinker = false, runRightBlinker = false;
     uint8_t researchCaptureLabelSlot = RESEARCH_CAPTURE_LABEL_NONE;
     portENTER_CRITICAL(&s3xyMux);
     if (s3xyActionPending > 0) { s3xyActionPending--; runAction = true; }
     if (s3xyAccelActionPending > 0) { s3xyAccelActionPending--; runAccel = true; }
+    if (s3xyPerformanceActionPending > 0) { s3xyPerformanceActionPending--; runPerformance = true; }
     if (s3xyResearchCaptureAPending > 0) {
       s3xyResearchCaptureAPending--; runResearchCapture = true; researchCaptureLabelSlot = RESEARCH_CAPTURE_LABEL_A;
     } else if (s3xyResearchCaptureBPending > 0) {
@@ -2938,18 +3023,31 @@ static void s3xyMapperTask(void *arg) {
     if (s3xyResearchCaptureResetPending > 0) {
       s3xyResearchCaptureResetPending--; runResearchReset = true;
     }
+    if (s3xyTlsscActionPending > 0) { s3xyTlsscActionPending--; runTlsscToggle = true; }
+    if (s3xyAutoBlinkerActionPending > 0) { s3xyAutoBlinkerActionPending--; runAutoBlinkerToggle = true; }
+    if (s3xyLeftBlinkerActionPending > 0) { s3xyLeftBlinkerActionPending--; runLeftBlinker = true; }
+    if (s3xyRightBlinkerActionPending > 0) { s3xyRightBlinkerActionPending--; runRightBlinker = true; }
     portEXIT_CRITICAL(&s3xyMux);
     if (runAction) handleS3xySingleAction();
     if (runAccel) requestPedalMapToggleFromButton();
+    if (runPerformance) requestPedalMapPerformanceFromButton();
+    if (runTlsscToggle) toggleTlsscEnabledFromButton();
+    if (runAutoBlinkerToggle) toggleAutoBlinkerEnabledFromButton();
+    if (runLeftBlinker && !requestTurnSignalPulseFromButton(1)) s3xyLogPush(S3XY_LOG_INFO, "Left Blinker unavailable");
+    if (runRightBlinker && !requestTurnSignalPulseFromButton(2)) s3xyLogPush(S3XY_LOG_INFO, "Right Blinker unavailable");
     if (runResearchReset) {
       researchCaptureReset();
       s3xyLogPush(S3XY_LOG_INFO, "Research Capture Reset · DONE");
     }
     if (runResearchCapture) {
       const bool accepted = researchCaptureRequest(researchCaptureLabelSlot);
+#if S3XY_DIAGNOSTICS_ENABLED
       String msg = String("Research Capture ") + researchCaptureLabelSlotName(researchCaptureLabelSlot)
                  + " · " + (accepted ? "STARTED" : "IGNORED");
       s3xyLogPush(S3XY_LOG_INFO, msg.c_str());
+#else
+      (void)accepted;
+#endif
     }
 
     static uint32_t lastRssiMs = 0;
@@ -3048,42 +3146,42 @@ static String s3xyStatsToJson() {
 #else
   j.reserve(3072);
 #endif
-  j = "{";
-  j += "\"bluetoothEnabled\":" + String(bluetoothEnabled ? "true" : "false");
-  j += ",\"bleInitialized\":" + String(bleInitialized ? "true" : "false");
-  j += ",\"autoEnabled\":" + String(autoEnabled ? "true" : "false");
-  j += ",\"diagnosticsEnabled\":" + String(S3XY_DIAGNOSTICS_ENABLED ? "true" : "false");
-  j += ",\"maxDevices\":" + String(S3XY_MAX_DEVICES);
-  j += ",\"pairedCount\":" + String(s3xyRegisteredCount());
-  j += ",\"connectedCount\":" + String(s3xyConnectedCount());
+  JsonWriterArduino jw(j);
+  jw.boolean("bluetoothEnabled", bluetoothEnabled);
+  jw.boolean("bleInitialized", bleInitialized);
+  jw.boolean("autoEnabled", autoEnabled);
+  jw.boolean("diagnosticsEnabled", S3XY_DIAGNOSTICS_ENABLED != 0);
+  jw.u32("maxDevices", S3XY_MAX_DEVICES);
+  jw.u32("pairedCount", s3xyRegisteredCount());
+  jw.u32("connectedCount", s3xyConnectedCount());
 #if S3XY_DIAGNOSTICS_ENABLED
-  j += ",\"localBondCount\":" + String(s3xyLocalBondCount());
-  j += ",\"bleStack\":\"" + s3xyJsonEscape(bleStack) + "\"";
+  jw.u32("localBondCount", s3xyLocalBondCount());
+  jw.string("bleStack", s3xyJsonEscape(bleStack));
 #ifdef ESP_ARDUINO_VERSION_STR
-  j += ",\"arduinoCore\":\"" + String(ESP_ARDUINO_VERSION_STR) + "\"";
+  jw.string("arduinoCore", ESP_ARDUINO_VERSION_STR);
 #else
-  j += ",\"arduinoCore\":\"unknown\"";
+  jw.string("arduinoCore", "unknown");
 #endif
-  j += ",\"bootLocalBondCount\":" + String((int)bootLocalBondCount);
-  j += ",\"bondRepairArmed\":" + String(bondRepairArmed ? "true" : "false");
-  j += ",\"bondRepairAttempts\":" + String(bondRepairAttempts);
-  j += ",\"bondRepairReady\":" + String(bondRepairReady);
-  j += ",\"bondPersistStillMissing\":" + String(bondPersistStillMissing);
-  j += ",\"identityProbeAttempts\":" + String(identityProbeAttempts);
-  j += ",\"identityProbeMatches\":" + String(identityProbeMatches);
-  j += ",\"identityProbeMismatches\":" + String(identityProbeMismatches);
-  j += ",\"identityRebinds\":" + String(identityRebinds);
-  j += ",\"autoExactHits\":" + String(autoExactHits);
-  j += ",\"autoExactMisses\":" + String(autoExactMisses);
-  j += ",\"autoLinkFailures\":" + String(autoLinkFailures);
-  j += ",\"autoTrace\":\"" + s3xyJsonEscape(autoTrace) + "\"";
-  j += ",\"autoAttempts\":" + String(totalAttempts);
-  j += ",\"autoReconnects\":" + String(totalReconnects);
-  j += ",\"autoFailures\":" + String(totalFailures);
+  jw.i32("bootLocalBondCount", bootLocalBondCount);
+  jw.boolean("bondRepairArmed", bondRepairArmed);
+  jw.u32("bondRepairAttempts", bondRepairAttempts);
+  jw.u32("bondRepairReady", bondRepairReady);
+  jw.u32("bondPersistStillMissing", bondPersistStillMissing);
+  jw.u32("identityProbeAttempts", identityProbeAttempts);
+  jw.u32("identityProbeMatches", identityProbeMatches);
+  jw.u32("identityProbeMismatches", identityProbeMismatches);
+  jw.u32("identityRebinds", identityRebinds);
+  jw.u32("autoExactHits", autoExactHits);
+  jw.u32("autoExactMisses", autoExactMisses);
+  jw.u32("autoLinkFailures", autoLinkFailures);
+  jw.string("autoTrace", s3xyJsonEscape(autoTrace));
+  jw.u32("autoAttempts", totalAttempts);
+  jw.u32("autoReconnects", totalReconnects);
+  jw.u32("autoFailures", totalFailures);
 #endif
-  j += ",\"scanning\":" + String(scanning ? "true" : "false");
-  j += ",\"scanError\":\"" + s3xyJsonEscape(discoveryError) + "\"";
-  j += ",\"devices\":[";
+  jw.boolean("scanning", scanning);
+  jw.string("scanError", s3xyJsonEscape(discoveryError));
+  jw.beginArray("devices");
 
   bool first = true;
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
@@ -3150,84 +3248,86 @@ static String s3xyStatsToJson() {
     portEXIT_CRITICAL(&s3xyMux);
     if (!used) continue;
 
-    if (!first) j += ",";
+    if (!first) j += ',';
     first = false;
-    j += "{";
-    j += "\"id\":" + String((unsigned)(i + 1));
-    j += ",\"name\":\"" + s3xyJsonEscape(name) + "\"";
-    j += ",\"address\":\"" + s3xyJsonEscape(addr) + "\"";
-    j += ",\"state\":\"" + String(s3xyStateName(state)) + "\"";
-    j += ",\"connected\":" + String(connected ? "true" : "false");
-    j += ",\"paused\":" + String(paused ? "true" : "false");
-    j += ",\"autoConnect\":" + String(deviceAutoConnect ? "true" : "false");
-    j += ",\"rssi\":" + String((int)rssi);
-    j += ",\"singleAction\":\"" + String(s3xyActionCode(singleAction)) + "\"";
-    j += ",\"doubleAction\":\"" + String(s3xyActionCode(doubleAction)) + "\"";
-    j += ",\"longAction\":\"" + String(s3xyActionCode(longAction)) + "\"";
-    j += ",\"singleLabel\":\"" + String(s3xyActionLabel(singleAction)) + "\"";
-    j += ",\"doubleLabel\":\"" + String(s3xyActionLabel(doubleAction)) + "\"";
-    j += ",\"longLabel\":\"" + String(s3xyActionLabel(longAction)) + "\"";
+    JsonWriterArduino dw(j);
+    dw.u32("id", (uint32_t)(i + 1));
+    dw.string("name", s3xyJsonEscape(name));
+    dw.string("address", s3xyJsonEscape(addr));
+    dw.string("state", s3xyStateName(state));
+    dw.boolean("connected", connected);
+    dw.boolean("paused", paused);
+    dw.boolean("autoConnect", deviceAutoConnect);
+    dw.i32("rssi", rssi);
+    dw.string("singleAction", s3xyActionCode(singleAction));
+    dw.string("doubleAction", s3xyActionCode(doubleAction));
+    dw.string("longAction", s3xyActionCode(longAction));
+    dw.string("singleLabel", s3xyActionLabel(singleAction));
+    dw.string("doubleLabel", s3xyActionLabel(doubleAction));
+    dw.string("longLabel", s3xyActionLabel(longAction));
 #if S3XY_DIAGNOSTICS_ENABLED
     char lastHex[80] = {};
     s3xyBytesToHex(last, lastLen, lastHex, sizeof(lastHex));
     const uint32_t retryMs = (nextAttempt && (int32_t)(nextAttempt - now) > 0) ? (nextAttempt - now) : 0;
-    j += ",\"addressTypeKnown\":" + String(addressTypeKnown ? "true" : "false");
-    j += ",\"addressType\":" + String((unsigned)addressType);
-    j += ",\"subscribed\":" + String(subscribed ? "true" : "false");
-    j += ",\"secure\":" + String(secure ? "true" : "false");
-    j += ",\"notifyCount\":" + String(notifyCount);
-    j += ",\"unparsedCount\":" + String(unparsedCount);
-    j += ",\"singleCount\":" + String(singleCount);
-    j += ",\"doubleCount\":" + String(doubleCount);
-    j += ",\"longCount\":" + String(longCount);
-    j += ",\"handshakeAckCount\":" + String(ackCount);
-    j += ",\"lastNotifyMs\":" + String(lastMs);
-    j += ",\"lastNotify\":\"" + String(lastHex) + "\"";
-    j += ",\"idHex\":\"" + s3xyJsonEscape(idHex) + "\"";
-    j += ",\"peerIdLen\":" + String((unsigned)peerIdLen);
-    j += ",\"identityPersistVerified\":" + String(identityPersistVerified ? "true" : "false");
-    j += ",\"autoAttempts\":" + String(attempts);
-    j += ",\"autoReconnects\":" + String(reconnects);
-    j += ",\"autoFailures\":" + String(failures);
-    j += ",\"consecutiveFailures\":" + String(consecutive);
-    j += ",\"lastDiscoverMs\":" + String(lastDiscoverMs);
-    j += ",\"lastConnectMs\":" + String(lastConnectMs);
-    j += ",\"lastReadyMs\":" + String(lastReadyMs);
-    j += ",\"lastAutoPath\":\"" + s3xyJsonEscape(lastAutoPath) + "\"";
-    j += ",\"retryInMs\":" + String(retryMs);
-    j += ",\"error\":\"" + s3xyJsonEscape(err) + "\"";
+    dw.boolean("addressTypeKnown", addressTypeKnown);
+    dw.u32("addressType", addressType);
+    dw.boolean("subscribed", subscribed);
+    dw.boolean("secure", secure);
+    dw.u32("notifyCount", notifyCount);
+    dw.u32("unparsedCount", unparsedCount);
+    dw.u32("singleCount", singleCount);
+    dw.u32("doubleCount", doubleCount);
+    dw.u32("longCount", longCount);
+    dw.u32("handshakeAckCount", ackCount);
+    dw.u32("lastNotifyMs", lastMs);
+    dw.string("lastNotify", lastHex);
+    dw.string("idHex", s3xyJsonEscape(idHex));
+    dw.u32("peerIdLen", peerIdLen);
+    dw.boolean("identityPersistVerified", identityPersistVerified);
+    dw.u32("autoAttempts", attempts);
+    dw.u32("autoReconnects", reconnects);
+    dw.u32("autoFailures", failures);
+    dw.u32("consecutiveFailures", consecutive);
+    dw.u32("lastDiscoverMs", lastDiscoverMs);
+    dw.u32("lastConnectMs", lastConnectMs);
+    dw.u32("lastReadyMs", lastReadyMs);
+    dw.string("lastAutoPath", s3xyJsonEscape(lastAutoPath));
+    dw.u32("retryInMs", retryMs);
+    dw.string("error", s3xyJsonEscape(err));
 #endif
-    j += "}";
+    dw.finish();
   }
-  j += "]";
+  jw.endArray();
 
-  j += ",\"scanResults\":[";
+  jw.beginArray("scanResults");
   for (uint8_t i = 0; i < discoveredCount; i++) {
     S3xyDiscoveredDevice d;
     portENTER_CRITICAL(&s3xyMux);
     d = s3xyDiscovered[i];
     portEXIT_CRITICAL(&s3xyMux);
-    if (i) j += ",";
-    j += "{\"address\":\"" + s3xyJsonEscape(d.address) + "\"";
-    j += ",\"name\":\"" + s3xyJsonEscape(d.name) + "\"";
-    j += ",\"rssi\":" + String((int)d.rssi);
-    j += ",\"registered\":" + String(d.registered ? "true" : "false") + "}";
+    if (i) j += ',';
+    JsonWriterArduino rw(j);
+    rw.string("address", s3xyJsonEscape(d.address));
+    rw.string("name", s3xyJsonEscape(d.name));
+    rw.i32("rssi", d.rssi);
+    rw.boolean("registered", d.registered);
+    rw.finish();
   }
-  j += "]";
+  jw.endArray();
 
   const bool ulcRequestPending = ulcPending && (int32_t)(ulcExpire - now) > 0;
-  j += ",\"ulcRequestPending\":" + String(ulcRequestPending ? "true" : "false");
-  j += ",\"ulcAccepted\":" + String(ulcAccepted);
-  j += ",\"ulcBlocked\":" + String(ulcBlocked);
-  j += ",\"ulcTxOk\":" + String(ulcTxOk);
-  j += ",\"ulcTxFail\":" + String(ulcTxFail);
-  j += ",\"ulcLastActionMs\":" + String(ulcLastAction);
-  j += ",\"ulcLastDir\":" + String((unsigned)ulcLastDir);
-  j += ",\"ulcResult\":\"" + s3xyJsonEscape(ulcResult) + "\"";
+  jw.boolean("ulcRequestPending", ulcRequestPending);
+  jw.u32("ulcAccepted", ulcAccepted);
+  jw.u32("ulcBlocked", ulcBlocked);
+  jw.u32("ulcTxOk", ulcTxOk);
+  jw.u32("ulcTxFail", ulcTxFail);
+  jw.u32("ulcLastActionMs", ulcLastAction);
+  jw.u32("ulcLastDir", ulcLastDir);
+  jw.string("ulcResult", s3xyJsonEscape(ulcResult));
 #if S3XY_DIAGNOSTICS_ENABLED
-  j += ",\"logDropped\":" + String((unsigned long)logDropped);
+  jw.u32("logDropped", logDropped);
 #endif
-  j += "}";
+  jw.finish();
   return j;
 }
 
@@ -3255,9 +3355,10 @@ static void s3xyClearLog() {
   portENTER_CRITICAL(&s3xyMux);
   s3xyLogHead = 0; s3xyLogCount = 0; s3xyLogDropped = 0;
   s3xyActionPending = 0; s3xyAccelActionPending = 0;
+  s3xyPerformanceActionPending = 0;
   s3xyResearchCaptureAPending = 0; s3xyResearchCaptureBPending = 0;
   s3xyResearchCaptureCPending = 0; s3xyResearchCaptureDPending = 0;
-  s3xyResearchCaptureResetPending = 0;
+  s3xyResearchCaptureResetPending = 0; s3xyTlsscActionPending = 0; s3xyAutoBlinkerActionPending = 0; s3xyLeftBlinkerActionPending = 0; s3xyRightBlinkerActionPending = 0;
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
     if (!s3xyDevices[i].used) continue;
     s3xyDevices[i].notifyCount = 0;

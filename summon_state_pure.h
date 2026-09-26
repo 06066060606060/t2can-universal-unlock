@@ -162,36 +162,162 @@ static inline SummonGearDecisionPure summonFreshGearPure(
   return r;
 }
 
-static inline bool summonSessionConfirmedPure(
-    uint32_t now,
-    bool acaValid, bool acaActive, uint32_t acaObservedMs, uint32_t acaFreshMs,
-    bool sprValid, bool sprActive, uint32_t sprObservedMs, uint32_t sprFreshMs) {
-  return acaValid && acaActive &&
-         summonAgeFreshPure(now, acaObservedMs, acaFreshMs) &&
-         sprValid && sprActive &&
-         summonAgeFreshPure(now, sprObservedMs, sprFreshMs);
-}
 
-enum SummonAuthorizationPure : uint8_t {
-  SUMMON_AUTH_NONE = 0,
-  SUMMON_AUTH_PARK = 1,             // current fresh P observation
-  SUMMON_AUTH_AP = 2,
-  SUMMON_AUTH_SUMMON = 3,
-  SUMMON_AUTH_PARK_LATCHED = 4,     // last real decoded gear was P
-  SUMMON_AUTH_REMOTE_FALLBACK = 5   // no decoded gear has ever been seen this boot
+// v3.6 R79 policy: injection is default-on after a stock template exists.
+// It is suspended only when manual driving is positively confirmed in Drive
+// or Reverse.
+enum TeslaGearRawPure : uint8_t {
+  TESLA_GEAR_INVALID = 0,
+  TESLA_GEAR_P = 1,
+  TESLA_GEAR_R = 2,
+  TESLA_GEAR_N = 3,
+  TESLA_GEAR_D = 4,
+  TESLA_GEAR_SNA = 7
 };
 
+// CAN-B transport priority used by the v3.6d2 R79 hardening path.
+// NORMAL has no queue reservation. PARK_STANDBY is entered only from a fresh,
+// decoded real PARK observation; the legacy 0x118-stale PARK compatibility
+// fallback is intentionally not an input here. Remote startup evidence upgrades
+// to READY before the sticky ACA+SPR Summon session reaches ACTIVE.
+enum SummonTxPriorityStatePure : uint8_t {
+  SUMMON_PRIORITY_NORMAL = 0,
+  SUMMON_PRIORITY_PARK_STANDBY = 1,
+  SUMMON_PRIORITY_READY = 2,
+  SUMMON_PRIORITY_ACTIVE = 3
+};
 
-// Summon-Unlock V2.6 compatibility gate.
-// This intentionally preserves the permissive legacy semantics requested for
-// reliable remote Summon operation:
+static inline uint8_t summonTxPriorityStatePure(
+    bool freshGearValid, uint8_t freshGearRaw,
+    bool remoteStartupEvidence, bool summonConfirmed) {
+  if (summonConfirmed) return SUMMON_PRIORITY_ACTIVE;
+  if (remoteStartupEvidence) return SUMMON_PRIORITY_READY;
+  if (freshGearValid && freshGearRaw == TESLA_GEAR_P)
+    return SUMMON_PRIORITY_PARK_STANDBY;
+  return SUMMON_PRIORITY_NORMAL;
+}
+
+static inline bool summonPriorityAllowsR79FlushPure(uint8_t state) {
+  return state == SUMMON_PRIORITY_READY || state == SUMMON_PRIORITY_ACTIVE;
+}
+
+static inline bool summonPriorityNonR79AdmissionPure(
+    uint8_t state, uint32_t queued, uint32_t parkLimit, uint32_t summonLimit) {
+  if (state == SUMMON_PRIORITY_PARK_STANDBY) return queued < parkLimit;
+  if (state == SUMMON_PRIORITY_READY || state == SUMMON_PRIORITY_ACTIVE)
+    return queued < summonLimit;
+  return true;
+}
+
+static inline uint16_t r79RetryDelayMsPure(uint8_t retryIndex) {
+  switch (retryIndex) {
+    case 0: return 5;
+    case 1: return 15;
+    case 2: return 30;
+    default: return 0;
+  }
+}
+
+
+enum R79TxReasonPure : uint8_t {
+  R79_TX_REASON_DEFAULT = 0,
+  R79_TX_REASON_SUMMON = 1,
+  R79_TX_REASON_AUTOPILOT = 2,
+  R79_TX_REASON_MANUAL_D = 3,
+  R79_TX_REASON_MANUAL_R = 4
+};
+
+struct R79ManualSuppressionPure {
+  bool active;
+  uint8_t gearRaw;
+};
+
+// Manual suppression is hysteretic. A definite D/R + manual DAS observation
+// can enter suppression only when no fresh remote-start evidence is present.
+// Once positively confirmed, transient unknown/stale DAS or gear observations
+// do not bounce R79 ACTIVE. AP, a confirmed Summon session, or explicit P/N
+// exits suppression immediately.
+static inline void r79ManualSuppressionUpdatePure(
+    R79ManualSuppressionPure &state,
+    bool gearValid, uint8_t gearRaw,
+    bool dasValid, bool apActive, bool manualState,
+    bool summonConfirmed, bool remoteStartupEvidence) {
+  if (apActive || summonConfirmed) {
+    state.active = false;
+    state.gearRaw = TESLA_GEAR_INVALID;
+    return;
+  }
+
+  if (gearValid && (gearRaw == TESLA_GEAR_P || gearRaw == TESLA_GEAR_N)) {
+    state.active = false;
+    state.gearRaw = TESLA_GEAR_INVALID;
+    return;
+  }
+
+  if (gearValid && (gearRaw == TESLA_GEAR_D || gearRaw == TESLA_GEAR_R)) {
+    if (state.active) {
+      state.gearRaw = gearRaw;
+      return;
+    }
+    if (dasValid && manualState && !remoteStartupEvidence) {
+      state.active = true;
+      state.gearRaw = gearRaw;
+    }
+  }
+}
+
+struct R79TxDecisionPure {
+  bool txEnabled;
+  bool manualSuppressed;
+  uint8_t reason;
+};
+
+static inline R79TxDecisionPure r79TxDecisionPure(
+    bool apActive, bool summonConfirmed,
+    const R79ManualSuppressionPure &manual) {
+  R79TxDecisionPure r = {true, false, R79_TX_REASON_DEFAULT};
+  // AP reason wins if both flags are ever simultaneously present. This keeps
+  // AUTOSTEER/NOA telemetry honest and prevents stale Summon evidence from
+  // labeling an active AP session as SUMMON.
+  if (apActive) {
+    r.reason = R79_TX_REASON_AUTOPILOT;
+    return r;
+  }
+  if (summonConfirmed) {
+    r.reason = R79_TX_REASON_SUMMON;
+    return r;
+  }
+  if (manual.active) {
+    r.txEnabled = false;
+    r.manualSuppressed = true;
+    r.reason = manual.gearRaw == TESLA_GEAR_R
+        ? R79_TX_REASON_MANUAL_R
+        : R79_TX_REASON_MANUAL_D;
+  }
+  return r;
+}
+
+static inline const char *r79TxReasonNamePure(uint8_t reason) {
+  switch (reason) {
+    case R79_TX_REASON_SUMMON: return "SUMMON";
+    case R79_TX_REASON_AUTOPILOT: return "AUTOPILOT";
+    case R79_TX_REASON_MANUAL_D: return "MANUAL D";
+    case R79_TX_REASON_MANUAL_R: return "MANUAL R";
+    default: return "DEFAULT";
+  }
+}
+
+
+// Summon Monitor V2.6-compatible state model.
+// This preserves the legacy Park/Summon/AP telemetry and monitor semantics.
+// v3.6 R79 TX no longer uses this positive authorization as its transmit gate:
 //   * boot begins PARK-open;
 //   * 0x118 P opens, D/R/N closes;
 //   * after 0x118 silence > timeout, PARK opens again;
 //   * 0x186 may update gear only when 0x118 is absent/stale and the profile
 //     explicitly validates that fallback;
 //   * any non-zero SPR latches until ACA drops or PARK is seen with ACA inactive;
-//   * AP independently authorizes R79 even while gear is D/R/N.
+//   * AP state remains separate from the confirmed Summon RX session.
 struct SummonV26CompatStatePure {
   bool parked;
   bool summoning;
@@ -200,11 +326,6 @@ struct SummonV26CompatStatePure {
   uint32_t last118Ms;
 };
 
-static inline SummonV26CompatStatePure summonV26CompatInitialPure() {
-  SummonV26CompatStatePure s = {};
-  s.parked = true;
-  return s;
-}
 
 static inline void summonV26CompatRecomputeSessionPure(
     SummonV26CompatStatePure &s) {
@@ -260,155 +381,8 @@ static inline void summonV26CompatTickPure(
   summonV26CompatRecomputeSessionPure(s);
 }
 
-static inline uint8_t summonV26CompatAuthorizationPure(
-    const SummonV26CompatStatePure &s, bool apActive) {
-  if (s.summoning) return SUMMON_AUTH_SUMMON;
-  if (apActive) return SUMMON_AUTH_AP;
-  if (s.parked) return SUMMON_AUTH_PARK;
-  return SUMMON_AUTH_NONE;
-}
-
-// V2.6 was a single-CAN implementation. In Universal, preserve profile-aware
-// source routing but require only the actual 0x3FD transport bus for R79 TX.
-static inline uint8_t summonV26CompatRequiredTxFreshMaskPure(
-    const SummonRoutePure &route) {
-  if (!route.valid) return SUMMON_BUS_NONE;
-  return route.transportBusMask;
-}
-
-static inline bool summonRemoteFallbackAllowedPure(
-    const SummonRoutePure &route, uint8_t confirmedGearState) {
-  return route.valid && confirmedGearState == SUMMON_CONFIRMED_GEAR_UNKNOWN;
-}
-
-static inline bool summonParkEntryAllowedPure(
-    bool freshParked, uint8_t confirmedGearState,
-    bool remoteFallbackAllowed) {
-  if (freshParked) return true;
-  if (confirmedGearState == SUMMON_CONFIRMED_GEAR_PARK) return true;
-  return confirmedGearState == SUMMON_CONFIRMED_GEAR_UNKNOWN &&
-         remoteFallbackAllowed;
-}
-
-static inline uint8_t summonAuthorizationPure(
-    bool freshParked, uint8_t confirmedGearState,
-    bool remoteFallbackAllowed, bool apActive,
-    bool sessionConfirmed, bool sessionGraceActive) {
-  if (sessionConfirmed || sessionGraceActive) return SUMMON_AUTH_SUMMON;
-  // AP remains authoritative even when the last confirmed gear was D/R/N or
-  // the gear source goes silent. This preserves R79 while Autopilot is active.
-  if (apActive) return SUMMON_AUTH_AP;
-  if (freshParked) return SUMMON_AUTH_PARK;
-  if (confirmedGearState == SUMMON_CONFIRMED_GEAR_PARK)
-    return SUMMON_AUTH_PARK_LATCHED;
-  if (confirmedGearState == SUMMON_CONFIRMED_GEAR_UNKNOWN &&
-      remoteFallbackAllowed)
-    return SUMMON_AUTH_REMOTE_FALLBACK;
-  return SUMMON_AUTH_NONE;
-}
-
-// YL normally requires both Party (authorization source) and VH (transport).
-// Once PARK has been confirmed and latched—or before any gear has been seen on
-// a cold remote wake—the R79-only compatibility path needs only the actual
-// 0x3FD transport bus. Standard 3/Y already uses CAN B for every source.
-static inline uint8_t summonRequiredTxFreshMaskPure(
-    const SummonRoutePure &route, uint8_t authorization) {
-  (void)authorization;
-  return summonV26CompatRequiredTxFreshMaskPure(route);
-}
-
-static inline bool summonTxBarrierAllowsPure(
-    uint32_t currentEpoch, uint8_t freshMask, uint32_t expectedEpoch,
-    uint8_t requiredFreshMask) {
-  if (requiredFreshMask == SUMMON_BUS_NONE) return false;
-  return currentEpoch == expectedEpoch &&
-         (uint8_t)(freshMask & requiredFreshMask) == requiredFreshMask;
-}
-
-// Preserve freshness only for a bus that was not reset and is still physically
-// fresh at the recovery boundary. This prevents an old mask bit from crossing a
-// local recovery while avoiding an unnecessary wait for the unaffected bus.
-static inline uint8_t summonPreservedFreshMaskPure(
-    uint8_t currentFreshMask, uint8_t invalidatedBusMask,
-    uint8_t physicallyFreshMask) {
-  return (uint8_t)(currentFreshMask & (uint8_t)~invalidatedBusMask & physicallyFreshMask);
-}
 
 
-enum R79PendingKindPure : uint8_t {
-  R79_PENDING_NONE = 0,
-  R79_PENDING_IMMEDIATE = 1,
-  R79_PENDING_PERIODIC = 2
-};
-
-struct R79PendingPure {
-  bool pending;
-  uint8_t kind;
-  uint32_t requestedMs;
-  uint32_t lastAttemptMs;
-  uint32_t sequence;
-};
-
-// One-deep coalescing queue. Immediate work outranks periodic maintenance.
-// Every request advances the sequence so an older in-flight completion cannot
-// clear work requested while the transmit was running.
-static inline void r79PendingRequestPure(
-    R79PendingPure &state, uint8_t kind, uint32_t now) {
-  if (kind != R79_PENDING_IMMEDIATE && kind != R79_PENDING_PERIODIC) return;
-  const bool wasPending = state.pending;
-  const uint32_t oldestRequestMs = state.requestedMs;
-  state.sequence++;
-  if (state.sequence == 0) state.sequence = 1;
-  state.pending = true;
-  if (kind == R79_PENDING_IMMEDIATE || state.kind == R79_PENDING_NONE) {
-    state.kind = kind;
-  }
-  // Preserve the first unresolved request time across coalescing. This makes
-  // wake-convergence latency represent the whole wait, not merely the newest
-  // stock refresh that happened to arrive while the prerequisite was missing.
-  state.requestedMs = wasPending && oldestRequestMs != 0 ? oldestRequestMs : now;
-  // A newly requested/coalesced item gets one immediate attempt. Failed attempts
-  // are subsequently rate-limited by r79PendingReadyPure().
-  state.lastAttemptMs = 0;
-}
-
-static inline bool r79PendingReadyPure(
-    const R79PendingPure &state, uint32_t now, uint32_t retryMs) {
-  if (!state.pending) return false;
-  return state.lastAttemptMs == 0 ||
-         (uint32_t)(now - state.lastAttemptMs) >= retryMs;
-}
-
-static inline void r79PendingMarkAttemptPure(
-    R79PendingPure &state, uint32_t now) {
-  if (state.pending) state.lastAttemptMs = now;
-}
-
-static inline void r79PendingCompletePure(
-    R79PendingPure &state, uint32_t completedSequence) {
-  if (!state.pending || state.sequence != completedSequence) return;
-  state.pending = false;
-  state.kind = R79_PENDING_NONE;
-  state.requestedMs = 0;
-  state.lastAttemptMs = 0;
-}
-
-static inline const char *r79PendingKindNamePure(uint8_t kind) {
-  switch (kind) {
-    case R79_PENDING_IMMEDIATE: return "IMMEDIATE";
-    case R79_PENDING_PERIODIC: return "PERIODIC";
-    default: return "NONE";
-  }
-}
-
-static inline const char *summonBusMaskNamePure(uint8_t mask) {
-  switch (mask) {
-    case SUMMON_BUS_A: return "CAN_A";
-    case SUMMON_BUS_B: return "CAN_B";
-    case SUMMON_BUS_BOTH: return "CAN_A+B";
-    default: return "NONE";
-  }
-}
 
 static inline const char *summonGearSourceNamePure(uint8_t source) {
   switch (source) {
@@ -423,16 +397,5 @@ static inline const char *summonConfirmedGearNamePure(uint8_t state) {
     case SUMMON_CONFIRMED_GEAR_PARK: return "PARK";
     case SUMMON_CONFIRMED_GEAR_NON_PARK: return "NON_PARK";
     default: return "UNKNOWN";
-  }
-}
-
-static inline const char *summonAuthorizationNamePure(uint8_t auth) {
-  switch (auth) {
-    case SUMMON_AUTH_PARK: return "PARK";
-    case SUMMON_AUTH_AP: return "AP";
-    case SUMMON_AUTH_SUMMON: return "SUMMON";
-    case SUMMON_AUTH_PARK_LATCHED: return "PARK_LATCHED";
-    case SUMMON_AUTH_REMOTE_FALLBACK: return "REMOTE_STANDBY";
-    default: return "NONE";
   }
 }

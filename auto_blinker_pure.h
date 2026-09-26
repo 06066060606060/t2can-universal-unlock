@@ -1,6 +1,114 @@
 #pragma once
 #include <stdint.h>
 
+static constexpr uint8_t BLINKA_NOA_STABILIZE_MIN_S_PURE = 1u;
+static constexpr uint8_t BLINKA_NOA_STABILIZE_MAX_S_PURE = 20u;
+static constexpr uint8_t BLINKA_NOA_STABILIZE_DEFAULT_S_PURE = 10u;
+static constexpr uint8_t BLINKA_CANCEL_PAUSE_MIN_S_PURE = 10u;
+static constexpr uint8_t BLINKA_CANCEL_PAUSE_MAX_S_PURE = 100u;
+static constexpr uint8_t BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE = 20u;
+
+enum AutoBlinkerCancelActionPure : uint8_t {
+  AUTO_BLINKER_CANCEL_REJECTED_PURE = 0,
+  AUTO_BLINKER_CANCEL_START_PAUSE_PURE = 1,
+  AUTO_BLINKER_CANCEL_RELEASE_PAUSE_PURE = 2
+};
+
+struct AutoBlinkerTimingStatePure {
+  bool noaActive;
+  uint32_t noaEnteredAtMs;
+  uint32_t noaReadyAtMs;
+  bool cancelPauseActive;
+  uint32_t cancelPauseUntilMs;
+};
+
+static inline uint8_t autoBlinkerNoaStabilizationSecondsSanitizePure(
+    uint8_t seconds) {
+  return seconds >= BLINKA_NOA_STABILIZE_MIN_S_PURE &&
+                 seconds <= BLINKA_NOA_STABILIZE_MAX_S_PURE
+             ? seconds
+             : BLINKA_NOA_STABILIZE_DEFAULT_S_PURE;
+}
+
+static inline uint8_t autoBlinkerCancelPauseSecondsSanitizePure(
+    uint8_t seconds) {
+  return seconds >= BLINKA_CANCEL_PAUSE_MIN_S_PURE &&
+                 seconds <= BLINKA_CANCEL_PAUSE_MAX_S_PURE
+             ? seconds
+             : BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE;
+}
+
+static inline bool autoBlinkerDeadlineReachedPure(uint32_t nowMs,
+                                                  uint32_t deadlineMs) {
+  return (int32_t)(nowMs - deadlineMs) >= 0;
+}
+
+static inline void autoBlinkerObserveNoaPure(
+    AutoBlinkerTimingStatePure &state, uint32_t nowMs,
+    bool stateValid, bool noaActive, uint8_t stabilizationSeconds) {
+  if (!stateValid || !noaActive) {
+    state.noaActive = false;
+    state.noaEnteredAtMs = 0;
+    state.noaReadyAtMs = 0;
+    return;
+  }
+  if (state.noaActive) return;
+  const uint8_t seconds =
+      autoBlinkerNoaStabilizationSecondsSanitizePure(stabilizationSeconds);
+  state.noaActive = true;
+  state.noaEnteredAtMs = nowMs;
+  state.noaReadyAtMs = nowMs + (uint32_t)seconds * 1000u;
+}
+
+static inline bool autoBlinkerNoaReadyPure(
+    const AutoBlinkerTimingStatePure &state, uint32_t nowMs) {
+  return state.noaActive &&
+         autoBlinkerDeadlineReachedPure(nowMs, state.noaReadyAtMs);
+}
+
+static inline uint32_t autoBlinkerNoaRemainingMsPure(
+    const AutoBlinkerTimingStatePure &state, uint32_t nowMs) {
+  if (!state.noaActive || autoBlinkerNoaReadyPure(state, nowMs)) return 0;
+  return (uint32_t)(state.noaReadyAtMs - nowMs);
+}
+
+static inline bool autoBlinkerPauseActivePure(
+    AutoBlinkerTimingStatePure &state, uint32_t nowMs) {
+  if (!state.cancelPauseActive) return false;
+  if (!autoBlinkerDeadlineReachedPure(nowMs, state.cancelPauseUntilMs))
+    return true;
+  state.cancelPauseActive = false;
+  state.cancelPauseUntilMs = 0;
+  return false;
+}
+
+static inline uint32_t autoBlinkerPauseRemainingMsPure(
+    AutoBlinkerTimingStatePure &state, uint32_t nowMs) {
+  if (!autoBlinkerPauseActivePure(state, nowMs)) return 0;
+  return (uint32_t)(state.cancelPauseUntilMs - nowMs);
+}
+
+static inline AutoBlinkerCancelActionPure autoBlinkerCancelTogglePure(
+    AutoBlinkerTimingStatePure &state, uint32_t nowMs,
+    bool cancelEligible, uint8_t pauseSeconds) {
+  if (autoBlinkerPauseActivePure(state, nowMs)) {
+    state.cancelPauseActive = false;
+    state.cancelPauseUntilMs = 0;
+    return AUTO_BLINKER_CANCEL_RELEASE_PAUSE_PURE;
+  }
+  if (!cancelEligible) return AUTO_BLINKER_CANCEL_REJECTED_PURE;
+  const uint8_t seconds =
+      autoBlinkerCancelPauseSecondsSanitizePure(pauseSeconds);
+  state.cancelPauseActive = true;
+  state.cancelPauseUntilMs = nowMs + (uint32_t)seconds * 1000u;
+  return AUTO_BLINKER_CANCEL_START_PAUSE_PURE;
+}
+
+static inline void autoBlinkerTimingResetPure(
+    AutoBlinkerTimingStatePure &state) {
+  state = {};
+}
+
 static constexpr uint8_t SCCM249_CKSUM_CTR[16] = {
   0x9B, 0xE8, 0x2A, 0xD3, 0xD3, 0x83, 0x4C, 0x5E,
   0x3F, 0x5E, 0xE2, 0x28, 0x3A, 0x13, 0xAF, 0xCE
