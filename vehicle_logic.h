@@ -1268,7 +1268,7 @@ static void handle102LaneChangeCancel(const uint8_t *data, uint8_t dlc) {
   const uint32_t now = (uint32_t)millis();
   if (!autoBlinkerNOAGateOpen(now) || visualDebugLastMs == 0 ||
       (uint32_t)(now - visualDebugLastMs) > ULC_REQUEST_FRESH_MS ||
-      (visualBehaviorType != 2 && visualBehaviorType != 3)) {
+      (visualBehaviorType != 1 && visualBehaviorType != 2 && visualBehaviorType != 3)) {
     portENTER_CRITICAL(&blinkAMux); doorCancelBlocked++; portEXIT_CRITICAL(&blinkAMux);
     return;
   }
