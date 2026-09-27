@@ -26,7 +26,7 @@
 - Performance and resource optimizations
 - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md)
 
-## 📋3.0 Release Highlights  
+## 📋v3 Release Highlights  
 
 - **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
 - **multiple operating modes:**  
