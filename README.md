@@ -14,7 +14,7 @@
 
 | 📅 Release | 👨‍💻 Firmware rewrite | 🌐 Dashboard | 📜 History |
 |---|---|---|---|
-| 26 September 2026 | LP_YL | [Open dashboard](https://06066060606060.github.io/t2can-universal-unlock/) | [CHANGELOG.md](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md) |
+| 27 September 2026 | LP_YL | [Open dashboard demo](https://06066060606060.github.io/t2can-universal-unlock/) | [CHANGELOG.md](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md) |
 
 ## ✨ What’s new in v3.7.2
 
