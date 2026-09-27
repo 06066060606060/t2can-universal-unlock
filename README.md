@@ -8,7 +8,7 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.7.*
+# T2CAN Universal Unlock v3.7.2
 
 **Major Universal Release**  
 **Release date:** 26 September 2026  
