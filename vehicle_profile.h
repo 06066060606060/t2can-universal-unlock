@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "ulc_stalk_confirm_pure.h"
 
 enum VehicleProfileId : uint8_t {
   VEHICLE_PROFILE_NONE = 0,
@@ -26,7 +27,6 @@ enum TurnSignalVariant : uint8_t {
 struct VehicleProfileSpec {
   VehicleProfileId id;
   const char *name;
-  const char *shortName;
   VehicleCanTopology defaultTopology;
   TurnSignalVariant defaultTurn;
   bool tlsscRestoreSupported;
@@ -34,11 +34,11 @@ struct VehicleProfileSpec {
 
 static inline const VehicleProfileSpec *vehicleProfileSpec(uint8_t id) {
   static const VehicleProfileSpec specs[] = {
-    {VEHICLE_MODEL_YL, "Model Y L", "YL", VEHICLE_TOPOLOGY_YL_PARTY_VH, TURN_SIGNAL_STALK, false},
-    {VEHICLE_MODEL_Y_JUNIPER, "Model Y Juniper", "YJ", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
-    {VEHICLE_MODEL_Y_LEGACY, "Model Y Legacy", "Y", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
-    {VEHICLE_MODEL_3_HIGHLAND, "Model 3 Highland", "3H", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_UNSET, true},
-    {VEHICLE_MODEL_3_LEGACY, "Model 3 Legacy", "3", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true}
+    {VEHICLE_MODEL_YL, "Model Y L", VEHICLE_TOPOLOGY_YL_PARTY_VH, TURN_SIGNAL_STALK, false},
+    {VEHICLE_MODEL_Y_JUNIPER, "Model Y Juniper", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
+    {VEHICLE_MODEL_Y_LEGACY, "Model Y Legacy", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
+    {VEHICLE_MODEL_3_HIGHLAND, "Model 3 Highland", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_UNSET, true},
+    {VEHICLE_MODEL_3_LEGACY, "Model 3 Legacy", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true}
   };
   for (const auto &s : specs) if ((uint8_t)s.id == id) return &s;
   return nullptr;
@@ -63,9 +63,6 @@ static inline bool vehicleProfileTopologyValid(uint8_t id, uint8_t topology) {
 
 // Compatibility helper: this is the legacy/default topology for a model, not
 // the selected runtime topology. Runtime code should use activeVehicleTopology.
-static inline VehicleCanTopology vehicleProfileTopology(uint8_t id) {
-  return vehicleProfileDefaultTopology(id);
-}
 
 static inline TurnSignalVariant vehicleProfileDefaultTurn(uint8_t id) {
   const VehicleProfileSpec *s = vehicleProfileSpec(id);
@@ -89,6 +86,11 @@ static inline bool vehicleProfileCanBIsChassis(uint8_t id, uint8_t topology) {
           topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS);
 }
 
+static inline bool vehicleProfileApRightScrollSupported(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology) &&
+         (id == VEHICLE_MODEL_YL || vehicleProfileCanBIsChassis(id, topology));
+}
+
 static inline bool vehicleProfileNagSupported(uint8_t id, uint8_t topology) {
   return vehicleProfileCanAIsParty(id, topology);
 }
@@ -106,6 +108,14 @@ static inline bool vehicleProfileEuUnlockSupported(uint8_t id, uint8_t topology)
   return vehicleProfileTopologyValid(id, topology);
 }
 
+// LAB 0x3FD mux1 bit43 DMS/NAG experiment rides the same CAN-B 0x3FD/R79
+// transport as EU Unlock. Therefore it is supported on every currently valid
+// Universal profile/topology that has that route: Model Y L, Model Y Juniper,
+// Model Y Legacy, Model 3 Highland, and Model 3 Legacy.
+static inline bool vehicleProfileDmsNagSupported(uint8_t id, uint8_t topology) {
+  return vehicleProfileEuUnlockSupported(id, topology);
+}
+
 static inline bool vehicleProfileBodyControlsSupported(uint8_t id, uint8_t topology) {
   return vehicleProfileTopologyValid(id, topology) &&
          topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
@@ -121,6 +131,19 @@ static inline bool vehicleProfilePedalMapSupported(uint8_t id, uint8_t topology)
   return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
 }
 
+// AP Drive Profile uses the same supported 0x334 route as PedalMap. YL/VH is
+// real-car validated; Standard Model 3/Y Body+Chassis uses the Body 0x334 path.
+// Party+Chassis has no Body 0x334 route and remains blocked.
+static inline bool vehicleProfileApDriveProfileSupported(uint8_t id, uint8_t topology) {
+  return vehicleProfilePedalMapSupported(id, topology);
+}
+
+// Experimental 0x3F8 UI_ulcStalkConfirm override is supported on every valid
+// Universal dual-CAN topology. Model YL keeps its fixed validated route; every
+// other Model 3/Y profile can select physical CAN A or CAN B in LAB, default B.
+static inline bool vehicleProfileUlcNoConfirmSupported(uint8_t id, uint8_t topology) {
+  return ulcNoConfirmSupportedPure(vehicleProfileTopologyValid(id, topology));
+}
 
 
 // On Standard Party+Chassis, NAG injection is on CAN A but the AP gate is
@@ -165,10 +188,6 @@ static inline const char *vehicleProfileName(uint8_t id) {
   return s ? s->name : "UNSET";
 }
 
-static inline const char *vehicleProfileShortName(uint8_t id) {
-  const VehicleProfileSpec *s = vehicleProfileSpec(id);
-  return s ? s->shortName : "--";
-}
 
 static inline const char *vehicleProfileTopologyName(uint8_t topology) {
   switch (topology) {
@@ -228,9 +247,11 @@ static inline bool activeCanBIsChassis() {
   return vehicleProfileCanBIsChassis(activeVehicleProfile, activeVehicleTopology);
 }
 
-static inline bool activeProfileIsStandard3Y() {
-  return activeVehicleProfile != VEHICLE_MODEL_YL && vehicleProfileValid(activeVehicleProfile);
+static inline bool activeProfileApRightScrollSupported() {
+  return vehicleProfileApRightScrollSupported(
+      activeVehicleProfile, activeVehicleTopology);
 }
+
 
 static inline bool activeProfileNagSupported() {
   return vehicleProfileNagSupported(activeVehicleProfile, activeVehicleTopology);
@@ -248,7 +269,13 @@ static inline bool activeProfilePedalMapSupported() {
   return vehicleProfilePedalMapSupported(activeVehicleProfile, activeVehicleTopology);
 }
 
+static inline bool activeProfileApDriveProfileSupported() {
+  return vehicleProfileApDriveProfileSupported(activeVehicleProfile, activeVehicleTopology);
+}
 
+static inline bool activeProfileUlcNoConfirmSupported() {
+  return vehicleProfileUlcNoConfirmSupported(activeVehicleProfile, activeVehicleTopology);
+}
 
 static inline bool activeProfileNagGateDependsOnCanB() {
   return vehicleProfileNagGateDependsOnCanB(activeVehicleProfile, activeVehicleTopology);
@@ -256,6 +283,10 @@ static inline bool activeProfileNagGateDependsOnCanB() {
 
 static inline bool activeProfileEuUnlockSupported() {
   return vehicleProfileEuUnlockSupported(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileDmsNagSupported() {
+  return vehicleProfileDmsNagSupported(activeVehicleProfile, activeVehicleTopology);
 }
 
 static inline bool activeProfileTlsscRestoreSupported() {
@@ -329,17 +360,4 @@ static bool vehicleProfileSave(uint8_t id, uint8_t topology, uint8_t requestedTu
   return ok1 && ok2 && ok3 && ok4 && ok5;
 }
 
-static bool vehicleProfileClearOnly() {
-  Preferences p;
-  if (!p.begin(VEHICLE_PROFILE_NAMESPACE, false)) return false;
-  const bool ok1 = p.remove(VEHICLE_PROFILE_KEY);
-  const bool ok2 = p.remove(VEHICLE_TOPOLOGY_KEY);
-  const bool ok3 = p.remove(VEHICLE_TURN_KEY);
-  p.end();
-  activeVehicleProfile = VEHICLE_PROFILE_NONE;
-  activeVehicleTopology = VEHICLE_TOPOLOGY_NONE;
-  activeTurnSignalVariant = TURN_SIGNAL_UNSET;
-  vehicleProfileSetupMode = true;
-  return ok1 || ok2 || ok3;
-}
 #endif

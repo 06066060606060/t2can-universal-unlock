@@ -1,6 +1,209 @@
 #pragma once
 #include <stdint.h>
 
+static constexpr uint8_t BLINKA_NOA_STABILIZE_MIN_S_PURE = 1u;
+static constexpr uint8_t BLINKA_NOA_STABILIZE_MAX_S_PURE = 20u;
+static constexpr uint8_t BLINKA_NOA_STABILIZE_DEFAULT_S_PURE = 10u;
+static constexpr uint32_t BLINKA_NOA_EXIT_CONFIRM_MS_PURE = 2000u;
+static constexpr uint8_t BLINKA_CANCEL_PAUSE_MIN_S_PURE = 10u;
+static constexpr uint8_t BLINKA_CANCEL_PAUSE_MAX_S_PURE = 100u;
+static constexpr uint8_t BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE = 20u;
+
+enum AutoBlinkerCancelActionPure : uint8_t {
+  AUTO_BLINKER_CANCEL_REJECTED_PURE = 0,
+  AUTO_BLINKER_CANCEL_START_PAUSE_PURE = 1,
+  AUTO_BLINKER_CANCEL_RELEASE_PAUSE_PURE = 2
+};
+
+enum AutoBlinkerNoaPhasePure : uint8_t {
+  AUTO_BLINKER_NOA_INACTIVE_PURE = 0,
+  AUTO_BLINKER_NOA_STABILIZING_PURE = 1,
+  AUTO_BLINKER_NOA_READY_PURE = 2,
+  AUTO_BLINKER_NOA_EXIT_WAIT_PURE = 3
+};
+
+// NOA session entry/exit and stabilization are intentionally independent of
+// the manual cancel pause. A session becomes READY once, remains READY across
+// sub-two-second raw-NOA dropouts, and is re-armed only after a confirmed exit.
+struct AutoBlinkerNoaSessionStatePure {
+  bool sessionActive;
+  uint32_t enteredAtMs;
+  uint32_t readyAtMs;
+  bool exitPending;
+  uint32_t exitStartedAtMs;
+  uint32_t exitConfirmAtMs;
+};
+
+struct AutoBlinkerCancelPauseStatePure {
+  bool active;
+  uint32_t untilMs;
+};
+
+static inline uint8_t autoBlinkerNoaStabilizationSecondsSanitizePure(
+    uint8_t seconds) {
+  return seconds >= BLINKA_NOA_STABILIZE_MIN_S_PURE &&
+                 seconds <= BLINKA_NOA_STABILIZE_MAX_S_PURE
+             ? seconds
+             : BLINKA_NOA_STABILIZE_DEFAULT_S_PURE;
+}
+
+static inline uint8_t autoBlinkerCancelPauseSecondsSanitizePure(
+    uint8_t seconds) {
+  return seconds >= BLINKA_CANCEL_PAUSE_MIN_S_PURE &&
+                 seconds <= BLINKA_CANCEL_PAUSE_MAX_S_PURE
+             ? seconds
+             : BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE;
+}
+
+static inline bool autoBlinkerDeadlineReachedPure(uint32_t nowMs,
+                                                  uint32_t deadlineMs) {
+  return (int32_t)(nowMs - deadlineMs) >= 0;
+}
+
+static inline void autoBlinkerNoaSessionResetPure(
+    AutoBlinkerNoaSessionStatePure &state) {
+  state = {};
+}
+
+static inline void autoBlinkerNoaSessionStartPure(
+    AutoBlinkerNoaSessionStatePure &state, uint32_t nowMs,
+    uint8_t stabilizationSeconds) {
+  const uint8_t seconds =
+      autoBlinkerNoaStabilizationSecondsSanitizePure(stabilizationSeconds);
+  state = {};
+  state.sessionActive = true;
+  state.enteredAtMs = nowMs;
+  state.readyAtMs = nowMs + (uint32_t)seconds * 1000u;
+}
+
+static inline AutoBlinkerNoaPhasePure autoBlinkerNoaPhasePure(
+    const AutoBlinkerNoaSessionStatePure &state, uint32_t nowMs) {
+  if (!state.sessionActive) return AUTO_BLINKER_NOA_INACTIVE_PURE;
+  if (state.exitPending) {
+    return autoBlinkerDeadlineReachedPure(nowMs, state.exitConfirmAtMs)
+               ? AUTO_BLINKER_NOA_INACTIVE_PURE
+               : AUTO_BLINKER_NOA_EXIT_WAIT_PURE;
+  }
+  return autoBlinkerDeadlineReachedPure(nowMs, state.readyAtMs)
+             ? AUTO_BLINKER_NOA_READY_PURE
+             : AUTO_BLINKER_NOA_STABILIZING_PURE;
+}
+
+static inline void autoBlinkerObserveNoaPure(
+    AutoBlinkerNoaSessionStatePure &state, uint32_t nowMs,
+    bool stateValid, bool noaActive, uint8_t stabilizationSeconds) {
+  if (!stateValid) {
+    autoBlinkerNoaSessionResetPure(state);
+    return;
+  }
+
+  if (noaActive) {
+    if (!state.sessionActive) {
+      autoBlinkerNoaSessionStartPure(state, nowMs, stabilizationSeconds);
+      return;
+    }
+    if (!state.exitPending) return;
+    if (autoBlinkerDeadlineReachedPure(nowMs, state.exitConfirmAtMs)) {
+      autoBlinkerNoaSessionStartPure(state, nowMs, stabilizationSeconds);
+      return;
+    }
+    state.exitPending = false;
+    state.exitStartedAtMs = 0;
+    state.exitConfirmAtMs = 0;
+    return;
+  }
+
+  if (!state.sessionActive) return;
+  if (!state.exitPending) {
+    state.exitPending = true;
+    state.exitStartedAtMs = nowMs;
+    state.exitConfirmAtMs = nowMs + BLINKA_NOA_EXIT_CONFIRM_MS_PURE;
+    return;
+  }
+  if (autoBlinkerDeadlineReachedPure(nowMs, state.exitConfirmAtMs))
+    autoBlinkerNoaSessionResetPure(state);
+}
+
+static inline bool autoBlinkerNoaReadyPure(
+    const AutoBlinkerNoaSessionStatePure &state, uint32_t nowMs) {
+  return autoBlinkerNoaPhasePure(state, nowMs) ==
+         AUTO_BLINKER_NOA_READY_PURE;
+}
+
+static inline uint32_t autoBlinkerNoaRemainingMsPure(
+    const AutoBlinkerNoaSessionStatePure &state, uint32_t nowMs) {
+  if (autoBlinkerNoaPhasePure(state, nowMs) !=
+      AUTO_BLINKER_NOA_STABILIZING_PURE)
+    return 0;
+  return (uint32_t)(state.readyAtMs - nowMs);
+}
+
+static inline uint32_t autoBlinkerNoaExitRemainingMsPure(
+    const AutoBlinkerNoaSessionStatePure &state, uint32_t nowMs) {
+  if (autoBlinkerNoaPhasePure(state, nowMs) !=
+      AUTO_BLINKER_NOA_EXIT_WAIT_PURE)
+    return 0;
+  return (uint32_t)(state.exitConfirmAtMs - nowMs);
+}
+
+// Returns true only when an active STABILIZING session received a new
+// dashboard value and its deadline was replaced from nowMs. READY sessions
+// stay open until a confirmed NOA exit; inactive sessions use the saved value
+// on their next entry.
+static inline bool autoBlinkerNoaReconfigurePure(
+    AutoBlinkerNoaSessionStatePure &state, uint32_t nowMs,
+    uint8_t stabilizationSeconds) {
+  if (!state.sessionActive) return false;
+  if (state.exitPending &&
+      autoBlinkerDeadlineReachedPure(nowMs, state.exitConfirmAtMs)) {
+    autoBlinkerNoaSessionResetPure(state);
+    return false;
+  }
+  if (autoBlinkerDeadlineReachedPure(nowMs, state.readyAtMs)) return false;
+  const uint8_t seconds =
+      autoBlinkerNoaStabilizationSecondsSanitizePure(stabilizationSeconds);
+  state.enteredAtMs = nowMs;
+  state.readyAtMs = nowMs + (uint32_t)seconds * 1000u;
+  return true;
+}
+
+static inline bool autoBlinkerPauseActivePure(
+    AutoBlinkerCancelPauseStatePure &state, uint32_t nowMs) {
+  if (!state.active) return false;
+  if (!autoBlinkerDeadlineReachedPure(nowMs, state.untilMs))
+    return true;
+  state.active = false;
+  state.untilMs = 0;
+  return false;
+}
+
+static inline uint32_t autoBlinkerPauseRemainingMsPure(
+    AutoBlinkerCancelPauseStatePure &state, uint32_t nowMs) {
+  if (!autoBlinkerPauseActivePure(state, nowMs)) return 0;
+  return (uint32_t)(state.untilMs - nowMs);
+}
+
+static inline AutoBlinkerCancelActionPure autoBlinkerCancelTogglePure(
+    AutoBlinkerCancelPauseStatePure &state, uint32_t nowMs,
+    bool cancelEligible, uint8_t pauseSeconds) {
+  if (autoBlinkerPauseActivePure(state, nowMs)) {
+    state.active = false;
+    state.untilMs = 0;
+    return AUTO_BLINKER_CANCEL_RELEASE_PAUSE_PURE;
+  }
+  if (!cancelEligible) return AUTO_BLINKER_CANCEL_REJECTED_PURE;
+  const uint8_t seconds =
+      autoBlinkerCancelPauseSecondsSanitizePure(pauseSeconds);
+  state.active = true;
+  state.untilMs = nowMs + (uint32_t)seconds * 1000u;
+  return AUTO_BLINKER_CANCEL_START_PAUSE_PURE;
+}
+
+static inline void autoBlinkerCancelPauseResetPure(
+    AutoBlinkerCancelPauseStatePure &state) {
+  state = {};
+}
+
 static constexpr uint8_t SCCM249_CKSUM_CTR[16] = {
   0x9B, 0xE8, 0x2A, 0xD3, 0xD3, 0x83, 0x4C, 0x5E,
   0x3F, 0x5E, 0xE2, 0x28, 0x3A, 0x13, 0xAF, 0xCE

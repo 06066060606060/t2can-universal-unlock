@@ -155,6 +155,9 @@ static volatile uint8_t  mcpRxOverflowLastFlags = 0;
 static portMUX_TYPE mcpRxOverflowMux = portMUX_INITIALIZER_UNLOCKED;
 static unsigned long lastMcpStatusMs = 0;
 static unsigned long lastMcpRecoverMs = 0;
+static volatile uint8_t mcpLastErrorFlags = 0;
+static volatile uint32_t mcpLastErrorFlagsMs = 0;
+static volatile uint32_t canAMcpBusOffCount = 0;
 static volatile uint8_t canTxFreshMaskFast = 0;
 
 static void mcpRxOverflowObserve(uint32_t now, uint8_t flags) {
@@ -205,12 +208,19 @@ static void canTxMarkFresh(uint8_t busBit) {
 // CAN B BUS-OFF diagnostic trace. Keep this deliberately small: every CAN B
 // application TX attempt passes this single point, while the most recent window
 // is frozen only when BUS_OFF is observed. No CAN RX frames are copied here.
+enum CanTxTraceSource : uint8_t {
+  CAN_TX_TRACE_SOURCE_DEFAULT = 0,
+  CAN_TX_TRACE_SOURCE_AUTO_BLINKER = 1,
+  CAN_TX_TRACE_SOURCE_S3XY_BUTTON = 2
+};
+
 static constexpr uint8_t CAN_B_TX_TRACE_CAPACITY = 64;
 struct CanBTxTraceEntry {
   uint32_t seq;
   uint32_t capturedMs;
   uint16_t id;
   uint8_t dlc;
+  uint8_t source;
   int32_t result;
   uint8_t data[8];
 };
@@ -223,14 +233,40 @@ static volatile uint8_t canBTxTraceFrozenCount = 0;
 static volatile uint32_t canBTxTraceSeq = 0;
 static volatile uint32_t canBTxTraceFrozenMs = 0;
 static volatile uint32_t canBTxTraceFrozenBusOffOrdinal = 0;
+// d3 CAN-B TX acceptance/pipeline telemetry. Every successful application
+// enqueue increments the accepted serial. TX_IDLE alerts mark the application
+// pipeline idle again; this is used only to qualify R79 timing diagnostics.
+static volatile uint32_t canBTxAcceptedSerial = 0;
+static volatile bool canBTxPipelineIdle = true;
 
-static void canBTraceRecordTx(const twai_message_t *msg, esp_err_t result) {
-  if (!msg) return;
+static inline uint32_t canBTxAcceptedSerialSnapshot() {
+  return __atomic_load_n(&canBTxAcceptedSerial, __ATOMIC_ACQUIRE);
+}
+static inline bool canBTxPipelineIdleSnapshot() {
+  return __atomic_load_n(&canBTxPipelineIdle, __ATOMIC_ACQUIRE);
+}
+static inline void canBTxObserveTxIdleAlert() {
+  twai_status_info_t status = {};
+  const bool statusReadOk = twai_get_status_info(&status) == ESP_OK;
+  const bool confirmed = statusReadOk &&
+      status.state == TWAI_STATE_RUNNING && status.msgs_to_tx == 0u;
+  __atomic_store_n(&canBTxPipelineIdle, confirmed, __ATOMIC_RELEASE);
+}
+
+static uint32_t canBTraceRecordTx(const twai_message_t *msg, esp_err_t result,
+                                  uint8_t traceSource = CAN_TX_TRACE_SOURCE_DEFAULT) {
+  if (!msg) return 0;
   CanBTxTraceEntry e = {};
   e.seq = __atomic_add_fetch(&canBTxTraceSeq, 1U, __ATOMIC_RELAXED);
+  uint32_t acceptedSerial = 0;
+  if (result == ESP_OK) {
+    acceptedSerial = __atomic_add_fetch(&canBTxAcceptedSerial, 1U, __ATOMIC_ACQ_REL);
+    __atomic_store_n(&canBTxPipelineIdle, false, __ATOMIC_RELEASE);
+  }
   e.capturedMs = (uint32_t)millis();
   e.id = (uint16_t)(msg->identifier & 0x7FFU);
   e.dlc = (uint8_t)min((uint8_t)8, (uint8_t)msg->data_length_code);
+  e.source = traceSource;
   e.result = (int32_t)result;
   if (e.dlc) memcpy(e.data, msg->data, e.dlc);
   portENTER_CRITICAL(&canBTxTraceMux);
@@ -238,6 +274,7 @@ static void canBTraceRecordTx(const twai_message_t *msg, esp_err_t result) {
   canBTxTraceLiveHead = (uint8_t)((canBTxTraceLiveHead + 1U) % CAN_B_TX_TRACE_CAPACITY);
   if (canBTxTraceLiveCount < CAN_B_TX_TRACE_CAPACITY) canBTxTraceLiveCount++;
   portEXIT_CRITICAL(&canBTxTraceMux);
+  return acceptedSerial;
 }
 
 static void canBTraceReset() {
@@ -252,25 +289,105 @@ static void canBTraceReset() {
   portEXIT_CRITICAL(&canBTxTraceMux);
 }
 
-static volatile bool canTxAdministrativeHold = false;
+// CAN A forensic trace mirrors the CAN B BUS-OFF trace but records only
+// application TX attempts that pass through canTxMcpSend(). It does not copy
+// CAN A RX traffic and has no effect on TX admission or recovery decisions.
+static constexpr uint8_t CAN_A_TX_TRACE_CAPACITY = 64;
+struct CanATxTraceEntry {
+  uint32_t seq;
+  uint32_t capturedMs;
+  uint16_t id;
+  uint8_t dlc;
+  uint8_t source;
+  uint8_t reason;
+  int32_t result;
+  uint8_t data[8];
+};
+struct CanABusOffSnapshot {
+  bool valid;
+  uint32_t capturedMs;
+  uint8_t eflg;
+  uint8_t txFailConsecutive;
+  uint32_t rxAgeMs;
+  uint32_t rxOverflowCount;
+  uint32_t txOk;
+  uint32_t txFail;
+};
+static portMUX_TYPE canATxTraceMux = portMUX_INITIALIZER_UNLOCKED;
+static CanATxTraceEntry canATxTraceLive[CAN_A_TX_TRACE_CAPACITY] = {};
+static CanATxTraceEntry canATxTraceFrozen[CAN_A_TX_TRACE_CAPACITY] = {};
+static CanABusOffSnapshot canALastBusOffSnapshot = {};
+static volatile uint8_t canATxTraceLiveHead = 0;
+static volatile uint8_t canATxTraceLiveCount = 0;
+static volatile uint8_t canATxTraceFrozenCount = 0;
+static volatile uint32_t canATxTraceSeq = 0;
+static volatile uint32_t canATxTraceFrozenMs = 0;
+static volatile uint32_t canATxTraceFrozenBusOffOrdinal = 0;
 
-static uint8_t canTxFreshMaskSnapshot() {
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
-    return __atomic_load_n(&canTxFreshMaskFast, __ATOMIC_ACQUIRE);
-  const uint8_t mask = canTxBarrierState.freshMask;
-  xSemaphoreGive(canTxBarrierMutex);
-  return mask;
+static void canATraceRecordTx(const struct can_frame *msg, McpTxResultReason reason,
+                              MCP2515::ERROR result,
+                              uint8_t traceSource = CAN_TX_TRACE_SOURCE_DEFAULT) {
+  if (!msg) return;
+  CanATxTraceEntry e = {};
+  e.seq = __atomic_add_fetch(&canATxTraceSeq, 1U, __ATOMIC_RELAXED);
+  e.capturedMs = (uint32_t)millis();
+  e.id = (uint16_t)(msg->can_id & 0x7FFU);
+  e.dlc = (uint8_t)min((uint8_t)8, (uint8_t)msg->can_dlc);
+  e.source = traceSource;
+  e.reason = (uint8_t)reason;
+  e.result = (int32_t)result;
+  if (e.dlc) memcpy(e.data, msg->data, e.dlc);
+  portENTER_CRITICAL(&canATxTraceMux);
+  canATxTraceLive[canATxTraceLiveHead] = e;
+  canATxTraceLiveHead = (uint8_t)((canATxTraceLiveHead + 1U) % CAN_A_TX_TRACE_CAPACITY);
+  if (canATxTraceLiveCount < CAN_A_TX_TRACE_CAPACITY) canATxTraceLiveCount++;
+  portEXIT_CRITICAL(&canATxTraceMux);
 }
 
-static esp_err_t canTxTwaiTransmitWithMask(
-    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
+static void canATraceReset() {
+  portENTER_CRITICAL(&canATxTraceMux);
+  memset(canATxTraceLive, 0, sizeof(canATxTraceLive));
+  memset(canATxTraceFrozen, 0, sizeof(canATxTraceFrozen));
+  canATxTraceLiveHead = 0;
+  canATxTraceLiveCount = 0;
+  canATxTraceFrozenCount = 0;
+  canATxTraceFrozenMs = 0;
+  canATxTraceFrozenBusOffOrdinal = 0;
+  canALastBusOffSnapshot = {};
+  portEXIT_CRITICAL(&canATxTraceMux);
+  canAMcpBusOffCount = 0;
+}
+
+static volatile bool canTxAdministrativeHold = false;
+
+// Administrative TX hold used by profile/reset/feature transitions.
+// Take the same barrier mutex used by all application TX paths so enabling
+// the hold waits for any in-flight application send to leave the critical
+// section before the caller mutates persistent/runtime state. Senders also
+// re-check the hold after acquiring the mutex, so no new application TX can
+// cross an active hold. Disabling resumes the existing epoch/freshness state;
+// callers that require invalidation explicitly invoke the recovery barrier.
+static void setCanTxAdministrativeHold(bool hold) {
+  if (!canTxBarrierMutex) {
+    canTxAdministrativeHold = hold;
+    return;
+  }
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE) {
+    canTxAdministrativeHold = hold;
+    xSemaphoreGive(canTxBarrierMutex);
+  }
+}
+
+static esp_err_t canTxTwaiTransmitWithMaskTagged(
+    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
+    uint8_t traceSource) {
   if (!msg) return ESP_ERR_INVALID_ARG;
   if (canTxAdministrativeHold) {
-    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
+    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE, traceSource);
     return ESP_ERR_INVALID_STATE;
   }
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
-    canBTraceRecordTx(msg, ESP_ERR_TIMEOUT);
+    canBTraceRecordTx(msg, ESP_ERR_TIMEOUT, traceSource);
     return ESP_ERR_TIMEOUT;
   }
   esp_err_t err = ESP_ERR_INVALID_STATE;
@@ -278,31 +395,20 @@ static esp_err_t canTxTwaiTransmitWithMask(
       canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask))
     err = twai_transmit(msg, 0);
   xSemaphoreGive(canTxBarrierMutex);
-  canBTraceRecordTx(msg, err);
+  canBTraceRecordTx(msg, err, traceSource);
   return err;
 }
 
-static esp_err_t canTxTwaiTransmitWithMaskWait(
-    const twai_message_t *msg, uint32_t expectedEpoch,
-    uint8_t requiredFreshMask, TickType_t waitTicks) {
-  if (!msg) return ESP_ERR_INVALID_ARG;
-  if (canTxAdministrativeHold) {
-    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
-    return ESP_ERR_INVALID_STATE;
-  }
-  if (!canTxBarrierMutex ||
-      xSemaphoreTake(canTxBarrierMutex, waitTicks) != pdTRUE) {
-    canBTraceRecordTx(msg, ESP_ERR_TIMEOUT);
-    return ESP_ERR_TIMEOUT;
-  }
-  esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
-      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch,
-                                   requiredFreshMask))
-    err = twai_transmit(msg, waitTicks);
-  xSemaphoreGive(canTxBarrierMutex);
-  canBTraceRecordTx(msg, err);
-  return err;
+static esp_err_t canTxTwaiTransmitWithMask(
+    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
+  return canTxTwaiTransmitWithMaskTagged(
+      msg, expectedEpoch, requiredFreshMask, CAN_TX_TRACE_SOURCE_DEFAULT);
+}
+
+static esp_err_t canTxTwaiTransmitTagged(
+    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t traceSource) {
+  return canTxTwaiTransmitWithMaskTagged(
+      msg, expectedEpoch, CAN_TX_FRESH_BOTH, traceSource);
 }
 
 static esp_err_t canTxTwaiTransmit(
@@ -310,32 +416,24 @@ static esp_err_t canTxTwaiTransmit(
   return canTxTwaiTransmitWithMask(msg, expectedEpoch, CAN_TX_FRESH_BOTH);
 }
 
-static esp_err_t canTxTwaiClearQueueWithMask(
-    uint32_t expectedEpoch, uint8_t requiredFreshMask) {
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
-    return ESP_ERR_TIMEOUT;
-  esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (twaiReady &&
-      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask))
-    err = twai_clear_transmit_queue();
-  xSemaphoreGive(canTxBarrierMutex);
-  return err;
-}
 
-static esp_err_t canTxTwaiClearQueue(uint32_t expectedEpoch) {
-  return canTxTwaiClearQueueWithMask(expectedEpoch, CAN_TX_FRESH_BOTH);
-}
 
-static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
-                         MCP2515::ERROR &errOut, McpTxResultReason *reasonOut) {
+static bool canTxMcpSendTagged(const struct can_frame *msg,
+                               uint32_t expectedEpoch, uint8_t traceSource,
+                               MCP2515::ERROR &errOut,
+                               McpTxResultReason *reasonOut) {
   if (reasonOut) *reasonOut = MCP_TX_INVALID_MSG;
   if (!msg) return false;
   if (canTxAdministrativeHold) {
     if (reasonOut) *reasonOut = MCP_TX_EPOCH_MISMATCH;
+    canATraceRecordTx(msg, MCP_TX_EPOCH_MISMATCH, MCP2515::ERROR_FAIL,
+                      traceSource);
     return false;
   }
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
     if (reasonOut) *reasonOut = MCP_TX_MUTEX_BUSY;
+    canATraceRecordTx(msg, MCP_TX_MUTEX_BUSY, MCP2515::ERROR_FAIL,
+                      traceSource);
     return false;
   }
 
@@ -343,18 +441,26 @@ static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
       true, true, mcpReady, canTxBarrierState.epoch, canTxBarrierState.freshMask,
       expectedEpoch, true);
   const bool allowed = reason == MCP_TX_OK;
+  MCP2515::ERROR traceResult = MCP2515::ERROR_FAIL;
 
   if (allowed) {
     errOut = Can_A.sendMessage(msg);
+    traceResult = errOut;
     reason = mcpTxResultReasonPure(
         true, true, true, canTxBarrierState.epoch, canTxBarrierState.freshMask,
         expectedEpoch, errOut == MCP2515::ERROR_OK);
   }
   if (reasonOut) *reasonOut = reason;
   xSemaphoreGive(canTxBarrierMutex);
+  canATraceRecordTx(msg, reason, traceResult, traceSource);
   return allowed;
 }
 
+static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
+                         MCP2515::ERROR &errOut, McpTxResultReason *reasonOut) {
+  return canTxMcpSendTagged(msg, expectedEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
+                            errOut, reasonOut);
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CAN RECOVERY SUPERVISOR
@@ -431,6 +537,26 @@ static TaskHandle_t webTaskHandle = nullptr;
 
 static volatile uint32_t canTaskMcpHeartbeatMs = 0;
 static volatile uint32_t canTaskTwaiHeartbeatMs = 0;
+enum CanTaskHeartbeatTimeoutCause : uint8_t {
+  CAN_TASK_HEARTBEAT_NONE = 0,
+  CAN_TASK_HEARTBEAT_A = 1,
+  CAN_TASK_HEARTBEAT_B = 2,
+  CAN_TASK_HEARTBEAT_BOTH = 3
+};
+static inline const char *canTaskHeartbeatTimeoutCauseName(uint8_t cause) {
+  switch (cause) {
+    case CAN_TASK_HEARTBEAT_A: return "CAN_A";
+    case CAN_TASK_HEARTBEAT_B: return "CAN_B";
+    case CAN_TASK_HEARTBEAT_BOTH: return "BOTH";
+    default: return "NONE";
+  }
+}
+static volatile uint8_t canTaskHeartbeatLastCause = CAN_TASK_HEARTBEAT_NONE;
+static volatile uint32_t canTaskHeartbeatLastAgeAms = 0;
+static volatile uint32_t canTaskHeartbeatLastAgeBms = 0;
+static volatile uint32_t canTaskHeartbeatTimeoutCountA = 0;
+static volatile uint32_t canTaskHeartbeatTimeoutCountB = 0;
+static volatile uint32_t canTaskHeartbeatTimeoutCountBoth = 0;
 static volatile uint32_t lastCanAFrameMs = 0;
 static volatile uint32_t lastCanBFrameMs = 0;
 static volatile uint32_t canHardReinitCount = 0;
@@ -497,14 +623,15 @@ static constexpr uint32_t NAG_SPEED_FRESH_MS = 1000;
 
 enum NagMode : uint8_t {
   MODE_A = 0, MODE_B = 1,
-  // Value 2 was the removed legacy Custom mode; keep the numeric gap so
-  // persisted/public IDs for Mode C..H remain unchanged.
-  MODE_C = 3, MODE_D = 4, MODE_E = 5, MODE_F = 6, MODE_H = 7
+  // IDs 2 and 4..6 were removed legacy/experimental modes. Keep the numeric
+  // gaps so persisted/public IDs for Mode A/B/C/H remain unchanged.
+  MODE_C = 3, MODE_H = 7
 };
 
 struct NagConfig {
   bool     enabled;
   bool     pauseAtZeroSpeed;
+  uint8_t  modeHStopBehavior;
   uint8_t  mode;
   uint16_t targetId;
   uint8_t  torqueCount;
@@ -523,8 +650,6 @@ struct NagConfig {
   uint16_t steeringId;
   uint8_t  steeringByteHi;
   uint8_t  steeringByteLo;
-  float    steeringScale;
-  float    steeringOffset;
 };
 
 static NagConfig nagCfg;
@@ -584,14 +709,16 @@ struct NagContext {
   uint8_t  apState;
   uint8_t  handsOnState;
   uint8_t  prevHandsOnState;
-  float    steeringAngleDeg;
+  uint32_t visualWarningEpoch;
+  unsigned long visualWarningEnterMs;
+  bool     visualWarningActive;
+  int16_t  steeringAngleDeciDeg;
   unsigned long lastApStateMs;
   unsigned long lastSteeringMs;
   unsigned long state2EnterMs;
   unsigned long state3EnterMs;
   uint16_t walkSeed;
   uint16_t modeCRaw;
-  float    lastModeCTorqueNm;
   uint16_t vehicleSpeedRaw;
   bool     vehicleSpeedValid;
   unsigned long lastVehicleSpeedMs;
@@ -603,11 +730,13 @@ static portMUX_TYPE nagCtxMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t nagRxFrames    = 0;
 static volatile uint32_t nagEchoCount   = 0;
 static volatile uint32_t nagEchoLatUs   = 0;
-static volatile uint8_t  nagRealHo      = 0;
-static volatile float    nagRealTorque  = 0;
+static volatile uint8_t  nagRealHo = 0;
+static volatile int16_t  nagRealTorqueCenti = 0;
 static volatile uint8_t  nagLastInjectedHo = 0;
-static volatile float    nagLastInjectedNm = 0;
+static volatile int16_t  nagLastInjectedCenti = 0;
+#if T2CAN_SERIAL_DIAGNOSTICS
 static unsigned long nagLastTxFailLog = 0;
+#endif
 
 // b18 NAG continuity diagnostics. Dedicated counters avoid contamination by
 // other MCP/Party injections such as the 0x399 LEFT experiment.
@@ -623,8 +752,8 @@ static volatile uint32_t nagSkipApInvalid = 0;
 static volatile uint32_t nagSkipApInactive = 0;
 static volatile uint32_t nagSkipDecision = 0;
 static volatile uint32_t nagSkipStopped = 0;
-static volatile uint32_t nagSkipCadence = 0;
 static volatile uint32_t nagSkipSpeedStale = 0;
+static volatile uint32_t nagStopCarrierTxOk = 0;
 static volatile uint32_t nagBlockMutex = 0;
 static volatile uint32_t nagBlockMcpNotReady = 0;
 static volatile uint32_t nagBlockEpoch = 0;
@@ -643,127 +772,341 @@ static volatile uint32_t nagLastTxBlockMs = 0;
 // This is intentionally independent of the Original mcpRxCount > 1000 warmup check.
 static volatile uint32_t nagModeBPhaseStartMs = 0;
 
-// Portable D/E/F and event-based Mode H use exact recent-TX payload matching.
-// D/E/F need it for their AP-independent path and dynamic torque; H needs it
-// because WAIT/REFRACTORY preserve arbitrary OEM torque while forcing HO=1.
-// This state is touched only on the Party-CAN RX/TX path and is intentionally
-// separate from the existing diagnostic counters.
-static portMUX_TYPE nagPortableMux = portMUX_INITIALIZER_UNLOCKED;
-static volatile bool nagPortableLastTxValid = false;
-static volatile uint32_t nagPortableLastTxMs = 0;
-static uint8_t nagPortableLastTxRaw[8] = {0};
-static uint8_t nagPortablePrevMode = 0xFF;
+// Mode H uses exact recent-TX payload matching because WAIT/REFRACTORY can
+// preserve arbitrary OEM torque while forcing HO=1. This state is isolated
+// from the existing A/B/C torque-table self-frame heuristic.
+static portMUX_TYPE nagExactEchoMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool nagExactEchoLastTxValid = false;
+static volatile uint32_t nagExactEchoLastTxMs = 0;
+static uint8_t nagExactEchoLastTxRaw[8] = {0};
+static uint8_t nagExactEchoPrevMode = 0xFF;
 
 static void nagExactEchoReset() {
-  portENTER_CRITICAL(&nagPortableMux);
-  nagPortableLastTxValid = false;
-  nagPortableLastTxMs = 0;
-  memset(nagPortableLastTxRaw, 0, sizeof(nagPortableLastTxRaw));
-  portEXIT_CRITICAL(&nagPortableMux);
+  portENTER_CRITICAL(&nagExactEchoMux);
+  nagExactEchoLastTxValid = false;
+  nagExactEchoLastTxMs = 0;
+  memset(nagExactEchoLastTxRaw, 0, sizeof(nagExactEchoLastTxRaw));
+  portEXIT_CRITICAL(&nagExactEchoMux);
 }
 
-// Mode E cadence learning is session-local and runs ONLY while Mode E is
-// selected. No cadence state is persisted to NVS and no LAB diagnostic path
-// is attached to the RX hot path.
-static NagCadenceStatePure nagCadenceState = {};
-
-// Mode H has a separate fixed-point event engine. The state is isolated from
-// the CAN transport so host tests can exercise every transition deterministically.
+// Mode H variants — Rev.1 / Rev.3 / Rev.4 are UI-selectable. Rev.2 remains
+// runtime-readable so an older persisted profile ID is never reinterpreted.
+// Rev.1 = b18 Human Interaction defaults (1.50–2.00 Nm primary peak).
+// Rev.2 = Natural Grip baseline + bounded 1.80–2.20 Nm interaction peaks.
+// Rev.3 = Human Interaction + stock-relative Natural Grip WAIT carrier + HO policy.
+// Rev.4 = Human Interaction + per-RX stock-opposite carrier in WAIT/REFRACTORY;
+//         primary-event direction is independently biased 80% negative / 20% positive.
+static volatile uint8_t nagHumanVariant = H_VARIANT_REV3;
 static portMUX_TYPE nagHumanMux = portMUX_INITIALIZER_UNLOCKED;
-static NagHumanConfigPure nagHumanConfig = nagHumanDefaultConfigPure();
-static NagHumanStatePure nagHumanState = {};
-static bool nagHumanInitialized = false;
+static NagHumanV1ConfigPure nagHumanV1Rev1Config = nagHumanV1Rev1ConfigPure();
+static NagHumanV1StatePure nagHumanV1State = {};
+static bool nagHumanV1Initialized = false;
+static NagHumanV2ConfigPure nagHumanV2Config = nagHumanV2DefaultConfigPure();
+static NagHumanV2StatePure nagHumanV2State = {};
+static bool nagHumanV2Initialized = false;
+static NagHumanV3ConfigPure nagHumanV3Config = nagHumanV3DefaultConfigPure();
+static NagHumanV3StatePure nagHumanV3State = {};
+static bool nagHumanV3Initialized = false;
+static NagHumanV4ConfigPure nagHumanV4Config = nagHumanV4DefaultConfigPure();
+static NagHumanV4StatePure nagHumanV4State = {};
+static bool nagHumanV4Initialized = false;
 
 static uint32_t nagHumanRuntimeSeed() {
   uint32_t seed = (uint32_t)esp_random() ^ (uint32_t)micros() ^ 0x484D4F44u;
-  return nagHumanSanitizeSeedPure(seed);
+  return nagHumanV1SanitizeSeedPure(seed);
+}
+
+static uint8_t nagHumanVariantSnapshot() {
+  portENTER_CRITICAL(&nagHumanMux);
+  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return v;
 }
 
 static void nagHumanRuntimeReset(bool reseed) {
   const uint32_t seed = reseed ? nagHumanRuntimeSeed() : 0u;
   portENTER_CRITICAL(&nagHumanMux);
-  if (!nagHumanInitialized) {
-    nagHumanInitPure(nagHumanState, reseed ? seed : 0x484D4F44u);
-    nagHumanInitialized = true;
+  if (!nagHumanV1Initialized) {
+    nagHumanV1InitPure(nagHumanV1State, reseed ? seed : 0x484D4F44u);
+    nagHumanV1Initialized = true;
   } else if (reseed) {
-    nagHumanReseedPure(nagHumanState, seed);
+    nagHumanV1ReseedPure(nagHumanV1State, seed);
   } else {
-    nagHumanResetRuntimePure(nagHumanState, H_IDLE);
+    nagHumanV1ResetRuntimePure(nagHumanV1State, H1_IDLE);
+  }
+  if (!nagHumanV2Initialized) {
+    nagHumanV2InitPure(nagHumanV2State, reseed ? seed ^ 0x52325632u : 0x52325632u);
+    nagHumanV2Initialized = true;
+  } else if (reseed) {
+    nagHumanV2ReseedPure(nagHumanV2State, seed ^ 0x52325632u);
+  } else {
+    nagHumanV2ResetRuntimePure(nagHumanV2State, H_IDLE);
+  }
+  if (!nagHumanV3Initialized) {
+    nagHumanV3InitPure(nagHumanV3State, reseed ? seed ^ 0x52335633u : 0x52335633u);
+    nagHumanV3Initialized = true;
+  } else if (reseed) {
+    nagHumanV3ReseedPure(nagHumanV3State, seed ^ 0x52335633u);
+  } else {
+    nagHumanV3ResetRuntimePure(nagHumanV3State, H1_IDLE);
+  }
+  if (!nagHumanV4Initialized) {
+    nagHumanV4InitPure(nagHumanV4State, reseed ? seed ^ 0x52345634u : 0x52345634u);
+    nagHumanV4Initialized = true;
+  } else if (reseed) {
+    nagHumanV4ReseedPure(nagHumanV4State, seed ^ 0x52345634u);
+  } else {
+    nagHumanV4ResetRuntimePure(nagHumanV4State, H1_IDLE);
   }
   portEXIT_CRITICAL(&nagHumanMux);
 }
 
-static NagHumanStepResultPure nagHumanRuntimeStep(uint32_t nowMs,
-                                                   uint16_t sourceRaw,
-                                                   bool runAllowed,
-                                                   bool speedValid,
-                                                   bool speedFresh,
-                                                   uint16_t speedRaw) {
-  NagHumanStepResultPure result = {};
+static void nagHumanRuntimeSetVariant(uint8_t variant) {
+  const uint8_t normalized = nagModeHVariantValidPure(variant) ? variant : H_VARIANT_REV3;
   portENTER_CRITICAL(&nagHumanMux);
-  if (!nagHumanInitialized) {
-    nagHumanInitPure(nagHumanState, nagHumanRuntimeSeed());
-    nagHumanInitialized = true;
+  nagHumanVariant = normalized;
+  portEXIT_CRITICAL(&nagHumanMux);
+  nagExactEchoReset();
+  nagHumanRuntimeReset(true);
+  if (normalized == H_VARIANT_REV4) {
+    uint32_t currentVisualWarningEpoch;
+    portENTER_CRITICAL(&nagCtxMux);
+    currentVisualWarningEpoch = nagCtx.visualWarningEpoch;
+    portEXIT_CRITICAL(&nagCtxMux);
+    portENTER_CRITICAL(&nagHumanMux);
+    nagHumanV4State.visualWarningEpochSeen = currentVisualWarningEpoch;
+    nagHumanV4State.visualRescuePending = false;
+    nagHumanV4State.visualRescuePendingSinceMs = 0u;
+    portEXIT_CRITICAL(&nagHumanMux);
   }
-  result = nagHumanStepPure(nagHumanState, nagHumanConfig, nowMs, sourceRaw,
-                            runAllowed, speedValid, speedFresh, speedRaw);
+}
+
+static NagHumanV1StepResultPure nagHumanRuntimeStep(uint32_t nowMs,
+                                                     uint16_t sourceRaw,
+                                                     bool runAllowed,
+                                                     bool speedValid,
+                                                     bool speedFresh,
+                                                     uint16_t speedRaw,
+                                                     uint32_t visualWarningEpoch,
+                                                     uint32_t visualWarningEnterMs,
+                                                     bool visualWarningActive) {
+  NagHumanV1StepResultPure result = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  const uint8_t variant = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
+  if (variant == H_VARIANT_REV2) {
+    if (!nagHumanV2Initialized) {
+      nagHumanV2InitPure(nagHumanV2State, nagHumanRuntimeSeed() ^ 0x52325632u);
+      nagHumanV2Initialized = true;
+    }
+    const NagHumanV2StepResultPure r = nagHumanV2StepPure(
+        nagHumanV2State, nagHumanV2Config, nowMs, sourceRaw, runAllowed,
+        speedValid, speedFresh, speedRaw);
+    result.tx = r.tx; result.setHo = r.setHo; result.carrier = r.carrier;
+    result.hoOverrideValid = r.setHo; result.hoLevel = r.setHo ? 1u : 0u;
+    result.raw = r.raw; result.phase = r.phase; result.motion = r.motion;
+    result.blockReason = r.blockReason;
+  } else if (variant == H_VARIANT_REV3) {
+    if (!nagHumanV3Initialized) {
+      nagHumanV3InitPure(nagHumanV3State, nagHumanRuntimeSeed() ^ 0x52335633u);
+      nagHumanV3Initialized = true;
+    }
+    result = nagHumanV3StepPure(nagHumanV3State, nagHumanV3Config, nowMs,
+                                sourceRaw, runAllowed, speedValid, speedFresh, speedRaw);
+  } else if (variant == H_VARIANT_REV4) {
+    if (!nagHumanV4Initialized) {
+      nagHumanV4InitPure(nagHumanV4State, nagHumanRuntimeSeed() ^ 0x52345634u);
+      nagHumanV4Initialized = true;
+    }
+    result = nagHumanV4StepPure(nagHumanV4State, nagHumanV4Config, nowMs,
+                                sourceRaw, runAllowed, speedValid, speedFresh, speedRaw,
+                                visualWarningEpoch, visualWarningEnterMs, visualWarningActive);
+  } else {
+    if (!nagHumanV1Initialized) {
+      nagHumanV1InitPure(nagHumanV1State, nagHumanRuntimeSeed());
+      nagHumanV1Initialized = true;
+    }
+    result = nagHumanV1StepPure(nagHumanV1State, nagHumanV1Rev1Config, nowMs, sourceRaw,
+                                runAllowed, speedValid, speedFresh, speedRaw);
+  }
   portEXIT_CRITICAL(&nagHumanMux);
   return result;
 }
 
-static NagHumanStatePure nagHumanRuntimeSnapshot() {
-  NagHumanStatePure snapshot = {};
+static NagHumanV1StatePure nagHumanV1RuntimeSnapshot() {
+  NagHumanV1StatePure snapshot = {};
   portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanState;
+  snapshot = nagHumanV1State;
   portEXIT_CRITICAL(&nagHumanMux);
   return snapshot;
 }
 
-static NagHumanConfigPure nagHumanRuntimeConfigSnapshot() {
-  NagHumanConfigPure snapshot = {};
+static NagHumanV2StatePure nagHumanV2RuntimeSnapshot() {
+  NagHumanV2StatePure snapshot = {};
   portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanConfig;
+  snapshot = nagHumanV2State;
   portEXIT_CRITICAL(&nagHumanMux);
   return snapshot;
 }
 
-// Boot-time restore: timing always comes from the current firmware preset,
-// while only the LAB-editable primary magnitude range is persisted.
-static void nagHumanRuntimeLoadPeakRange(uint16_t minRaw, uint16_t maxRaw) {
-  NagHumanConfigPure config = nagHumanDefaultConfigPure();
-  config.peakMinRaw = minRaw;
-  config.peakMaxRaw = maxRaw;
-  nagHumanSanitizePeakRangePure(config);
+static NagHumanV3StatePure nagHumanV3RuntimeSnapshot() {
+  NagHumanV3StatePure snapshot = {};
   portENTER_CRITICAL(&nagHumanMux);
-  nagHumanConfig = config;
-  nagHumanState = NagHumanStatePure{};
-  nagHumanInitialized = false;
+  snapshot = nagHumanV3State;
   portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
 }
 
-// Runtime LAB update. The current descriptor is discarded so one event can
-// never mix two peak ranges. Existing event counters remain preserved through
-// nagHumanReseedPure().
-static bool nagHumanRuntimeSetPeakRange(uint16_t minRaw, uint16_t maxRaw) {
-  if (!nagHumanPeakRangeValidPure(minRaw, maxRaw)) return false;
-  const uint32_t seed = nagHumanRuntimeSeed();
+static NagHumanV4StatePure nagHumanV4RuntimeSnapshot() {
+  NagHumanV4StatePure snapshot = {};
   portENTER_CRITICAL(&nagHumanMux);
-  nagHumanConfig.peakMinRaw = minRaw;
-  nagHumanConfig.peakMaxRaw = maxRaw;
-  if (!nagHumanInitialized) {
-    nagHumanInitPure(nagHumanState, seed);
-    nagHumanInitialized = true;
-  } else {
-    nagHumanReseedPure(nagHumanState, seed);
-  }
+  snapshot = nagHumanV4State;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+static NagHumanV1ConfigPure nagHumanV1RuntimeConfigSnapshot() {
+  NagHumanV1ConfigPure snapshot = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
+  if (v == H_VARIANT_REV1) snapshot = nagHumanV1Rev1Config;
+  else if (v == H_VARIANT_REV3) snapshot = nagHumanV3Config.base;
+  else if (v == H_VARIANT_REV4) snapshot = nagHumanV4Config.base;
+  else snapshot = nagHumanV1Rev1Config;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+static NagHumanV2ConfigPure nagHumanV2RuntimeConfigSnapshot() {
+  NagHumanV2ConfigPure snapshot = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  snapshot = nagHumanV2Config;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+static NagHumanV3ConfigPure nagHumanV3RuntimeConfigSnapshot() {
+  NagHumanV3ConfigPure snapshot = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  snapshot = nagHumanV3Config;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+static NagHumanV4ConfigPure nagHumanV4RuntimeConfigSnapshot() {
+  NagHumanV4ConfigPure snapshot = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  snapshot = nagHumanV4Config;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+static bool nagHumanV1RuntimeSetLabTuning(uint16_t peakMinRaw, uint16_t peakMaxRaw,
+                                          uint16_t waitMinMs, uint16_t waitMaxMs,
+                                          uint16_t refractoryMinMs, uint16_t refractoryMaxMs,
+                                          uint8_t hoOverridePct) {
+  if (!nagHumanV1PeakRangeValidPure(peakMinRaw, peakMaxRaw) ||
+      !nagHumanV1TimingValidPure(waitMinMs, waitMaxMs, refractoryMinMs, refractoryMaxMs) ||
+      hoOverridePct > 100u) return false;
+  portENTER_CRITICAL(&nagHumanMux);
+  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
+  if (v != H_VARIANT_REV1) { portEXIT_CRITICAL(&nagHumanMux); return false; }
+  nagHumanV1Rev1Config.peakMinRaw = peakMinRaw;
+  nagHumanV1Rev1Config.peakMaxRaw = peakMaxRaw;
+  nagHumanV1Rev1Config.waitMinMs = waitMinMs;
+  nagHumanV1Rev1Config.waitMaxMs = waitMaxMs;
+  nagHumanV1Rev1Config.refractoryMinMs = refractoryMinMs;
+  nagHumanV1Rev1Config.refractoryMaxMs = refractoryMaxMs;
+  nagHumanV1Rev1Config.hoOverridePct = hoOverridePct;
+  nagHumanV1State = NagHumanV1StatePure{};
+  nagHumanV1Initialized = false;
   portEXIT_CRITICAL(&nagHumanMux);
   nagExactEchoReset();
   return true;
 }
 
-static void nagHumanRuntimeResetPeakRange() {
-  (void)nagHumanRuntimeSetPeakRange(NAG_HUMAN_PEAK_DEFAULT_MIN_RAW,
-                                    NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
+static bool nagHumanV3RuntimeSetLabTuning(
+    uint16_t peakMinRaw, uint16_t peakMaxRaw,
+    uint16_t waitMinMs, uint16_t waitMaxMs,
+    uint16_t refractoryMinMs, uint16_t refractoryMaxMs,
+    uint16_t carrierMinRaw, uint16_t carrierMaxRaw,
+    uint8_t carrierDirectionMode, uint8_t hoPolicy,
+    uint16_t ho1ThresholdRaw, uint16_t ho2ThresholdRaw) {
+  NagHumanV3ConfigPure next = nagHumanV3RuntimeConfigSnapshot();
+  next.base.peakMinRaw = peakMinRaw;
+  next.base.peakMaxRaw = peakMaxRaw;
+  next.base.waitMinMs = waitMinMs;
+  next.base.waitMaxMs = waitMaxMs;
+  next.base.refractoryMinMs = refractoryMinMs;
+  next.base.refractoryMaxMs = refractoryMaxMs;
+  next.base.hoOverridePct = 0u;
+  next.carrierMinRaw = carrierMinRaw;
+  next.carrierMaxRaw = carrierMaxRaw;
+  next.carrierDirectionMode = carrierDirectionMode;
+  next.hoPolicy = hoPolicy;
+  next.ho1ThresholdRaw = ho1ThresholdRaw;
+  next.ho2ThresholdRaw = ho2ThresholdRaw;
+  if (!nagHumanV3ConfigValidPure(next)) return false;
+  portENTER_CRITICAL(&nagHumanMux);
+  nagHumanV3Config = next;
+  nagHumanV3State = NagHumanV3StatePure{};
+  nagHumanV3Initialized = false;
+  portEXIT_CRITICAL(&nagHumanMux);
+  nagExactEchoReset();
+  return true;
+}
+
+static bool nagHumanV4RuntimeSetLabTuning(
+    uint16_t peakMinRaw, uint16_t peakMaxRaw,
+    uint16_t waitMinMs, uint16_t waitMaxMs,
+    uint16_t refractoryMinMs, uint16_t refractoryMaxMs,
+    uint16_t carrierMinRaw, uint16_t carrierMaxRaw,
+    uint8_t hoPolicy, uint16_t ho1ThresholdRaw, uint16_t ho2ThresholdRaw,
+    bool visualRescueEnabled, uint16_t visualRescueDelayMs) {
+  NagHumanV4ConfigPure next = nagHumanV4RuntimeConfigSnapshot();
+  next.base.peakMinRaw = peakMinRaw;
+  next.base.peakMaxRaw = peakMaxRaw;
+  next.base.waitMinMs = waitMinMs;
+  next.base.waitMaxMs = waitMaxMs;
+  next.base.refractoryMinMs = refractoryMinMs;
+  next.base.refractoryMaxMs = refractoryMaxMs;
+  next.base.hoOverridePct = 0u;
+  next.carrierMinRaw = carrierMinRaw;
+  next.carrierMaxRaw = carrierMaxRaw;
+  next.hoPolicy = hoPolicy;
+  next.ho1ThresholdRaw = ho1ThresholdRaw;
+  next.ho2ThresholdRaw = ho2ThresholdRaw;
+  next.visualRescueEnabled = visualRescueEnabled;
+  next.visualRescueDelayMs = visualRescueDelayMs;
+  if (!nagHumanV4ConfigValidPure(next)) return false;
+  portENTER_CRITICAL(&nagHumanMux);
+  const uint32_t visualWarningEpochSeen = nagHumanV4State.visualWarningEpochSeen;
+  const uint32_t visualRescueCount = nagHumanV4State.visualRescueCount;
+  nagHumanV4Config = next;
+  nagHumanV4State = NagHumanV4StatePure{};
+  nagHumanV4State.visualWarningEpochSeen = visualWarningEpochSeen;
+  nagHumanV4State.visualRescueCount = visualRescueCount;
+  nagHumanV4Initialized = false;
+  portEXIT_CRITICAL(&nagHumanMux);
+  nagExactEchoReset();
+  return true;
+}
+
+static void nagHumanRuntimeLoadDefaults() {
+  portENTER_CRITICAL(&nagHumanMux);
+  nagHumanVariant = H_VARIANT_REV3;
+  nagHumanV1Rev1Config = nagHumanV1Rev1ConfigPure();
+  nagHumanV1State = NagHumanV1StatePure{};
+  nagHumanV1Initialized = false;
+  nagHumanV2Config = nagHumanV2DefaultConfigPure();
+  nagHumanV2State = NagHumanV2StatePure{};
+  nagHumanV2Initialized = false;
+  nagHumanV3Config = nagHumanV3DefaultConfigPure();
+  nagHumanV3State = NagHumanV3StatePure{};
+  nagHumanV3Initialized = false;
+  nagHumanV4Config = nagHumanV4DefaultConfigPure();
+  nagHumanV4State = NagHumanV4StatePure{};
+  nagHumanV4Initialized = false;
+  portEXIT_CRITICAL(&nagHumanMux);
 }
 
 static void nagHumanRuntimeApTransition(bool apActive, bool wasApActive) {
@@ -791,7 +1134,6 @@ static inline const char* nagSkipReasonName(uint8_t reason) {
     case NAG_SKIP_AP_INACTIVE: return "AP_INACTIVE";
     case NAG_SKIP_DECISION: return "MODE_DECISION";
     case NAG_SKIP_STOPPED: return "STOPPED_0_KPH";
-    case NAG_SKIP_CADENCE: return "CADENCE_UNSTABLE";
     case NAG_SKIP_SPEED_STALE: return "SPEED_STALE";
     default: return "NONE";
   }
@@ -822,7 +1164,6 @@ static void nagDiagRecordSkip(NagSkipReasonPure reason, uint32_t now) {
     case NAG_SKIP_AP_INACTIVE: nagSkipApInactive++; break;
     case NAG_SKIP_DECISION: nagSkipDecision++; break;
     case NAG_SKIP_STOPPED: nagSkipStopped++; break;
-    case NAG_SKIP_CADENCE: nagSkipCadence++; break;
     case NAG_SKIP_SPEED_STALE: nagSkipSpeedStale++; break;
     default: break;
   }
@@ -830,8 +1171,7 @@ static void nagDiagRecordSkip(NagSkipReasonPure reason, uint32_t now) {
   // driving-relevant interruption. Preserve them in counters, not Last Skip.
   if (reason == NAG_SKIP_HANDS_ON || reason == NAG_SKIP_AP_INVALID ||
       reason == NAG_SKIP_AP_INACTIVE || reason == NAG_SKIP_DECISION ||
-      reason == NAG_SKIP_STOPPED || reason == NAG_SKIP_CADENCE ||
-      reason == NAG_SKIP_SPEED_STALE) {
+      reason == NAG_SKIP_STOPPED || reason == NAG_SKIP_SPEED_STALE) {
     nagLastSkipReason = (uint8_t)reason;
     nagLastSkipMs = now;
   }
@@ -882,20 +1222,19 @@ static void nagClampTorque(uint8_t& b2, uint8_t& b3) {
 static void nagCfgSetCommonDefaults(NagConfig& c) {
   c.enabled        = true;
   c.pauseAtZeroSpeed = false;
+  c.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
   c.burstMs        = 1000;
   c.pauseMs        = 1500;
   c.apStateId      = 0x399;
-  c.apStateByte    = 0;
-  c.apStateShift   = 4;
-  c.apStateMask    = 0x0F;
-  c.handsOnByte    = 0;
-  c.handsOnShift   = 0;
-  c.handsOnMask    = 0x0F;
+  c.apStateByte    = DAS399_AP_STATE_BYTE_PURE;
+  c.apStateShift   = DAS399_AP_STATE_SHIFT_PURE;
+  c.apStateMask    = DAS399_AP_STATE_MASK_PURE;
+  c.handsOnByte    = DAS399_HANDS_ON_BYTE_PURE;
+  c.handsOnShift   = DAS399_HANDS_ON_SHIFT_PURE;
+  c.handsOnMask    = DAS399_HANDS_ON_MASK_PURE;
   c.steeringId     = 0x129;
   c.steeringByteHi = 1;
   c.steeringByteLo = 0;
-  c.steeringScale  = 0.1f;
-  c.steeringOffset = 0.0f;
 }
 
 static void nagCfgDefaultsModeA(NagConfig& c) {
@@ -930,43 +1269,7 @@ static void nagCfgDefaultsModeC(NagConfig& c) {
   c.pauseMs     = 0;    // Mode C is continuous by default.
 }
 
-// Mode D — Portable Burst / HO1. Same waveform/envelope as Mode B,
-// but Party-CAN-local and forces HO=1 on active injected frames.
-static void nagCfgDefaultsModeD(NagConfig& c) {
-  nagCfgSetCommonDefaults(c);
-  c.mode        = MODE_D;
-  c.targetId    = 0x370;
-  c.torqueCount = 4;
-  c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
-  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0x98;
-  c.torqueB2[2] = 0x07; c.torqueB3[2] = 0x6C;
-  c.torqueB2[3] = 0x07; c.torqueB3[3] = 0x4E;
-  c.hoRatePct   = 100; // Active injected frames force handsOnLevel=1.
-}
-
-// Mode E — Cadence-Aware Burst. Payload behavior matches Mode D including
-// HO=1; cadence learning/gating runs only while Mode E is selected.
-static void nagCfgDefaultsModeE(NagConfig& c) {
-  nagCfgDefaultsModeD(c);
-  c.mode = MODE_E;
-}
-
-// Mode F — EPAS-Faithful Hold/Walk. Active injected frames force HO=1 with a
-// bounded same-direction 1.50..1.80 Nm walk inside each burst, alternating
-// direction on each new burst cycle.
-static void nagCfgDefaultsModeF(NagConfig& c) {
-  nagCfgSetCommonDefaults(c);
-  c.mode        = MODE_F;
-  c.targetId    = 0x370;
-  c.torqueCount = 1;
-  c.torqueB2[0] = 0x08;
-  c.torqueB3[0] = 0x98;
-  c.hoRatePct   = 100;
-}
-
-// Mode H — AP-gated Human Interaction Model. Event timing uses the fixed
-// NORMAL preset in nag_human_pure.h; LAB may adjust only the primary-event
-// magnitude range, persisted in the NAG namespace.
+// Mode H — AP-gated shared transport wrapper; waveform is selected by nagHumanVariant.
 static void nagCfgDefaultsModeH(NagConfig& c) {
   nagCfgSetCommonDefaults(c);
   c.mode        = MODE_H;
@@ -979,7 +1282,9 @@ static void nagCfgDefaultsModeH(NagConfig& c) {
 
 
 static void nagCfgClampAll(NagConfig& c) {
-  if (c.mode == MODE_D || c.mode == MODE_E || c.mode == MODE_F || c.mode == MODE_H) c.hoRatePct = 100;
+  if (!nagModeHStopBehaviorValidPure(c.modeHStopBehavior))
+    c.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
+  if (c.mode == MODE_H) c.hoRatePct = 100;
   if (c.torqueCount < 1) c.torqueCount = 1;
   if (c.torqueCount > NAG_MAX_TORQUE_ENTRIES) c.torqueCount = NAG_MAX_TORQUE_ENTRIES;
   if (c.hoRatePct > 100) c.hoRatePct = 100;
@@ -989,29 +1294,41 @@ static void nagCfgClampAll(NagConfig& c) {
   for (uint8_t i = 0; i < c.torqueCount; i++) nagClampTorque(c.torqueB2[i], c.torqueB3[i]);
 }
 
+static inline bool nagModePersistedIdSupported(uint8_t mode) {
+  return mode == MODE_A || mode == MODE_B || mode == MODE_C || mode == MODE_H;
+}
+
 static void nagCfgLoad() {
+#if T2CAN_SERIAL_DIAGNOSTICS
   Serial.println("NVS: Loading nag config...");
+#endif
   if (!prefs.begin("nag", true)) {
+#if T2CAN_SERIAL_DIAGNOSTICS
     Serial.println("NVS: No existing nag config, using defaults");
+#endif
     nagCfgDefaultsModeA(nagCfg);
-    nagHumanRuntimeLoadPeakRange(NAG_HUMAN_PEAK_DEFAULT_MIN_RAW,
-                                 NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
+    nagHumanRuntimeLoadDefaults();
     nagRxSelectorsRefreshFromConfig();
     return;
   }
   if (!prefs.isKey("v")) {
     prefs.end();
     nagCfgDefaultsModeA(nagCfg);
-    nagHumanRuntimeLoadPeakRange(NAG_HUMAN_PEAK_DEFAULT_MIN_RAW,
-                                 NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
+    nagHumanRuntimeLoadDefaults();
     nagRxSelectorsRefreshFromConfig();
     return;
   }
+  const uint8_t nagCfgVersion = prefs.getUChar("v", 0u);
   nagCfgSetCommonDefaults(nagCfg);
   nagCfg.enabled        = prefs.getBool("en", true);
   nagCfg.pauseAtZeroSpeed = prefs.getBool("p0", false);
+  const uint8_t storedStopDefault = nagCfgVersion < 18u
+      ? H_STOP_STOCK_CARRIER : nagModeHDefaultStopBehaviorPure();
+  nagCfg.modeHStopBehavior = prefs.getUChar("hsb", storedStopDefault);
+  if (!nagModeHStopBehaviorValidPure(nagCfg.modeHStopBehavior))
+    nagCfg.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
   nagCfg.mode           = prefs.getUChar("mode", 0);
-  if (nagCfg.mode == 2 || nagCfg.mode > MODE_H) nagCfg.mode = MODE_A;
+  if (!nagModePersistedIdSupported(nagCfg.mode)) nagCfg.mode = MODE_A;
   nagCfg.targetId       = prefs.getUShort("id", 0x370);
   nagCfg.torqueCount    = prefs.getUChar("tc", 1);
   size_t n = prefs.getBytes("tb2", nagCfg.torqueB2, NAG_MAX_TORQUE_ENTRIES);
@@ -1023,30 +1340,165 @@ static void nagCfgLoad() {
   nagCfg.pauseMs        = prefs.getUShort("pms", 1500);
   nagCfg.apStateId      = prefs.getUShort("apid", 0x399);
   nagCfg.steeringId     = prefs.getUShort("stid", 0x129);
-  const uint16_t humanPeakMinRaw = prefs.getUShort("hpkmin", NAG_HUMAN_PEAK_DEFAULT_MIN_RAW);
-  const uint16_t humanPeakMaxRaw = prefs.getUShort("hpkmax", NAG_HUMAN_PEAK_DEFAULT_MAX_RAW);
+
+  const NagHumanV1ConfigPure rev1Defaults = nagHumanV1Rev1ConfigPure();
+  const NagHumanV3ConfigPure rev3Defaults = nagHumanV3DefaultConfigPure();
+  const NagHumanV4ConfigPure rev4Defaults = nagHumanV4DefaultConfigPure();
+  uint8_t humanVariant = prefs.getUChar("hv", H_VARIANT_REV3);
+  if (!nagModeHVariantValidPure(humanVariant)) humanVariant = H_VARIANT_REV3;
+
+  NagHumanV1ConfigPure rev1Cfg = rev1Defaults;
+  rev1Cfg.peakMinRaw = prefs.getUShort("hr1pmin", rev1Defaults.peakMinRaw);
+  rev1Cfg.peakMaxRaw = prefs.getUShort("hr1pmax", rev1Defaults.peakMaxRaw);
+  rev1Cfg.waitMinMs = prefs.getUShort("hr1wmin", rev1Defaults.waitMinMs);
+  rev1Cfg.waitMaxMs = prefs.getUShort("hr1wmax", rev1Defaults.waitMaxMs);
+  rev1Cfg.refractoryMinMs = prefs.getUShort("hr1rmin", rev1Defaults.refractoryMinMs);
+  rev1Cfg.refractoryMaxMs = prefs.getUShort("hr1rmax", rev1Defaults.refractoryMaxMs);
+  rev1Cfg.hoOverridePct = prefs.getUChar("hr1ho", rev1Defaults.hoOverridePct);
+
+  NagHumanV3ConfigPure rev3Cfg = rev3Defaults;
+  rev3Cfg.base.peakMinRaw = prefs.getUShort("h3pmin", rev3Defaults.base.peakMinRaw);
+  rev3Cfg.base.peakMaxRaw = prefs.getUShort("h3pmax", rev3Defaults.base.peakMaxRaw);
+  rev3Cfg.base.waitMinMs = prefs.getUShort("h3wmin", rev3Defaults.base.waitMinMs);
+  rev3Cfg.base.waitMaxMs = prefs.getUShort("h3wmax", rev3Defaults.base.waitMaxMs);
+  rev3Cfg.base.refractoryMinMs = prefs.getUShort("h3rmin", rev3Defaults.base.refractoryMinMs);
+  rev3Cfg.base.refractoryMaxMs = prefs.getUShort("h3rmax", rev3Defaults.base.refractoryMaxMs);
+  rev3Cfg.base.hoOverridePct = 0u;
+  rev3Cfg.carrierMinRaw = prefs.getUShort("h3cmin", rev3Defaults.carrierMinRaw);
+  rev3Cfg.carrierMaxRaw = prefs.getUShort("h3cmax", rev3Defaults.carrierMaxRaw);
+  rev3Cfg.carrierDirectionMode = prefs.getUChar("h3dir", rev3Defaults.carrierDirectionMode);
+  rev3Cfg.hoPolicy = prefs.getUChar("h3hop", rev3Defaults.hoPolicy);
+  rev3Cfg.ho1ThresholdRaw = prefs.getUShort("h3ho1", rev3Defaults.ho1ThresholdRaw);
+  rev3Cfg.ho2ThresholdRaw = prefs.getUShort("h3ho2", rev3Defaults.ho2ThresholdRaw);
+
+  // Rev.4 has owned the h4* namespace since schema v15. Legacy Rev.1 Plus h1*
+  // keys are deliberately never reinterpreted as Rev.4 tuning.
+  NagHumanV4ConfigPure rev4Cfg = rev4Defaults;
+  rev4Cfg.base.peakMinRaw = prefs.getUShort("h4pmin", rev4Defaults.base.peakMinRaw);
+  rev4Cfg.base.peakMaxRaw = prefs.getUShort("h4pmax", rev4Defaults.base.peakMaxRaw);
+  rev4Cfg.base.waitMinMs = prefs.getUShort("h4wmin", rev4Defaults.base.waitMinMs);
+  rev4Cfg.base.waitMaxMs = prefs.getUShort("h4wmax", rev4Defaults.base.waitMaxMs);
+  rev4Cfg.base.refractoryMinMs = prefs.getUShort("h4rmin", rev4Defaults.base.refractoryMinMs);
+  rev4Cfg.base.refractoryMaxMs = prefs.getUShort("h4rmax", rev4Defaults.base.refractoryMaxMs);
+  rev4Cfg.base.hoOverridePct = 0u;
+  rev4Cfg.carrierMinRaw = prefs.getUShort("h4cmin", rev4Defaults.carrierMinRaw);
+  rev4Cfg.carrierMaxRaw = prefs.getUShort("h4cmax", rev4Defaults.carrierMaxRaw);
+  rev4Cfg.hoPolicy = prefs.getUChar("h4hop", rev4Defaults.hoPolicy);
+  rev4Cfg.ho1ThresholdRaw = prefs.getUShort("h4ho1", rev4Defaults.ho1ThresholdRaw);
+  rev4Cfg.ho2ThresholdRaw = prefs.getUShort("h4ho2", rev4Defaults.ho2ThresholdRaw);
+  rev4Cfg.visualRescueEnabled = prefs.getBool("h4vres", rev4Defaults.visualRescueEnabled);
+  rev4Cfg.visualRescueDelayMs = prefs.getUShort("h4vdly", rev4Defaults.visualRescueDelayMs);
   prefs.end();
+
+  // Preserve arbitrary custom Rev.3 profiles; migrate only known old defaults.
+  const bool migratedRev3D4 = nagCfgVersion < 13u && nagHumanV3MigrateD3DefaultToD4Pure(rev3Cfg);
+  // Schema v17 promotes only the exact v16 Rev.4 defaults. Custom Rev.4
+  // tuning survives unchanged while all profiles gain the new HO defaults.
+  const bool migratedRev4V17 = nagCfgVersion < 17u && nagHumanV4MigrateV16DefaultPure(rev4Cfg);
+  const bool migratedRev4V18 = nagCfgVersion < 18u && nagHumanV4MigrateV17DefaultPure(rev4Cfg);
+  if ((migratedRev4V17 || migratedRev4V18) &&
+      nagCfg.modeHStopBehavior == H_STOP_STOCK_CARRIER) {
+    nagCfg.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
+  }
+
   nagCfgClampAll(nagCfg);
-  nagHumanRuntimeLoadPeakRange(humanPeakMinRaw, humanPeakMaxRaw);
+  if (!nagHumanV1PeakRangeValidPure(rev1Cfg.peakMinRaw, rev1Cfg.peakMaxRaw) ||
+      !nagHumanV1TimingValidPure(rev1Cfg.waitMinMs, rev1Cfg.waitMaxMs,
+                                rev1Cfg.refractoryMinMs, rev1Cfg.refractoryMaxMs) ||
+      rev1Cfg.hoOverridePct > 100u) rev1Cfg = rev1Defaults;
+  if (!nagHumanV3ConfigValidPure(rev3Cfg)) rev3Cfg = rev3Defaults;
+  if (!nagHumanV4ConfigValidPure(rev4Cfg)) rev4Cfg = rev4Defaults;
+  portENTER_CRITICAL(&nagHumanMux);
+  nagHumanVariant = humanVariant;
+  nagHumanV1Rev1Config = rev1Cfg;
+  nagHumanV1State = NagHumanV1StatePure{};
+  nagHumanV1Initialized = false;
+  nagHumanV2Config = nagHumanV2DefaultConfigPure();
+  nagHumanV2State = NagHumanV2StatePure{};
+  nagHumanV2Initialized = false;
+  nagHumanV3Config = rev3Cfg;
+  nagHumanV3State = NagHumanV3StatePure{};
+  nagHumanV3Initialized = false;
+  nagHumanV4Config = rev4Cfg;
+  nagHumanV4State = NagHumanV4StatePure{};
+  nagHumanV4Initialized = false;
+  portEXIT_CRITICAL(&nagHumanMux);
+
+  // Schema v18 updates only an exact prior Rev.4 default profile. Custom
+  // tuning and an independently selected stop behavior survive unchanged.
+  // Profile id 1 is intentionally retained, so an OTA installation previously
+  // selecting Rev.1 Plus moves to Rev.4 without creating a fifth profile id.
+  if ((nagCfgVersion < 18u || migratedRev3D4 || migratedRev4V17 || migratedRev4V18) &&
+      prefs.begin("nag", false)) {
+    prefs.putUChar("hv", humanVariant);
+    prefs.putUChar("hsb", nagCfg.modeHStopBehavior);
+    prefs.putUShort("hr1pmin", rev1Cfg.peakMinRaw);
+    prefs.putUShort("hr1pmax", rev1Cfg.peakMaxRaw);
+    prefs.putUShort("hr1wmin", rev1Cfg.waitMinMs);
+    prefs.putUShort("hr1wmax", rev1Cfg.waitMaxMs);
+    prefs.putUShort("hr1rmin", rev1Cfg.refractoryMinMs);
+    prefs.putUShort("hr1rmax", rev1Cfg.refractoryMaxMs);
+    prefs.putUChar("hr1ho", rev1Cfg.hoOverridePct);
+    prefs.putUShort("h3pmin", rev3Cfg.base.peakMinRaw);
+    prefs.putUShort("h3pmax", rev3Cfg.base.peakMaxRaw);
+    prefs.putUShort("h3wmin", rev3Cfg.base.waitMinMs);
+    prefs.putUShort("h3wmax", rev3Cfg.base.waitMaxMs);
+    prefs.putUShort("h3rmin", rev3Cfg.base.refractoryMinMs);
+    prefs.putUShort("h3rmax", rev3Cfg.base.refractoryMaxMs);
+    prefs.putUShort("h3cmin", rev3Cfg.carrierMinRaw);
+    prefs.putUShort("h3cmax", rev3Cfg.carrierMaxRaw);
+    prefs.putUChar("h3dir", rev3Cfg.carrierDirectionMode);
+    prefs.putUChar("h3hop", rev3Cfg.hoPolicy);
+    prefs.putUShort("h3ho1", rev3Cfg.ho1ThresholdRaw);
+    prefs.putUShort("h3ho2", rev3Cfg.ho2ThresholdRaw);
+    prefs.putUShort("h4pmin", rev4Cfg.base.peakMinRaw);
+    prefs.putUShort("h4pmax", rev4Cfg.base.peakMaxRaw);
+    prefs.putUShort("h4wmin", rev4Cfg.base.waitMinMs);
+    prefs.putUShort("h4wmax", rev4Cfg.base.waitMaxMs);
+    prefs.putUShort("h4rmin", rev4Cfg.base.refractoryMinMs);
+    prefs.putUShort("h4rmax", rev4Cfg.base.refractoryMaxMs);
+    prefs.putUShort("h4cmin", rev4Cfg.carrierMinRaw);
+    prefs.putUShort("h4cmax", rev4Cfg.carrierMaxRaw);
+    prefs.putUChar("h4hop", rev4Cfg.hoPolicy);
+    prefs.putUShort("h4ho1", rev4Cfg.ho1ThresholdRaw);
+    prefs.putUShort("h4ho2", rev4Cfg.ho2ThresholdRaw);
+    prefs.putBool("h4vres", rev4Cfg.visualRescueEnabled);
+    prefs.putUShort("h4vdly", rev4Cfg.visualRescueDelayMs);
+    prefs.putUChar("v", 18u);
+    prefs.end();
+  }
+
   nagRxSelectorsRefreshFromConfig();
+#if T2CAN_SERIAL_DIAGNOSTICS
   Serial.println("NVS: Nag config loaded OK");
+#endif
 }
 
 static void nagCfgSave() {
   NagConfig snapshot;
-  NagHumanConfigPure humanSnapshot;
+  NagHumanV1ConfigPure rev1Snapshot;
+  NagHumanV3ConfigPure rev3Snapshot;
+  NagHumanV4ConfigPure rev4Snapshot;
+  uint8_t variantSnapshot;
   portENTER_CRITICAL(&nagCfgMux);
   snapshot = nagCfg;
   portEXIT_CRITICAL(&nagCfgMux);
-  humanSnapshot = nagHumanRuntimeConfigSnapshot();
-  nagHumanSanitizePeakRangePure(humanSnapshot);
+  portENTER_CRITICAL(&nagHumanMux);
+  rev1Snapshot = nagHumanV1Rev1Config;
+  rev3Snapshot = nagHumanV3Config;
+  rev4Snapshot = nagHumanV4Config;
+  variantSnapshot = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
+  portEXIT_CRITICAL(&nagHumanMux);
   nagCfgClampAll(snapshot);
   if (!prefs.begin("nag", false)) {
+#if T2CAN_SERIAL_DIAGNOSTICS
     Serial.println("NVS: Nag save failed - could not open");
+#endif
     return;
   }
   prefs.putBool("en",     snapshot.enabled);
   prefs.putBool("p0",     snapshot.pauseAtZeroSpeed);
+  prefs.putUChar("hsb",   snapshot.modeHStopBehavior);
   prefs.putUChar("mode",  snapshot.mode);
   prefs.putUShort("id",   snapshot.targetId);
   prefs.putUChar("tc",    snapshot.torqueCount);
@@ -1057,9 +1509,40 @@ static void nagCfgSave() {
   prefs.putUShort("pms",  snapshot.pauseMs);
   prefs.putUShort("apid", snapshot.apStateId);
   prefs.putUShort("stid", snapshot.steeringId);
-  prefs.putUShort("hpkmin", humanSnapshot.peakMinRaw);
-  prefs.putUShort("hpkmax", humanSnapshot.peakMaxRaw);
-  prefs.putUChar("v",     5);
+  prefs.putUChar("hv", variantSnapshot);
+  prefs.putUShort("hr1pmin", rev1Snapshot.peakMinRaw);
+  prefs.putUShort("hr1pmax", rev1Snapshot.peakMaxRaw);
+  prefs.putUShort("hr1wmin", rev1Snapshot.waitMinMs);
+  prefs.putUShort("hr1wmax", rev1Snapshot.waitMaxMs);
+  prefs.putUShort("hr1rmin", rev1Snapshot.refractoryMinMs);
+  prefs.putUShort("hr1rmax", rev1Snapshot.refractoryMaxMs);
+  prefs.putUChar("hr1ho", rev1Snapshot.hoOverridePct);
+  prefs.putUShort("h3pmin", rev3Snapshot.base.peakMinRaw);
+  prefs.putUShort("h3pmax", rev3Snapshot.base.peakMaxRaw);
+  prefs.putUShort("h3wmin", rev3Snapshot.base.waitMinMs);
+  prefs.putUShort("h3wmax", rev3Snapshot.base.waitMaxMs);
+  prefs.putUShort("h3rmin", rev3Snapshot.base.refractoryMinMs);
+  prefs.putUShort("h3rmax", rev3Snapshot.base.refractoryMaxMs);
+  prefs.putUShort("h3cmin", rev3Snapshot.carrierMinRaw);
+  prefs.putUShort("h3cmax", rev3Snapshot.carrierMaxRaw);
+  prefs.putUChar("h3dir", rev3Snapshot.carrierDirectionMode);
+  prefs.putUChar("h3hop", rev3Snapshot.hoPolicy);
+  prefs.putUShort("h3ho1", rev3Snapshot.ho1ThresholdRaw);
+  prefs.putUShort("h3ho2", rev3Snapshot.ho2ThresholdRaw);
+  prefs.putUShort("h4pmin", rev4Snapshot.base.peakMinRaw);
+  prefs.putUShort("h4pmax", rev4Snapshot.base.peakMaxRaw);
+  prefs.putUShort("h4wmin", rev4Snapshot.base.waitMinMs);
+  prefs.putUShort("h4wmax", rev4Snapshot.base.waitMaxMs);
+  prefs.putUShort("h4rmin", rev4Snapshot.base.refractoryMinMs);
+  prefs.putUShort("h4rmax", rev4Snapshot.base.refractoryMaxMs);
+  prefs.putUShort("h4cmin", rev4Snapshot.carrierMinRaw);
+  prefs.putUShort("h4cmax", rev4Snapshot.carrierMaxRaw);
+  prefs.putUChar("h4hop", rev4Snapshot.hoPolicy);
+  prefs.putUShort("h4ho1", rev4Snapshot.ho1ThresholdRaw);
+  prefs.putUShort("h4ho2", rev4Snapshot.ho2ThresholdRaw);
+  prefs.putBool("h4vres", rev4Snapshot.visualRescueEnabled);
+  prefs.putUShort("h4vdly", rev4Snapshot.visualRescueDelayMs);
+  prefs.putUChar("v",     18u);
   prefs.end();
 }
 
@@ -1099,7 +1582,6 @@ static bool nagDecideInjection(uint8_t dlc,
       nagCtx.walkSeed = (uint16_t)(esp_random() & 0xFFFFu);
       if (nagCtx.walkSeed == 0) nagCtx.walkSeed = 0xACE1u;
       nagCtx.modeCRaw = 0x8A7;
-      nagCtx.lastModeCTorqueNm = 1.65f;
       portEXIT_CRITICAL(&nagCtxMux);
     }
   }
@@ -1131,31 +1613,6 @@ static bool nagDecideInjection(uint8_t dlc,
     return true;
   }
 
-  if (mode == MODE_D || mode == MODE_E) {
-    uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
-    if (cycleMs == 0) cycleMs = 1;
-    // Portable modes intentionally use a boot-time phase and do not sync to AP.
-    uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
-    if (phase >= burstMs) return false;
-    if (now - lastChangeMs >= 200) {
-      tIdx = (tIdx + 1) % tCount;
-      lastChangeMs = now;
-    }
-    out_b2 = tB2[tIdx];
-    out_b3 = tB3[tIdx];
-    out_setHo = true;
-    return true;
-  }
-
-  if (mode == MODE_F) {
-    uint16_t raw = 0;
-    if (!nagModeFFaithfulRawPure((uint32_t)(now - bootTime), burstMs, pauseMs, raw)) return false;
-    out_b2 = (uint8_t)((raw >> 8) & 0x0F);
-    out_b3 = (uint8_t)(raw & 0xFF);
-    out_setHo = true;
-    return true;
-  }
-
   if (mode == MODE_C) {
     uint16_t raw;
     portENTER_CRITICAL(&nagCtxMux);
@@ -1164,7 +1621,6 @@ static bool nagDecideInjection(uint8_t dlc,
     if (nagCtx.walkSeed == 0) nagCtx.walkSeed = 0xACE1u;
     if (now - lastChangeMs >= NAG_MODE_C_STEP_MS) {
       nagCtx.modeCRaw = nagModeCNextRawPure(nagCtx.modeCRaw, nagCtx.walkSeed);
-      nagCtx.lastModeCTorqueNm = (float)nagCtx.modeCRaw * 0.01f - 20.5f;
       lastChangeMs = now;
     }
     raw = nagCtx.modeCRaw;
@@ -1180,6 +1636,27 @@ static bool nagDecideInjection(uint8_t dlc,
 
 // ── Nag context updates (raw data) ──
 
+static void nagObserveHandsOnState(uint8_t ho, uint32_t now) {
+  portENTER_CRITICAL(&nagCtxMux);
+  if (ho != nagCtx.handsOnState) {
+    const uint8_t previousHandsOnState = nagCtx.handsOnState;
+    nagCtx.prevHandsOnState = previousHandsOnState;
+    nagCtx.handsOnState = ho;
+    const bool visualWarningNow = nagHumanV4VisualWarningActivePure(ho);
+    if (nagHumanV4VisualWarningEdgePure(previousHandsOnState, ho)) {
+      nagCtx.visualWarningEpoch++;
+      if (nagCtx.visualWarningEpoch == 0u) nagCtx.visualWarningEpoch = 1u;
+      nagCtx.visualWarningEnterMs = now;
+    }
+    nagCtx.visualWarningActive = visualWarningNow;
+    if (ho == 2 && nagCtx.state2EnterMs == 0) nagCtx.state2EnterMs = now;
+    if (ho != 2) nagCtx.state2EnterMs = 0;
+    if (ho == 3 && nagCtx.state3EnterMs == 0) nagCtx.state3EnterMs = now;
+    if (ho != 3) nagCtx.state3EnterMs = 0;
+  }
+  portEXIT_CRITICAL(&nagCtxMux);
+}
+
 static void nagUpdateApState(const uint8_t* data, uint8_t dlc) {
   if (dlc < 8) return;
   uint8_t apb, apsh, apmask, hob, hosh, homask;
@@ -1187,22 +1664,16 @@ static void nagUpdateApState(const uint8_t* data, uint8_t dlc) {
   apb = nagCfg.apStateByte; apsh = nagCfg.apStateShift; apmask = nagCfg.apStateMask;
   hob = nagCfg.handsOnByte; hosh = nagCfg.handsOnShift; homask = nagCfg.handsOnMask;
   portEXIT_CRITICAL(&nagCfgMux);
-  if (apb >= dlc || hob >= dlc) return;
-  uint8_t ap = (data[apb] >> apsh) & apmask;
-  uint8_t ho = (data[hob] >> hosh) & homask;
+  uint8_t ap = 0xFFu;
+  uint8_t ho = 0xFFu;
+  if (!dasStatus399SelectorDecodePure(
+          data, dlc, apb, apsh, apmask, hob, hosh, homask, ap, ho)) return;
   unsigned long now = millis();
   portENTER_CRITICAL(&nagCtxMux);
   nagCtx.apState = ap;
   nagCtx.lastApStateMs = now;
-  if (ho != nagCtx.handsOnState) {
-    nagCtx.prevHandsOnState = nagCtx.handsOnState;
-    nagCtx.handsOnState = ho;
-    if (ho == 2 && nagCtx.state2EnterMs == 0) nagCtx.state2EnterMs = now;
-    if (ho != 2) nagCtx.state2EnterMs = 0;
-    if (ho == 3 && nagCtx.state3EnterMs == 0) nagCtx.state3EnterMs = now;
-    if (ho != 3) nagCtx.state3EnterMs = 0;
-  }
   portEXIT_CRITICAL(&nagCtxMux);
+  nagObserveHandsOnState(ho, (uint32_t)now);
 }
 
 static void nagUpdateVehicleSpeed(const uint8_t* data, uint8_t dlc) {
@@ -1218,17 +1689,17 @@ static void nagUpdateVehicleSpeed(const uint8_t* data, uint8_t dlc) {
 
 static void nagUpdateSteering(const uint8_t* data, uint8_t dlc) {
   if (dlc < 8) return;
-  uint8_t bh, bl; float scale, offs;
+  uint8_t bh, bl;
   portENTER_CRITICAL(&nagCfgMux);
   bh = nagCfg.steeringByteHi; bl = nagCfg.steeringByteLo;
-  scale = nagCfg.steeringScale; offs = nagCfg.steeringOffset;
   portEXIT_CRITICAL(&nagCfgMux);
   if (bh >= dlc || bl >= dlc) return;
-  int16_t raw = (int16_t)(((uint16_t)data[bh] << 8) | data[bl]);
-  float deg = raw * scale + offs;
-  unsigned long now = millis();
+  const int16_t raw = (int16_t)(((uint16_t)data[bh] << 8) | data[bl]);
+  const unsigned long now = millis();
   portENTER_CRITICAL(&nagCtxMux);
-  nagCtx.steeringAngleDeg = deg;
+  // Public Tesla DBC scale is fixed at 0.1 deg/raw with zero offset, so the
+  // signed raw value is already steering angle in deci-degrees.
+  nagCtx.steeringAngleDeciDeg = raw;
   nagCtx.lastSteeringMs = now;
   portEXIT_CRITICAL(&nagCtxMux);
 }
@@ -1261,7 +1732,9 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     switch (id) {
       case 280: if (dlc >= 7) handle280(rxf.data); break;
       case 390: if (dlc >= 8) handle390(rxf.data); break;
-      case 921: if (dlc >= 1) handle921(rxf.data, dlc); break;
+      case 921:
+        if (dlc >= 6) handle921(rxf.data, dlc);
+        break;
       default: break;
     }
   }
@@ -1302,21 +1775,18 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   if (dlc < 5) return;
   uint8_t ho = (rxf.data[4] >> 6) & 0x03;
   uint16_t tRaw = ((rxf.data[2] & 0x0F) << 8) | rxf.data[3];
-  nagRealHo     = ho;
-  nagRealTorque = tRaw * 0.01f - 20.5f;
-  const bool portableMode = (modeNow == MODE_D || modeNow == MODE_E || modeNow == MODE_F);
-  const bool exactEchoMode = portableMode || modeNow == MODE_H;
+  nagRealHo = ho;
+  nagRealTorqueCenti = (int16_t)tRaw - 2050;
+  const bool exactEchoMode = modeNow == MODE_H;
 
-  // Invalidate exact-echo state on every mode transition. Mode E starts a
-  // fresh cadence learner on entry; Mode H starts a new event session and
-  // discards any event from the previous mode.
-  if (modeNow != nagPortablePrevMode) {
-    const uint8_t previousMode = nagPortablePrevMode;
+  // Invalidate exact-echo state on every mode transition. Entering Mode H
+  // starts a fresh human-interaction event session; leaving H clears it.
+  if (modeNow != nagExactEchoPrevMode) {
+    const uint8_t previousMode = nagExactEchoPrevMode;
     nagExactEchoReset();
-    if (modeNow == MODE_E) nagCadenceResetPure(nagCadenceState);
     if (modeNow == MODE_H) nagHumanRuntimeReset(true);
     else if (previousMode == MODE_H) nagHumanRuntimeReset(false);
-    nagPortablePrevMode = modeNow;
+    nagExactEchoPrevMode = modeNow;
   }
 
   bool isOurs = false;
@@ -1324,13 +1794,13 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     bool lastValid;
     uint32_t lastMs;
     uint8_t lastRaw[8];
-    portENTER_CRITICAL(&nagPortableMux);
-    lastValid = nagPortableLastTxValid;
-    lastMs = nagPortableLastTxMs;
-    memcpy(lastRaw, nagPortableLastTxRaw, 8);
-    portEXIT_CRITICAL(&nagPortableMux);
+    portENTER_CRITICAL(&nagExactEchoMux);
+    lastValid = nagExactEchoLastTxValid;
+    lastMs = nagExactEchoLastTxMs;
+    memcpy(lastRaw, nagExactEchoLastTxRaw, 8);
+    portEXIT_CRITICAL(&nagExactEchoMux);
     const uint32_t ageMs = lastMs ? (uint32_t)((uint32_t)millis() - lastMs) : 0xFFFFFFFFu;
-    isOurs = nagPortableRecentTxEchoPure(exactEchoMode, lastValid, ageMs, rxf.data, lastRaw, dlc);
+    isOurs = nagExactRecentTxEchoPure(exactEchoMode, lastValid, ageMs, rxf.data, lastRaw, dlc);
   }
 
   // Preserve the v3.2 hotfix A/B/C self-frame heuristic unchanged.
@@ -1352,25 +1822,13 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     }
   }
 
-  // Mode E is the only mode that observes/learns OEM 0x370 cadence.
-  if (modeNow == MODE_E && !isOurs && dlc >= 8) {
-    const uint32_t rxUs = (uint32_t)micros();
-    const uint8_t sourceCounter = (uint8_t)(rxf.data[6] & 0x0Fu);
-    nagCadenceObservePure(nagCadenceState, rxUs, sourceCounter);
-  }
-
   const uint32_t nowMs = (uint32_t)millis();
   bool bootDelayPassed = (nowMs - canInitTime) >= NAG_INJECTION_DELAY_MS;
   bool canSeen = mcpRxCount > 1000;  // Retain the established MCP warmup threshold.
-  NagSkipReasonPure eligibility;
-  if (portableMode) {
-    eligibility = nagPortableEligibilityReasonPure(en, bootDelayPassed, canSeen, isOurs, ho);
-  } else {
-    bool apValid, apActiveForNag;
-    nagApGateSnapshot(apValid, apActiveForNag);
-    eligibility = nagEligibilityReasonPure(
-        en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag);
-  }
+  bool apValid, apActiveForNag;
+  nagApGateSnapshot(apValid, apActiveForNag);
+  const NagSkipReasonPure eligibility = nagEligibilityReasonPure(
+      en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag);
   if (eligibility != NAG_SKIP_NONE) {
     // A real gate closure cancels a Mode H event. A local self-echo is merely
     // ignored and must not tear down the live event session.
@@ -1381,42 +1839,59 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   }
 
   bool pauseAtZero = false;
+  uint8_t modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
   portENTER_CRITICAL(&nagCfgMux);
   pauseAtZero = nagCfg.pauseAtZeroSpeed;
+  modeHStopBehavior = nagModeHStopBehaviorValidPure(nagCfg.modeHStopBehavior)
+      ? nagCfg.modeHStopBehavior : nagModeHDefaultStopBehaviorPure();
   portEXIT_CRITICAL(&nagCfgMux);
   uint16_t speedRaw = 0;
   bool speedValid = false;
   uint32_t speedLastMs = 0;
+  uint32_t visualWarningEpoch = 0;
+  uint32_t visualWarningEnterMs = 0;
+  bool visualWarningActive = false;
   portENTER_CRITICAL(&nagCtxMux);
   speedRaw = nagCtx.vehicleSpeedRaw;
   speedValid = nagCtx.vehicleSpeedValid;
   speedLastMs = nagCtx.lastVehicleSpeedMs;
+  visualWarningEpoch = nagCtx.visualWarningEpoch;
+  visualWarningEnterMs = nagCtx.visualWarningEnterMs;
+  visualWarningActive = nagCtx.visualWarningActive;
   portEXIT_CRITICAL(&nagCtxMux);
   const bool speedFresh = speedLastMs != 0 && (uint32_t)(nowMs - speedLastMs) <= NAG_SPEED_FRESH_MS;
 
-  NagHumanStepResultPure humanDecision = {};
+  NagHumanV1StepResultPure humanDecision = {};
+  bool modeHStopCarrier = false;
   if (modeNow == MODE_H) {
-    humanDecision = nagHumanRuntimeStep(nowMs, tRaw, true, speedValid, speedFresh, speedRaw);
+    humanDecision = nagHumanRuntimeStep(nowMs, tRaw, true, speedValid, speedFresh, speedRaw,
+                                        visualWarningEpoch, visualWarningEnterMs, visualWarningActive);
     if (!humanDecision.tx) {
-      const NagSkipReasonPure reason = humanDecision.blockReason == H_BLOCK_SPEED_STALE
-          ? NAG_SKIP_SPEED_STALE
-          : NAG_SKIP_STOPPED;
-      nagDiagRecordSkip(reason, nowMs);
-      return;
+      const bool confirmedStopped = humanDecision.blockReason == H1_BLOCK_STOPPED;
+      if (nagModeHUseStopCarrierPure(modeHStopBehavior, confirmedStopped)) {
+        // d5 A/B experiment: keep Mode H's event engine paused at a confirmed
+        // stop, but preserve transport continuity. Torque and the complete HO
+        // field remain stock; only the rolling counter/checksum are advanced.
+        humanDecision.tx = true;
+        humanDecision.raw = tRaw;
+        humanDecision.setHo = false;
+        humanDecision.hoOverrideValid = false;
+        humanDecision.hoLevel = 0u;
+        modeHStopCarrier = true;
+      } else {
+        const NagSkipReasonPure reason = humanDecision.blockReason == H1_BLOCK_SPEED_STALE
+            ? NAG_SKIP_SPEED_STALE
+            : NAG_SKIP_STOPPED;
+        nagDiagRecordSkip(reason, nowMs);
+        return;
+      }
     }
   } else if (nagPauseAtZeroBlocksPure(pauseAtZero, speedValid, speedFresh, speedRaw)) {
     nagDiagRecordSkip(NAG_SKIP_STOPPED, nowMs);
     return;
   }
 
-  uint8_t counterStep = 1u;
-  if (modeNow == MODE_E) {
-    if (!(nagCadenceState.stable && nagCadenceState.haveStep)) {
-      nagDiagRecordSkip(NAG_SKIP_CADENCE, nowMs);
-      return;
-    }
-    counterStep = nagCadenceState.counterStep;
-  }
+  const uint8_t counterStep = 1u;
 
   const uint32_t txEpoch = canTxEpochSnapshot();
   if (txEpoch == 0) {
@@ -1425,11 +1900,15 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   }
   {
     uint8_t b2 = 0, b3 = 0; bool setHo = false;
+    bool hoOverrideValid = false;
+    uint8_t hoLevel = 0u;
     bool shouldInject = false;
     if (modeNow == MODE_H) {
       b2 = (uint8_t)((humanDecision.raw >> 8) & 0x0Fu);
       b3 = (uint8_t)(humanDecision.raw & 0xFFu);
       setHo = humanDecision.setHo;
+      hoOverrideValid = humanDecision.hoOverrideValid;
+      hoLevel = humanDecision.hoLevel > 2u ? 2u : humanDecision.hoLevel;
       shouldInject = humanDecision.tx;
     } else {
       shouldInject = nagDecideInjection(dlc, b2, b3, setHo);
@@ -1441,7 +1920,14 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
       memcpy(txf.data, rxf.data, 8);
       txf.data[2] = (txf.data[2] & 0xF0) | (b2 & 0x0F);
       txf.data[3] = b3;
-      txf.data[4] = setHo ? (txf.data[4] | 0x40) : txf.data[4];
+      if (modeNow == MODE_H && hoOverrideValid) {
+        // Explicitly overwrite the complete 2-bit EPAS handsOnLevel field.
+        // Rev.3/Rev.4 may request HO=2; HO=3 is never generated because it can
+        // disengage Autosteer. Rev.1/Rev.2 still request only HO=1.
+        txf.data[4] = (uint8_t)((txf.data[4] & 0x3Fu) | ((hoLevel & 0x03u) << 6));
+      } else if (setHo) {
+        txf.data[4] = (uint8_t)(txf.data[4] | 0x40u);
+      }
       txf.data[6] = (txf.data[6] & 0xF0) |
                     (((txf.data[6] & 0x0F) + counterStep) & 0x0F);
       uint16_t s = txf.data[0] + txf.data[1] + txf.data[2] + txf.data[3]
@@ -1465,20 +1951,21 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
         nagLastInjectedHo = exactEchoMode
             ? (uint8_t)((txf.data[4] >> 6) & 0x03u)
             : (setHo ? 1 : 0);
-        uint16_t raw = ((b2 & 0x0F) << 8) | b3;
-        nagLastInjectedNm = raw * 0.01f - 20.5f;
+        const uint16_t raw = ((b2 & 0x0F) << 8) | b3;
+        nagLastInjectedCenti = (int16_t)raw - 2050;
         if (exactEchoMode) {
-          portENTER_CRITICAL(&nagPortableMux);
-          memcpy(nagPortableLastTxRaw, txf.data, 8);
-          nagPortableLastTxMs = nowMs;
-          nagPortableLastTxValid = true;
-          portEXIT_CRITICAL(&nagPortableMux);
+          portENTER_CRITICAL(&nagExactEchoMux);
+          memcpy(nagExactEchoLastTxRaw, txf.data, 8);
+          nagExactEchoLastTxMs = nowMs;
+          nagExactEchoLastTxValid = true;
+          portEXIT_CRITICAL(&nagExactEchoMux);
         }
         portENTER_CRITICAL(&nagDiagMux);
         nagTxOk++;
         nagMaxTxGapMs = nagGapMaxUpdatePure(nagLastTxOkMs, nowMs, nagMaxTxGapMs);
         nagLastTxOkMs = nowMs;
         nagSessionTxOk++;
+        if (modeHStopCarrier) nagStopCarrierTxOk++;
         nagLastTxBlockReason = MCP_TX_OK;
         nagLastTxBlockMs = 0;
         portEXIT_CRITICAL(&nagDiagMux);
@@ -1489,12 +1976,14 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
         nagTxFail++;
         portEXIT_CRITICAL(&nagDiagMux);
         nagDiagRecordTxBlock(MCP_TX_SEND_ERROR, nowMs);
-        unsigned long now = millis();
+#if T2CAN_SERIAL_DIAGNOSTICS
+        const unsigned long now = millis();
         if (now - nagLastTxFailLog >= 2000) {
           nagLastTxFailLog = now;
           Serial.printf("[NAG TX FAIL] MCP err=%d nag=%lu mcp=%lu\n",
                         (int)err, (unsigned long)nagTxFail, (unsigned long)mcpTxFail);
         }
+#endif
       }
     } else {
       nagDiagRecordSkip(NAG_SKIP_DECISION, nowMs);

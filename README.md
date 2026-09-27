@@ -8,23 +8,23 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.5b  
+# T2CAN Universal Unlock v3.7.2
 
 **Major Universal Release**  
-**Release date:** September 2026  
+**Release date:** 26 September 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
-- 3.5b only fix cancel lane change 
 
-**v3.5 Highlights**
-- New Nag Killer Mode H — Human Interaction
-- Improved Mode D / E / F
-- Auto Blinker retry logic
-- Summon / R79 reliability improvements
-- 1.00–3.00 Nm Mode H torque range
+**v3.7.2 Highlights**
+- Lane-change instant cancel hotfix
+- new R79 policy
+- Nag-killer Mode H Rev.4
+- Auto Blinker stabilization and cancel pause
+- AP Right Scroll warning recovery
 - Full mobile dashboard redesign
 - Performance and resource optimizations
+- And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md)
 
 ## 📋3.0 Release Highlights  
 
@@ -122,89 +122,12 @@ Universal v3.0 introduces a stricter **CAN TX Recovery Barrier / Epoch Model**.
 
 When a CAN controller recovery or reinitialization boundary occurs, transient authorization from the previous CAN session is invalidated.
 
-This includes state used by:
-
-- Auto Blinker.
-- R79.
-- Pending S3XY actions.
-- Temporary vehicle actions.
-- Cached stock-frame templates.
-- Other transient TX state.
-
-## Recovery Behavior
-
-- Previous-session state cannot silently authorize new TX.
-- Required stock templates must be captured again after a relevant recovery boundary.
-- Pending actions are cancelled across recovery epochs.
-- TX resumes only after the current CAN epoch satisfies the required bus/runtime conditions.
-
-## Expanded CAN Diagnostics
-
-Universal v3.0 adds significantly deeper runtime evidence:
-
-- BUS OFF / STOPPED counters.
-- Recovery start / outcome counters.
-- Restart success / failure information.
-- RX gap telemetry.
-- TEC / REC and CAN error information.
-- TX queue state.
-- BUS OFF snapshots.
-- CAN B TX trace export.
-- Boot timing / capture diagnostics.
-
----
-
 # 4. Direct S3XY Button Bluetooth Support — NEW
 
 Direct S3XY Button integration is a new subsystem compared with both predecessor firmware lines.
 
 Universal v3.0 supports **up to 3 registered S3XY Buttons**.
 
-## Device Management
-
-- Persistent button registry.
-- Per-device naming.
-- Pair / Connect / Disconnect / Forget.
-- Secure BLE connection and handshake.
-- Persistent identity information.
-- Global Auto Connect.
-- Per-device Auto Connect.
-- Automatic reconnection.
-- BLE identity / connection diagnostics.
-- BLE CSV logging.
-
-## Button Actions
-
-Single, Double, and Long press mappings can use:
-
-- None
-- NOA Lane Change Cancel
-- Acceleration Mode Toggle
-- Research Capture A
-- Research Capture B
-- Research Capture C
-- Research Capture D
-- Research Capture Reset
-
-## Runtime Bluetooth Master
-
-Bluetooth can now be enabled or disabled without rebooting the T-2CAN controller.
-
-### OFF → ON
-- No MCU reboot.
-- BLE runtime initializes.
-- Eligible saved buttons re-enter the normal Auto-Reconnect path.
-
-### ON → OFF
-- No MCU reboot.
-- Active scanning stops.
-- BLE clients disconnect.
-- Pending BLE commands/actions are cleared.
-- BLE runtime is reversibly deinitialized.
-
-Saved registry, bonds, mappings, and Auto Connect settings are preserved.
-
----
 
 # 5. Auto Blinker — REWORKED
 
