@@ -38,7 +38,7 @@
 | NAG Killer | Mode H Rev.4 production defaults and profiles in **Settings → NAG KILLER** |
 | AP Right Scroll | Warning recovery for all supported profiles, with 1–5 s repeat interval (default 2 s) |
 | Dashboard | New production controls, persistent migrations, firmware identity updated to v3.7 |
-| Nag Killer | New mode tsl9 using chassis/body configuration (doesn't work on all region/country)
+| Nag Killer | New mode tsl9 using chassis/body configuration (doesn't work in all region/country)
 
 ## 🚙 Supported profiles
 
