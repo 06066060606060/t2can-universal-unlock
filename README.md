@@ -38,13 +38,14 @@
 | NAG Killer | Mode H Rev.4 production defaults and profiles in **Settings → NAG KILLER** |
 | AP Right Scroll | Warning recovery for all supported profiles, with 1–5 s repeat interval (default 2 s) |
 | Dashboard | New production controls, persistent migrations, firmware identity updated to v3.7 |
+| Nag Killer | New mode tsl9 using chassis/body configuration (doesn't work on all region/country)
 
 ## 🚙 Supported profiles
 
 | Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
 |---|:---:|:---:|:---:|:---:|
 | **Model YL · Party + VH** | ✅ | ✅ | ✅ | ✅ |
-| **Standard Model 3/Y · Body + Chassis** | ❌ | ✅ | ✅ | ✅ |
+| **Standard Model 3/Y · Body + Chassis** | ❌✅ | ✅ | ✅ | ✅ |
 | **Standard Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
 
 > Model 3 Highland requires selecting the installed turn-control type during profile setup. Other supported profiles automatically use the Stalk configuration.
