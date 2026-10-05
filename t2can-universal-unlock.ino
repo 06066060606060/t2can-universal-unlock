@@ -72,6 +72,7 @@
 #include "can_core.h"
 #include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
+#include "confirm_country.h"
 #include "web_api.h"
 #include "usb_diag.h"
 #include "can_runtime.h"
@@ -175,6 +176,7 @@ void setup() {
   nagCfgLoad();
   summonCfgLoad();
   ulcCfgLoadAndMigrate();
+  confirmCountryLoad();
   autoLaneChangeLabCfgLoadAndMigrate();
   r79CfgLoad();
   s3xyAutoLoadConfig();

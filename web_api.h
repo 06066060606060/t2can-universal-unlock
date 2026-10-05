@@ -810,6 +810,9 @@ static String ulcStatsToJson() {
   jw.u32("lastTxAgeMs", (uint32_t)(lastTxAge));
   jw.boolean("stalkConfirmSupported", noConfirmSupported);
   jw.boolean("stalkConfirmEnabled", noConfirmEnabled);
+  jw.boolean("countryAssistSupported", confirmCountrySupported());
+  jw.u32("countryAssistCountry", confirmCountryValue());
+  jw.boolean("countryAssistActive", confirmCountryActive() != 0);
   jw.i32("stalkConfirmTimingMode", (int32_t)(noConfirmTimingMode));
   jw.boolean("stalkConfirmGateOpen", noConfirmGate);
   jw.string("stalkConfirmRoute", "CAN B / Chassis");
@@ -3068,7 +3071,7 @@ static bool resetFirmwareSettingsPreserveProfileAndBle() {
   // schema metadata and is also preserved so a settings reset cannot replay
   // old migrations.
   static const char *const clearNamespaces[] = {
-    "nag", "summon", "lab3f8", "ulc", "alc293lab", "r79lab", "r79",
+    "nag", "summon", "lab3f8", "ulc", "alc293lab", "regionLab", "r79lab", "r79",
     "researchcap", "features"
   };
   bool ok = true;
@@ -3677,6 +3680,21 @@ static void httpUlcStats() {
 }
 
 static void httpUlcUpdate() {
+  if (server.hasArg("country")) {
+    const String arg = server.arg("country");
+    const long country = arg.toInt();
+    if (server.args() != 1 || country < 0 || country > 1023 || arg != String(country) ||
+        !confirmCountryValidPure((uint16_t)country)) {
+      server.send(400, "application/json", "{\"error\":\"invalid country selection\"}"); return;
+    }
+    if (!confirmCountrySupported()) {
+      server.send(409, "application/json", "{\"error\":\"Country assist unsupported\"}"); return;
+    }
+    if (!confirmCountrySave((uint16_t)country)) {
+      server.send(500, "application/json", "{\"error\":\"NVS write failed\"}"); return;
+    }
+    server.send(200, "application/json", ulcStatsToJson()); return;
+  }
   FeatureConfigMigrationPure before = featureConfigRuntimeSnapshot();
   FeatureConfigMigrationPure next = before;
   bool any = false;

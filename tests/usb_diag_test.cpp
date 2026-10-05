@@ -5,6 +5,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include "../confirm_country_pure.h"
 using String = std::string;
 using portMUX_TYPE = int;
 #define portMUX_INITIALIZER_UNLOCKED 0
@@ -22,6 +23,10 @@ static uint8_t canBTxTraceLiveCount, canBTxTraceLiveHead;
 static uint8_t ulcNoConfirmTimingMode;
 static bool saveOk = true;
 static bool ulcCfgSave() { return saveOk; }
+static bool countrySupported = true;
+static uint16_t savedCountry;
+static bool confirmCountrySupported() { return countrySupported; }
+static bool confirmCountrySave(uint16_t country) { if (!saveOk) return false; savedCountry = country; return true; }
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
 static struct {
@@ -46,6 +51,19 @@ static String request(const String &s) {
 }
 int main() {
   ticks(); assert(snapshots == 0 && Serial.output.empty());
+  for (unsigned country : {0u, 124u, 156u, 250u, 276u, 392u, 410u, 826u, 840u}) {
+    assert(request("POST /api/ulc/update?country=" + std::to_string(country) + "\n").find("ulcStatsToJson") != String::npos);
+    assert(savedCountry == country);
+  }
+  for (const char *invalid : {"999", "0410", "-1", "410&confirm=1", "410junk"})
+    assert(request(String("POST /api/ulc/update?country=") + invalid + "\n").find("error") != String::npos);
+  countrySupported = false;
+  assert(request("POST /api/ulc/update?country=410\n").find("unsupported") != String::npos);
+  assert(savedCountry == 840); // T2CAN and unsupported profiles do not write preferences.
+  countrySupported = true; saveOk = false;
+  assert(request("POST /api/ulc/update?country=410\n").find("NVS write failed") != String::npos);
+  assert(savedCountry == 840);
+  saveOk = true;
   assert(request("GET /api/profile/status\r\n").find("vehicleProfileStatusJson") != String::npos);
   assert(request("GET /api/lab/auto-lane-change/stats\n").find("ulcStatsToJson") != String::npos);
   assert(request("GET /api/blinkA/").empty());

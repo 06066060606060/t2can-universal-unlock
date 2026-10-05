@@ -36,7 +36,7 @@ available in `/api/profile/status`.
 Build with Arduino CLI, ESP32 core **3.3.11**, and `autowp-mcp2515` **1.3.1**:
 `python3 tools/build.py`. The single image is in `build/universal/`; no board
 build flag or separate release is needed. `tools/update_profile_ui.py` (Python `zopfli`) updates
-the profile script inside the upstream compressed dashboard.
+the profile script and Confirm-Free card inside the upstream compressed dashboard.
 Regression and bench-test status: [TMR validation](docs/tmr-validation.md).
 
 Live status is also available over USB without changing Wi-Fi or resetting the
@@ -54,6 +54,29 @@ the latest payload. Counters span the current boot; an unseen value has count 0.
 On TMR, Party is C even when YL maps the upstream CAN-A role to that connector.
 USB writes include the existing Confirm-Free timing choices:
 `--method POST '/api/ulc/update?timing=0'` (AP only) or `timing=1` (Pre-AP). No arbitrary CAN injection is exposed.
+
+### Confirm-Free Country Assist
+
+Settings → Lane Change / ULC → Confirm-Free includes an optional country dropdown
+on TMR. **Original** preserves the native country and is the fresh-install default.
+Choices are South Korea, United States, Canada, Japan, China, France, Germany and
+United Kingdom. The selection persists in `regionLab/country` (NVS uint16), and
+applies only while the existing Confirm-Free toggle is ON. Existing
+`regionLab/countryKR=true` installations load as South Korea; an explicit Original
+selection takes precedence over that legacy key. Unsupported/invalid saved values
+fall back to Original. T-2CAN retains its existing Confirm-Free behavior.
+
+The assist changes the country fields in same-bus stock `0x238` and `0x7FF` page1
+copies, preserving unrelated fields and updating the `0x238` counter/checksum.
+It leaves `0x7FF` page3 map region unchanged. Codes follow the
+[UN country-code table](https://unstats.un.org/unsd/methodology/m49/); the observed
+packed gateway country ordering is retained. South Korea has a positive observed
+bench maneuver result on Tesla 2026.32.7; other selections are experimental.
+
+Dashboard and USB use `POST /api/ulc/update?country=410` for Korea, `country=0`
+for Original, or the selected numeric code. Only listed codes are accepted, and
+the country request must contain just that setting. `GET /api/ulc/stats` includes
+`countryAssistSupported`, `countryAssistCountry` and `countryAssistActive`.
 
 | 📅 Release | 👨‍💻 Firmware rewrite | 🌐 Dashboard | 📜 History |
 |---|---|---|---|

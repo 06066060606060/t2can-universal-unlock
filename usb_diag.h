@@ -108,6 +108,13 @@ static String usbDiagConfirmTiming(uint8_t timing) {
   return ulcStatsToJson();
 }
 
+static String usbDiagConfirmCountry(uint16_t country) {
+  if (!confirmCountrySupported() || !confirmCountryValidPure(country))
+    return "{\"error\":\"Country assist unsupported\"}";
+  if (!confirmCountrySave(country)) return "{\"error\":\"NVS write failed\"}";
+  return ulcStatsToJson();
+}
+
 // Dashboard snapshots and the existing Confirm-Free timing selector over USB.
 // Independent of synchronous HTTP; only the exact requests below are accepted.
 static void usbDiagTick() {
@@ -126,6 +133,15 @@ static void usbDiagTick() {
     {"GET /api/researchcapture/stats", researchCaptureStatsToJson},
     {"POST /api/ulc/update?timing=0", []() { return usbDiagConfirmTiming(0); }},
     {"POST /api/ulc/update?timing=1", []() { return usbDiagConfirmTiming(1); }},
+    {"POST /api/ulc/update?country=0", []() { return usbDiagConfirmCountry(0); }},
+    {"POST /api/ulc/update?country=124", []() { return usbDiagConfirmCountry(124); }},
+    {"POST /api/ulc/update?country=156", []() { return usbDiagConfirmCountry(156); }},
+    {"POST /api/ulc/update?country=250", []() { return usbDiagConfirmCountry(250); }},
+    {"POST /api/ulc/update?country=276", []() { return usbDiagConfirmCountry(276); }},
+    {"POST /api/ulc/update?country=392", []() { return usbDiagConfirmCountry(392); }},
+    {"POST /api/ulc/update?country=410", []() { return usbDiagConfirmCountry(410); }},
+    {"POST /api/ulc/update?country=826", []() { return usbDiagConfirmCountry(826); }},
+    {"POST /api/ulc/update?country=840", []() { return usbDiagConfirmCountry(840); }},
   };
   static char line[64];
   static size_t used = 0, sent = 0;
