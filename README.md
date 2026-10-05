@@ -12,6 +12,33 @@
 
 > Universal firmware for supported Tesla Model 3 / Model Y platforms.
 
+## `tmr-universal`: T-2CAN and TMR / Autospeed A23
+
+One firmware image detects the board at boot. GPIO15/16/17 held low by the
+A23's 10k resistors select TMR; pins following both internal pulls select
+T-2CAN. Unknown or unstable signatures remain in setup mode with CAN disabled.
+The default AP is `TMR-xxxx` on A23 and `T2CAN-xxxx` on T-2CAN. Saved custom
+SSID/password settings remain authoritative.
+
+| Hardware | Standard Model 3/Y | Model Y L |
+|---|---|---|
+| TMR / A23 | J2 Body + J3 Chassis + J4 Party, simultaneously | J3 VH + J4 Party; J2 standby |
+| T-2CAN | Original Body + Chassis or Party + Chassis profiles | Original Party + VH profile |
+
+A23 uses shared SPI SCK/MOSI/MISO 12/11/13, CS 10/9/8 and standby 18/14/21,
+at 500 kbit/s with 16 MHz XL2515 crystals. GPIO9 is **never reset** on A23.
+Body and Party reception alternate fairly; their matching numeric CAN IDs are
+kept separate. Party TX uses J4 explicitly. A23 Body/Party share upstream's
+CAN-A recovery group; Chassis retains a separate queue/recovery path. Existing
+LAB A/B capture stays on its original logical buses; C reception counters are
+available in `/api/profile/status`.
+
+Build with Arduino CLI, ESP32 core **3.3.11**, and `autowp-mcp2515` **1.3.1**:
+`python3 tools/build.py`. The single image is in `build/universal/`; no board
+build flag or separate release is needed. `tools/update_profile_ui.py` (Python `zopfli`) updates
+the profile script inside the upstream compressed dashboard.
+Regression and bench-test status: [TMR validation](docs/tmr-validation.md).
+
 | 📅 Release | 👨‍💻 Firmware rewrite | 🌐 Dashboard | 📜 History |
 |---|---|---|---|
 | 27 September 2026 | LP_YL | [Open dashboard demo](https://06066060606060.github.io/t2can-universal-unlock/) | [CHANGELOG.md](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md) |

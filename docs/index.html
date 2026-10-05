@@ -3097,6 +3097,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   const TOPOLOGIES={
     1:{id:1,key:'YL_PARTY_VH',name:'Party + VH',canA:'CAN A · PARTY',canB:'CAN B · VH',nag:true,adv:true,eu:true,body:false},
     2:{id:2,key:'BODY_CHASSIS',name:'Body + Chassis',canA:'CAN A · BODY',canB:'CAN B · CHASSIS',nag:false,adv:true,eu:true,body:true},
+    4:{id:4,key:'THREE_CAN',name:'Body + Chassis + Party',canA:'CAN A · BODY',canB:'CAN B · CHASSIS',canC:'CAN C · PARTY',nag:true,adv:true,eu:true,body:true},
     3:{id:3,key:'PARTY_CHASSIS',name:'Party + Chassis',canA:'CAN A · PARTY',canB:'CAN B · CHASSIS',nag:true,adv:false,eu:true,body:false}
   };
   const KEY_TO_ID=Object.fromEntries(Object.values(PROFILES).map(p=>[p.key,p.id]));
@@ -3106,24 +3107,25 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   function openModal(id){q(id)?.classList.add('show')} function closeModal(id){q(id)?.classList.remove('show')}
   function turnText(t){return Number(t)===2?'STALKLESS · 0x3C2':Number(t)===1?'STALK · 0x249':'N/A';}
   function capabilityText(t){return `NAG ${t?.nag?'✓':'—'} · ADV EAP ${t?.adv?'✓':'—'} · EU UNLOCK ${t?.eu?'✓':'—'}`;}
-  function resolvedSetupTurn(){if(pendingTopology===3)return 0;if(pendingProfile===4&&pendingTopology===2)return pendingTurn;return pendingProfile&&pendingTopology?1:0;}
+  function resolvedSetupTurn(){if(pendingTopology===3)return 0;if(pendingProfile===4&&(pendingTopology===2||pendingTopology===4))return pendingTurn;return pendingProfile&&pendingTopology?1:0;}
   function setupUpdate(){
     choices.forEach(b=>b.classList.toggle('selected',KEY_TO_ID[b.dataset.vehicle]===pendingProfile));
     topologyChoices.forEach(b=>b.classList.toggle('selected',TOPOLOGY_KEY_TO_ID[b.dataset.topology]===pendingTopology));
     turnChoices.forEach(b=>b.classList.toggle('selected',(b.dataset.turn==='STALKLESS'?2:1)===pendingTurn));
     const p=PROFILES[pendingProfile],t=TOPOLOGIES[pendingTopology],isYl=pendingProfile===1;
-    q('topologyStep')?.classList.toggle('show',!!p&&!isYl);
-    const highlandBody=pendingProfile===4&&pendingTopology===2;
+    q('topologyStep')?.classList.toggle('show',!!p&&!isYl&&!profileStatus?.tmr);
+    const highlandBody=pendingProfile===4&&(pendingTopology===2||pendingTopology===4);
     q('highlandTurnStep')?.classList.toggle('show',highlandBody);
-    const ready=!!p&&!!t&&(!highlandBody||(pendingTurn===1||pendingTurn===2));q('saveProfileBtn').disabled=!ready;
+    const ready=profileStatus?.boardKnown!==false&&!!p&&!!t&&(!highlandBody||(pendingTurn===1||pendingTurn===2));q('saveProfileBtn').disabled=!ready;
   }
   function enterSetup(change=false){
+    if(profileStatus?.tmr)choices.filter(b=>KEY_TO_ID[b.dataset.vehicle]!==1).forEach(b=>b.querySelector('.vehicleChoiceMeta').textContent='Body + Chassis + Party · all three CAN buses');
     profileChange=change;
     if(change&&profileStatus?.profile){
       pendingProfile=Number(profileStatus.profile);pendingTopology=Number(profileStatus.topology)||(pendingProfile===1?1:2);pendingTurn=Number(profileStatus.turn)||0;
     }else{pendingProfile=0;pendingTopology=0;pendingTurn=0}
     q('setupEyebrow').textContent=change?'FIRMWARE PROFILE':'FIRST BOOT';q('setupTitle').textContent=change?'Change vehicle profile.':'Select your vehicle.';
-    q('setupSub').textContent=change?'Changing the vehicle profile is applied only at the next boot. CAN TX is blocked before the new profile is committed and T-2CAN reboots.':'Select the exact vehicle family, then choose the CAN topology physically connected to T-2CAN.';
+    q('setupSub').textContent=change?'Changing the vehicle profile is applied only at the next boot. CAN TX is blocked before the new profile is committed and T-2CAN reboots.':(profileStatus?.tmr?'TMR (A23): Body + Chassis + Party are active together. Model Y L uses Party + VH. Select your vehicle.':'Select the exact vehicle family, then choose the CAN topology physically connected to T-2CAN.');
     q('setupModeLabel').textContent=change?'PROFILE CHANGE':'PROFILE SETUP MODE';q('cancelProfileChangeBtn').style.display=change?'block':'none';
     document.body.classList.add('setup-active');setupUpdate();window.scrollTo(0,0);
   }
@@ -3139,12 +3141,12 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
     if(q('blinkToggle'))q('blinkToggle').disabled=!advSupported;if(q('blinkToggle2'))q('blinkToggle2').disabled=!advSupported;
   }
   async function saveProfile(){
-    const p=PROFILES[pendingProfile],t=TOPOLOGIES[pendingTopology];if(!p||!t)return;const highlandBody=pendingProfile===4&&pendingTopology===2;const turn=resolvedSetupTurn();if(highlandBody&&turn!==1&&turn!==2)return;
-    q('profileConfirmSummary').textContent=p.name+'\n'+t.canA+' / '+t.canB+'\n'+capabilityText(t)+'\nTURN · '+turnText(turn);openModal('profileConfirmModal');
+    const p=PROFILES[pendingProfile],t=TOPOLOGIES[pendingTopology];if(!p||!t)return;const highlandBody=pendingProfile===4&&(pendingTopology===2||pendingTopology===4);const turn=resolvedSetupTurn();if(highlandBody&&turn!==1&&turn!==2)return;
+    q('profileConfirmSummary').textContent=p.name+'\n'+t.canA+' / '+t.canB+(t.canC?' / '+t.canC:'')+'\n'+capabilityText(t)+'\nTURN · '+turnText(turn);openModal('profileConfirmModal');
   }
   q('cancelProfileSave').onclick=()=>closeModal('profileConfirmModal');
   q('confirmProfileSave').onclick=async()=>{const p=PROFILES[pendingProfile],t=TOPOLOGIES[pendingTopology];if(!p||!t)return;const turn=resolvedSetupTurn();closeModal('profileConfirmModal');q('profileRebootSub').textContent=`Saving ${p.name} · ${t.name} and rebooting before CAN initialization…`;q('profileRebootScreen').classList.add('show');try{await post('/api/profile/select?profile='+pendingProfile+'&topology='+pendingTopology+'&turn='+turn);waitForT2CanReconnect({title:'Rebooting T-2CAN',sub:'Applying '+p.name+' · '+t.name+' before CAN initialization.\nReconnect to T-2CAN Wi-Fi manually if Auto-Join is disabled.'})}catch(e){q('profileRebootScreen').classList.remove('show');toast('Vehicle profile save failed')}};
-  choices.forEach(b=>b.onclick=()=>{pendingProfile=KEY_TO_ID[b.dataset.vehicle];if(pendingProfile===1){pendingTopology=1;pendingTurn=1}else{pendingTopology=0;pendingTurn=0}setupUpdate()});
+  choices.forEach(b=>b.onclick=()=>{pendingProfile=KEY_TO_ID[b.dataset.vehicle];if(pendingProfile===1){pendingTopology=1;pendingTurn=1}else{pendingTopology=profileStatus?.tmr?4:0;pendingTurn=pendingProfile===4?0:1}setupUpdate()});
   topologyChoices.forEach(b=>b.onclick=()=>{pendingTopology=TOPOLOGY_KEY_TO_ID[b.dataset.topology]||0;if(pendingTopology===2)pendingTurn=pendingProfile===4?0:1;else pendingTurn=0;setupUpdate()});
   turnChoices.forEach(b=>b.onclick=()=>{pendingTurn=b.dataset.turn==='STALKLESS'?2:1;setupUpdate()});q('saveProfileBtn').onclick=saveProfile;q('cancelProfileChangeBtn').onclick=()=>{document.body.classList.remove('setup-active');pendingProfile=0;pendingTopology=0;pendingTurn=0};q('changeProfileBtn').onclick=()=>enterSetup(true);
 

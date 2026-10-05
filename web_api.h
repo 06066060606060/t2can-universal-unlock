@@ -1416,7 +1416,7 @@ static void wifiApBuildDefaultSsid(String &ssid) {
   uint8_t mac[6] = {0};
   WiFi.softAPmacAddress(mac);
   char buf[24];
-  snprintf(buf, sizeof(buf), "T2CAN-%02X%02X", mac[4], mac[5]);
+  snprintf(buf, sizeof(buf), "%s-%02X%02X", board == BOARD_TMR ? "TMR" : "T2CAN", mac[4], mac[5]);
   ssid = buf;
 }
 
@@ -2643,6 +2643,10 @@ static String vehicleProfileStatusJson() {
   j.reserve(520);
   JsonWriterArduino jw(j);
   jw.boolean("ok", true);
+  jw.boolean("tmr", board == BOARD_TMR);
+  jw.boolean("boardKnown", board != BOARD_UNKNOWN);
+  jw.u32("partyRx", boardPartyRx);
+  jw.u32("partyLastRxMs", boardPartyLastRx);
   jw.boolean("setupMode", vehicleProfileSetupMode);
   jw.boolean("nvsError", vehicleProfileNvsError);
   jw.boolean("migrationNotice", vehicleProfileMigrationNotice);
@@ -2712,6 +2716,10 @@ static void httpFeatureStatus() {
 }
 
 static void httpProfileSelect() {
+  if (board == BOARD_UNKNOWN) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"unrecognized board ID resistors\"}");
+    return;
+  }
   if (vehicleProfileNvsError) {
     server.send(503, "application/json", "{\"ok\":false,\"error\":\"nvs unavailable; factory reset required\"}");
     return;
