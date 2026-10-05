@@ -18,3 +18,16 @@ Hardware validation is distinct from a simulated maneuver result.
 Contribution commit 1: universal target build passed (1,518,791 program bytes,
 72,624 static-data bytes); sanitized adapter tests and dashboard syntax passed.
 The decoded embedded HTML changes only the profile script against upstream.
+
+## USB diagnostics
+
+Sanitized host tests cover fragmented, overlong and malformed input, exact GET/POST
+routes, persistence rollback, partial writes, backpressure, stalled output,
+disconnect, queued requests, ring wrapping and physical-bus/page separation.
+The client uses an exclusive serial-port lock and ignores unrelated boot logs.
+Responses report stock frames and enqueue attempts, not receiver acceptance.
+
+Contribution commit 2: universal build passed (1,522,143 program bytes,
+73,088 static-data bytes). Sanitized USB tests and a pseudo-terminal client
+round trip passed, including fragmented replies, boot-log filtering, response
+matching and rejection of a competing port owner before serial I/O.

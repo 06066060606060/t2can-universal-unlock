@@ -352,6 +352,8 @@ static void canTaskMcp(void* arg) {
       const struct can_frame &rxf = prefetched[bi];
       processed++;
       const uint32_t frameNow = (uint32_t)millis();
+      if (!(rxf.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)))
+        usbDiagUlcObserve(board == BOARD_TMR && partyFrames[bi] ? 2 : 0, rxf.can_id, rxf.can_dlc, rxf.data);
       if (boardTripleCan() && partyFrames[bi]) {
         boardPartyRx++;
         boardPartyLastRx = frameNow;
@@ -491,6 +493,7 @@ static void canTaskTwai(void* arg) {
       canRxObserve(CAN_RX_BUS_VH, frameNow);
       // Only standard 11-bit DATA frames may reach Tesla decoders or TX paths.
       if (!f.extd && !f.rtr) {
+        usbDiagUlcObserve(1, f.identifier, f.data_length_code, f.data);
         canTxMarkFresh(CAN_TX_FRESH_VH);
         if (f.identifier == 0x7FF) r79LabObserve7ff(T2CAN_BUS_VH, f.data_length_code, f.data);
         bootCaptureObserveVhFrame(f.identifier, f.data_length_code);

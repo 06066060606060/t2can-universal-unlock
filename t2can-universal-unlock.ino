@@ -73,6 +73,7 @@
 #include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
 #include "web_api.h"
+#include "usb_diag.h"
 #include "can_runtime.h"
 
 void setup() {
@@ -314,6 +315,7 @@ void setup() {
 }
 
 void loop() {
+  usbDiagTick();
 #if T2CAN_SERIAL_DIAGNOSTICS
   static unsigned long lastBeatLog = 0;
   static uint32_t loopBeat = 0;
@@ -340,5 +342,5 @@ void loop() {
     );
   }
 #endif
-  vTaskDelay(pdMS_TO_TICKS(1000));
+  vTaskDelay(pdMS_TO_TICKS(10));
 }
