@@ -1,0 +1,2 @@
+# Optional but required to reproduce the release-sized embedded dashboard.
+zopfli==0.2.3.post1

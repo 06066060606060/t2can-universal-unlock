@@ -1,0 +1,20 @@
+#t2PreviewControls{position:fixed;z-index:70;top:70px;left:calc(50% + 274px);width:230px;padding:18px;border:1px solid #d8d8d6;border-radius:22px;background:#f8f8f6;color:#222226;box-shadow:0 14px 32px rgba(0,0,0,.09);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+#t2PreviewControls *{box-sizing:border-box}
+#t2PreviewControls .previewControlsEyebrow{font-size:10px;font-weight:700;letter-spacing:.13em;color:#66666b}
+#t2PreviewControls .previewControlsTitle{margin:5px 0 18px;font-size:19px;font-weight:650;letter-spacing:-.025em}
+#t2PreviewControls .previewControlsLabel{display:block;margin:15px 0 7px;font-size:11px;font-weight:650;color:#55555b}
+#t2PreviewControls :is(.previewApChoices,.previewModelChoices,.previewTopologyChoices,.previewTurnChoices){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+#t2PreviewControls .previewApChoices{grid-template-columns:repeat(3,minmax(0,1fr))}
+#t2PreviewControls :is(.previewApChoices,.previewModelChoices,.previewTopologyChoices,.previewTurnChoices) button{min-width:0;min-height:36px;padding:5px 6px;border:1px solid #d4d4d3;border-radius:11px;background:transparent;color:#333338;font-size:10px;font-weight:650;line-height:1.1;cursor:pointer;transition:background .2s,color .2s,transform .2s}
+#t2PreviewControls .previewApChoices button{font-size:9px}
+#t2PreviewControls :is(.previewApChoices,.previewModelChoices,.previewTopologyChoices,.previewTurnChoices) button:active{transform:scale(.96)}
+#t2PreviewControls :is(.previewApChoices,.previewModelChoices,.previewTopologyChoices,.previewTurnChoices) button[aria-pressed="true"]{border-color:#222226;background:#222226;color:#fff}
+#t2PreviewControls [data-preview-topology="1"]{grid-column:1/-1}
+#t2PreviewControls button[hidden],#t2PreviewControls #previewTurnWrap[hidden]{display:none}
+#t2PreviewControls .previewControlsNote{margin:16px 0 0;font-size:10px;line-height:1.4;color:#66666b}
+#t2PreviewControls button:focus-visible{outline:2px solid #2256d6;outline-offset:2px}
+html[data-theme="dark"] #t2PreviewControls{border-color:#44444c;background:#242429;color:#f0f0f2;box-shadow:0 14px 32px rgba(0,0,0,.3)}
+html[data-theme="dark"] #t2PreviewControls :is(.previewControlsEyebrow,.previewControlsLabel,.previewControlsNote){color:#aaaab2}
+html[data-theme="dark"] #t2PreviewControls :is(.previewApChoices,.previewModelChoices,.previewTopologyChoices,.previewTurnChoices) button{border-color:#505058;color:#e8e8ee}
+html[data-theme="dark"] #t2PreviewControls :is(.previewApChoices,.previewModelChoices,.previewTopologyChoices,.previewTurnChoices) button[aria-pressed="true"]{border-color:#e8e8ee;background:#e8e8ee;color:#1c1c21}
+@media(max-width:1010px){#t2PreviewControls{position:relative;top:auto;left:auto;width:min(520px,calc(100% - 24px));margin:62px auto 12px;padding:14px 16px}#t2PreviewControls .previewControlsTitle{margin-bottom:10px}#t2PreviewControls .previewControlsLabel{margin-top:10px}}
