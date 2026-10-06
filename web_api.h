@@ -2982,10 +2982,16 @@ static void httpFeatureLab() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
     return;
   }
-  if (!countryOverrideSetLabEnabledWithBarrier(enabled)) {
+  const bool barrierOk = countryOverrideSetLabEnabledWithBarrier(enabled);
+  // Enabling LAB still requires the TX barrier. Disabling LAB is fail-safe:
+  // even if the barrier cannot be acquired, the menu gate itself must go OFF.
+  if (enabled && !barrierOk) {
     server.send(503, "application/json", "{\"ok\":false,\"error\":\"TX barrier unavailable\"}");
     return;
   }
+  // Keep the feature gate authoritative for the dashboard.
+  labMenuEnabled = enabled;
+
   if (enabled && !researchCaptureEntries) {
     // Research Capture is optional LAB functionality. Its allocation state
     // must never gate the LAB Menu feature itself. LAB stays enabled even
