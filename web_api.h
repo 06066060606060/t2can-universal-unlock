@@ -2987,12 +2987,10 @@ static void httpFeatureLab() {
     return;
   }
   if (enabled && !researchCaptureEntries) {
-    if (!researchCaptureInit()) {
-      (void)countryOverrideSetLabEnabledWithBarrier(false);
-      featureCfgSave();
-      server.send(500, "application/json", "{\"ok\":false,\"error\":\"Research Capture allocation failed\"}");
-      return;
-    }
+    // Research Capture is optional LAB functionality. Its allocation state
+    // must never gate the LAB Menu feature itself. LAB stays enabled even
+    // when capture buffers cannot be allocated.
+    (void)researchCaptureInit();
   }
   if (enabled && !driverMonitorPreRing) {
     // Driver Monitoring Capture is diagnostic-only; failure does not disable
