@@ -274,7 +274,7 @@ struct R79TxDecisionPure {
 
 static inline R79TxDecisionPure r79TxDecisionPure(
     bool apActive, bool summonConfirmed,
-    const R79ManualSuppressionPure &manual) {
+    const R79ManualSuppressionPure &manual, bool allowManualDriving = false) {
   R79TxDecisionPure r = {true, false, R79_TX_REASON_DEFAULT};
   // AP reason wins if both flags are ever simultaneously present. This keeps
   // AUTOSTEER/NOA telemetry honest and prevents stale Summon evidence from
@@ -287,7 +287,7 @@ static inline R79TxDecisionPure r79TxDecisionPure(
     r.reason = R79_TX_REASON_SUMMON;
     return r;
   }
-  if (manual.active) {
+  if (manual.active && !allowManualDriving) {
     r.txEnabled = false;
     r.manualSuppressed = true;
     r.reason = manual.gearRaw == TESLA_GEAR_R

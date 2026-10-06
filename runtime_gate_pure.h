@@ -38,14 +38,14 @@ enum NagSkipReasonPure : uint8_t {
 
 static inline NagSkipReasonPure nagEligibilityReasonPure(
     bool enabled, bool bootDelayPassed, bool canSeen, bool isOurs,
-    uint8_t handsOnState, bool apStateValid, bool apActive) {
+    uint8_t handsOnState, bool apStateValid, bool apActive, bool ignoreApState = false) {
   if (!enabled) return NAG_SKIP_DISABLED;
   if (!bootDelayPassed) return NAG_SKIP_BOOT_DELAY;
   if (!canSeen) return NAG_SKIP_WARMUP;
   if (isOurs) return NAG_SKIP_SELF_FRAME;
   if (handsOnState > 1) return NAG_SKIP_HANDS_ON;
-  if (!apStateValid) return NAG_SKIP_AP_INVALID;
-  if (!apActive) return NAG_SKIP_AP_INACTIVE;
+  if (!ignoreApState && !apStateValid) return NAG_SKIP_AP_INVALID;
+  if (!ignoreApState && !apActive) return NAG_SKIP_AP_INACTIVE;
   return NAG_SKIP_NONE;
 }
 
@@ -109,10 +109,4 @@ static inline McpTxResultReason mcpTxResultReasonPure(
   if (freshMask != 0x03u) return MCP_TX_FRESH_MASK;
   if (!sendOk) return MCP_TX_SEND_ERROR;
   return MCP_TX_OK;
-}
-
-// R79 bit18 is experimental and remains LAB-only. Fixed production bit19/47
-// policy is intentionally independent of the LAB menu.
-static inline bool r79SmartOverrideActivePure(bool labMenuEnabled, uint8_t smartMode) {
-  return labMenuEnabled && smartMode != 0u;
 }

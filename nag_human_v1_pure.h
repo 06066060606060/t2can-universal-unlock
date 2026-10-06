@@ -14,8 +14,6 @@ static constexpr uint16_t NAG_HUMAN_V1_PEAK_ALLOWED_MIN_RAW = 100u; // 1.00 Nm
 static constexpr uint16_t NAG_HUMAN_V1_PEAK_ALLOWED_MAX_RAW = 300u; // 3.00 Nm
 static constexpr uint16_t NAG_HUMAN_V1_REV1_PEAK_MIN_RAW = 150u; // 1.50 Nm
 static constexpr uint16_t NAG_HUMAN_V1_REV1_PEAK_MAX_RAW = 200u; // 2.00 Nm
-static constexpr uint16_t NAG_HUMAN_V1_B19_DEFAULT_MIN_RAW = 180u; // b19 untouched default
-static constexpr uint16_t NAG_HUMAN_V1_B19_DEFAULT_MAX_RAW = 240u; // b19 untouched default
 static constexpr uint16_t NAG_HUMAN_V1_PEAK_DEFAULT_MIN_RAW = 150u; // Rev.1 Plus 1.50 Nm
 static constexpr uint16_t NAG_HUMAN_V1_PEAK_DEFAULT_MAX_RAW = 220u; // Rev.1 Plus 2.20 Nm
 static constexpr uint16_t NAG_HUMAN_V1_WAIT_ALLOWED_MIN_MS = 300u;
@@ -128,14 +126,6 @@ struct NagHumanV1StepResultPure {
   uint8_t motion;
   uint8_t blockReason;
 };
-
-static inline void nagHumanV1MigrateB19DefaultToRev1PlusPure(uint16_t &minRaw, uint16_t &maxRaw) {
-  if (minRaw == NAG_HUMAN_V1_B19_DEFAULT_MIN_RAW &&
-      maxRaw == NAG_HUMAN_V1_B19_DEFAULT_MAX_RAW) {
-    minRaw = NAG_HUMAN_V1_PEAK_DEFAULT_MIN_RAW;
-    maxRaw = NAG_HUMAN_V1_PEAK_DEFAULT_MAX_RAW;
-  }
-}
 
 static inline NagHumanV1ConfigPure nagHumanV1Rev1PlusConfigPure() {
   NagHumanV1ConfigPure c = {};

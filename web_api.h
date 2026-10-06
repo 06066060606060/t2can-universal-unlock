@@ -42,17 +42,50 @@ static void httpPedalMapSet() {
 static String nagCfgToJson() {
   NagConfig c;
   const uint8_t variant = nagHumanVariantSnapshot();
-  const NagHumanV1ConfigPure humanV1 = nagHumanV1RuntimeConfigSnapshot();
-  const NagHumanV2ConfigPure humanV2 = nagHumanV2RuntimeConfigSnapshot();
-  const NagHumanV3ConfigPure humanV3 = nagHumanV3RuntimeConfigSnapshot();
   const NagHumanV4ConfigPure humanV4 = nagHumanV4RuntimeConfigSnapshot();
   portENTER_CRITICAL(&nagCfgMux);
   c = nagCfg;
   portEXIT_CRITICAL(&nagCfgMux);
+  bool torqueRightScrollEnabled, tsl9RightPeriodicEnabled;
+  uint16_t torqueRightScrollInterval, tsl9RightPeriodicInterval;
+  uint8_t torqueRightScrollPattern;
+  portENTER_CRITICAL(&nagRightScrollMux);
+  torqueRightScrollEnabled = nagTorqueRightScrollEnabled;
+  torqueRightScrollInterval = nagTorqueRightScrollIntervalSeconds;
+  torqueRightScrollPattern =
+      nagRightScrollPatternSanitize(nagTorqueRightScrollPattern);
+  tsl9RightPeriodicEnabled = nagTsl9RightPeriodicEnabled;
+  tsl9RightPeriodicInterval = nagTsl9RightPeriodicIntervalSeconds;
+  portEXIT_CRITICAL(&nagRightScrollMux);
   String s;
-  s.reserve(760);
+  s.reserve(820);
   JsonWriterArduino jw(s);
   jw.boolean("enabled", c.enabled);
+  jw.boolean("ignoreApState", c.ignoreApState);
+  jw.u32("method", nagMethodSanitizePure(c.method));
+  jw.string("methodName", nagMethodNamePure(c.method));
+  jw.u32("tsl9Sequence", tsl9SequenceSanitizePure(c.tsl9Sequence));
+  jw.string("tsl9SequenceName", tsl9SequenceNamePure(c.tsl9Sequence));
+  jw.u32("tsl9Window", tsl9DowngradeWindowSanitizePure(
+      c.tsl9DowngradeWindow));
+  jw.string("tsl9WindowName", tsl9DowngradeWindowNamePure(
+      c.tsl9DowngradeWindow));
+  jw.u32("tsl9InputMode", tsl9InputModeSanitizePure(c.tsl9InputMode));
+  jw.boolean("torqueRightScrollEnabled", torqueRightScrollEnabled);
+  jw.u32("torqueRightScrollIntervalSeconds", torqueRightScrollInterval);
+  jw.u32("torqueRightScrollPattern", torqueRightScrollPattern);
+  jw.boolean("tsl9RightPeriodicEnabled", tsl9RightPeriodicEnabled);
+  jw.u32("tsl9RightPeriodicIntervalSeconds", tsl9RightPeriodicInterval);
+  jw.boolean("tsl9IsaChimeSuppress", c.tsl9IsaChimeSuppress);
+  jw.u32("tsl9LegacyRoute", tsl9LegacyRouteSanitizePure(c.tsl9LegacyRoute));
+  jw.boolean("tsl9LegacyRouteSelectable",
+      vehicleProfileLegacyTsl9RouteSelectable(
+          activeVehicleProfile, activeVehicleTopology));
+  jw.string("tsl9EffectiveRoute", activeProfileIsYl()
+      ? "PARTY_0x399" : nagTsl9Body39BSelected()
+          ? "BODY_0x39B" : "CHASSIS_0x399");
+  jw.boolean("dmsControlEnabled", c.dmsControlEnabled);
+  jw.boolean("dmsControlSupported", activeProfileDmsNagSupported());
   jw.boolean("pauseAtZeroSpeed", c.pauseAtZeroSpeed);
   jw.u32("modeHStopBehavior", c.modeHStopBehavior);
   jw.string("modeHStopBehaviorName", nagModeHStopBehaviorNamePure(c.modeHStopBehavior));
@@ -66,15 +99,7 @@ static String nagCfgToJson() {
   jw.u32("humanVariant", variant);
   jw.string("humanVariantCode", nagModeHVariantCodePure(variant));
   jw.string("humanVariantLabel", nagModeHVariantLabelPure(variant));
-  if (variant == H_VARIANT_REV2) {
-    jw.string("humanPreset", "NATURAL_GRIP_PEAK");
-    jw.fixed("humanPeakMinNm", (int32_t)humanV2.naturalTapMinRaw, 2u);
-    jw.fixed("humanPeakMaxNm", (int32_t)humanV2.naturalTapMaxRaw, 2u);
-  } else if (variant == H_VARIANT_REV3) {
-    jw.string("humanPreset", "HUMAN_INTERACTION_NATURAL_GRIP");
-    jw.fixed("humanPeakMinNm", (int32_t)humanV3.base.peakMinRaw, 2u);
-    jw.fixed("humanPeakMaxNm", (int32_t)humanV3.base.peakMaxRaw, 2u);
-  } else if (variant == H_VARIANT_REV4) {
+{
     jw.string("humanPreset", "HUMAN_INTERACTION_OPPOSITE_CARRIER");
     jw.fixed("humanPeakMinNm", (int32_t)humanV4.base.peakMinRaw, 2u);
     jw.fixed("humanPeakMaxNm", (int32_t)humanV4.base.peakMaxRaw, 2u);
@@ -84,10 +109,6 @@ static String nagCfgToJson() {
     jw.fixed("ho2ThresholdNm", (int32_t)humanV4.ho2ThresholdRaw, 2u);
     jw.boolean("visualRescueEnabled", humanV4.visualRescueEnabled);
     jw.u32("visualRescueDelayMs", (uint32_t)humanV4.visualRescueDelayMs);
-  } else {
-    jw.string("humanPreset", "HUMAN_INTERACTION");
-    jw.fixed("humanPeakMinNm", (int32_t)humanV1.peakMinRaw, 2u);
-    jw.fixed("humanPeakMaxNm", (int32_t)humanV1.peakMaxRaw, 2u);
   }
   jw.beginArray("torque");
   for (uint8_t i = 0; i < c.torqueCount; i++) {
@@ -135,10 +156,17 @@ static String nagStatsToJson() {
   const uint32_t now = (uint32_t)millis();
   bool pauseAtZero = false;
   uint8_t nagModeNow = MODE_A;
+  uint8_t nagMethodNow = NAG_METHOD_DEFAULT_PURE;
+  uint8_t tsl9SequenceNow = TSL9_SEQUENCE_DEFAULT_PURE;
+  uint8_t tsl9WindowNow = TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE;
   uint8_t modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
   portENTER_CRITICAL(&nagCfgMux);
   pauseAtZero = nagCfg.pauseAtZeroSpeed;
   nagModeNow = nagCfg.mode;
+  nagMethodNow = nagMethodSanitizePure(nagCfg.method);
+  tsl9SequenceNow = tsl9SequenceSanitizePure(nagCfg.tsl9Sequence);
+  tsl9WindowNow = tsl9DowngradeWindowSanitizePure(
+      nagCfg.tsl9DowngradeWindow);
   modeHStopBehavior = nagModeHStopBehaviorValidPure(nagCfg.modeHStopBehavior)
       ? nagCfg.modeHStopBehavior : nagModeHDefaultStopBehaviorPure();
   portEXIT_CRITICAL(&nagCfgMux);
@@ -147,32 +175,75 @@ static String nagStatsToJson() {
   const uint16_t speedKphX100 = c.vehicleSpeedValid ? nagPartySpeedKphX100Pure(c.vehicleSpeedRaw) : 0u;
   const bool humanMode = nagModeNow == MODE_H;
   const uint8_t humanVariant = nagHumanVariantSnapshot();
-  const NagHumanV1StatePure humanV1 = humanMode ? nagHumanV1RuntimeSnapshot() : NagHumanV1StatePure{};
-  const NagHumanV2StatePure humanV2 = humanMode ? nagHumanV2RuntimeSnapshot() : NagHumanV2StatePure{};
-  const NagHumanV3StatePure humanV3 = humanMode ? nagHumanV3RuntimeSnapshot() : NagHumanV3StatePure{};
   const NagHumanV4StatePure humanV4 = humanMode ? nagHumanV4RuntimeSnapshot() : NagHumanV4StatePure{};
-  const NagHumanV1ConfigPure humanV1Config = nagHumanV1RuntimeConfigSnapshot();
-  const NagHumanV2ConfigPure humanV2Config = nagHumanV2RuntimeConfigSnapshot();
-  const NagHumanV3ConfigPure humanV3Config = nagHumanV3RuntimeConfigSnapshot();
   const NagHumanV4ConfigPure humanV4Config = nagHumanV4RuntimeConfigSnapshot();
-  const bool humanPaused = humanMode && (humanVariant == H_VARIANT_REV2
-      ? humanV2.phase == H_PAUSED_STOPPED
-      : humanVariant == H_VARIANT_REV3 ? humanV3.base.phase == H1_PAUSED_STOPPED
-      : humanVariant == H_VARIANT_REV4 ? humanV4.base.phase == H1_PAUSED_STOPPED
-      : humanV1.phase == H1_PAUSED_STOPPED);
+  const bool humanPaused = humanMode && humanV4.base.phase == H1_PAUSED_STOPPED;
   const bool stoppedGate = nagPauseAtZeroBlocksPure(pauseAtZero, c.vehicleSpeedValid, speedFresh, c.vehicleSpeedRaw) || humanPaused;
-  const uint16_t humanOutputRaw = humanVariant == H_VARIANT_REV2
-      ? (humanV2.outputRaw != 0u ? humanV2.outputRaw : NAG_HUMAN_V2_TORQUE_CENTER_RAW)
-      : humanVariant == H_VARIANT_REV3
-          ? (humanV3.base.outputRaw != 0u ? humanV3.base.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW)
-      : humanVariant == H_VARIANT_REV4
-          ? (humanV4.base.outputRaw != 0u ? humanV4.base.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW)
-          : (humanV1.outputRaw != 0u ? humanV1.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW);
+  uint32_t tsl9Rx, tsl9Modified, tsl9HandsOnModified, tsl9IsaModified;
+  uint32_t tsl9TxOk, tsl9TxFail;
+  portENTER_CRITICAL(&nagTsl9Mux);
+  tsl9Rx = nagTsl9Rx;
+  tsl9Modified = nagTsl9Modified;
+  tsl9HandsOnModified = nagTsl9HandsOnModified;
+  tsl9IsaModified = nagTsl9IsaModified;
+  tsl9TxOk = nagTsl9TxOk;
+  tsl9TxFail = nagTsl9TxFail;
+  portEXIT_CRITICAL(&nagTsl9Mux);
+  Tsl9InputSnapshotPure tsl9Input = {};
+  bool tsl9InputTemplateValid = false;
+  uint32_t tsl9InputTemplateMs = 0;
+  uint32_t tsl9InputMux1Count, tsl9InputOk, tsl9InputFail, tsl9InputCleanup;
+  portENTER_CRITICAL(&tsl9InputMux);
+  tsl9Input = tsl9InputScheduler.snapshot(now);
+  if (activeProfileTsl9InputOnBodyCanA()) {
+    tsl9InputTemplateValid = tsl9InputCanATemplateValid;
+    tsl9InputTemplateMs = tsl9InputCanATemplateMs;
+  } else {
+    tsl9InputTemplateValid = tsl9InputCanBTemplateValid;
+    tsl9InputTemplateMs = tsl9InputCanBTemplateMs;
+  }
+  tsl9InputMux1Count = tsl9InputMux1Rx;
+  tsl9InputOk = tsl9InputTxOk;
+  tsl9InputFail = tsl9InputTxFail;
+  tsl9InputCleanup = tsl9InputCleanupTx;
+  portEXIT_CRITICAL(&tsl9InputMux);
+  const uint16_t humanOutputRaw = humanV4.base.outputRaw != 0u ? humanV4.base.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW;
   const int16_t humanOutputCenti = (int16_t)humanOutputRaw - 2050;
 
   String s;
   s.reserve(1750);
   JsonWriterArduino jw(s);
+  jw.u32("method", nagMethodNow);
+  jw.string("methodName", nagMethodNamePure(nagMethodNow));
+  jw.u32("tsl9Sequence", tsl9SequenceNow);
+  jw.string("tsl9SequenceName", tsl9SequenceNamePure(tsl9SequenceNow));
+  jw.u32("tsl9Window", tsl9WindowNow);
+  jw.string("tsl9WindowName", tsl9DowngradeWindowNamePure(tsl9WindowNow));
+  jw.u32("tsl9Rx", tsl9Rx);
+  jw.u32("tsl9Modified", tsl9Modified);
+  jw.u32("tsl9HandsOnModified", tsl9HandsOnModified);
+  jw.u32("tsl9IsaModified", tsl9IsaModified);
+  jw.u32("tsl9TxOk", tsl9TxOk);
+  jw.u32("tsl9TxFail", tsl9TxFail);
+  jw.boolean("tsl9InputActive", tsl9Input.active);
+  jw.boolean("tsl9InputRetryPending", tsl9Input.retryPending);
+  jw.boolean("tsl9InputCleanupPending", tsl9Input.cleanupPending);
+  jw.u32("tsl9InputMode", tsl9Input.mode);
+  jw.u32("tsl9InputStep", tsl9Input.step);
+  jw.u32("tsl9InputIntervalMs", tsl9Input.currentIntervalMs);
+  jw.u32("tsl9InputNextMs", tsl9Input.nextActionInMs);
+  jw.u32("tsl9InputTriggers", tsl9Input.triggerCount);
+  jw.u32("tsl9InputSuccess", tsl9Input.successCount);
+  jw.u32("tsl9InputCanceled", tsl9Input.failureCancelCount);
+  jw.u32("tsl9InputManualDeferrals", tsl9Input.manualDeferralCount);
+  jw.u32("tsl9InputLastFailure", tsl9Input.lastFailure);
+  jw.boolean("tsl9InputTemplateValid", tsl9InputTemplateValid);
+  jw.u32("tsl9InputTemplateAgeMs", tsl9InputTemplateValid
+      ? (uint32_t)(now - tsl9InputTemplateMs) : 999999UL);
+  jw.u32("tsl9InputMux1Rx", tsl9InputMux1Count);
+  jw.u32("tsl9InputTxOk", tsl9InputOk);
+  jw.u32("tsl9InputTxFail", tsl9InputFail);
+  jw.u32("tsl9InputCleanupTx", tsl9InputCleanup);
   jw.u32("rx", nagRxFrames);
   jw.u32("echo", nagEchoCount);
   jw.u32("txOk", txOk);
@@ -201,29 +272,7 @@ static String nagStatsToJson() {
   jw.u32("humanVariant", (uint32_t)(humanVariant));
   jw.string("humanVariantCode", nagModeHVariantCodePure(humanVariant));
   jw.string("humanVariantLabel", nagModeHVariantLabelPure(humanVariant));
-  if (humanVariant == H_VARIANT_REV2) {
-    jw.string("humanPreset", "NATURAL_GRIP_PEAK");
-    jw.fixed("humanPeakMinNm", (int32_t)humanV2Config.naturalTapMinRaw, 2u);
-    jw.fixed("humanPeakMaxNm", (int32_t)humanV2Config.naturalTapMaxRaw, 2u);
-    jw.string("humanPhase", nagHumanV2PhaseNamePure(humanV2.phase));
-    jw.string("humanMotion", nagHumanV2MotionNamePure(humanV2.motion));
-    jw.string("humanEventType", nagHumanV2EventTypeNamePure(humanV2.event.type));
-    jw.u32("humanEventCount", (uint32_t)(humanV2.eventCount));
-    jw.i32("humanDirection", (int32_t)(humanV2.event.direction));
-    jw.boolean("humanCarrier", humanV2.carrier);
-    jw.u32("humanSessionAgeMs", (uint32_t)((humanV2.sessionStartMs ? now-humanV2.sessionStartMs : 0UL)));
-  } else if (humanVariant == H_VARIANT_REV3) {
-    jw.string("humanPreset", "HUMAN_INTERACTION_NATURAL_GRIP");
-    jw.fixed("humanPeakMinNm", (int32_t)humanV3Config.base.peakMinRaw, 2u);
-    jw.fixed("humanPeakMaxNm", (int32_t)humanV3Config.base.peakMaxRaw, 2u);
-    jw.string("humanPhase", nagHumanV1PhaseNamePure(humanV3.base.phase));
-    jw.string("humanMotion", nagHumanV1MotionNamePure(humanV3.base.motion));
-    jw.string("humanEventType", nagHumanV1EventTypeNamePure(humanV3.base.event.type));
-    jw.u32("humanEventCount", (uint32_t)(humanV3.base.eventCount));
-    jw.i32("humanDirection", (int32_t)(humanV3.base.event.direction));
-    jw.boolean("humanCarrier", humanV3.base.carrier);
-    jw.u32("humanSessionAgeMs", (uint32_t)((humanV3.base.eventStartMs ? now-humanV3.base.eventStartMs : 0UL)));
-  } else if (humanVariant == H_VARIANT_REV4) {
+{
     jw.string("humanPreset", "HUMAN_INTERACTION_OPPOSITE_CARRIER");
     jw.fixed("humanPeakMinNm", (int32_t)humanV4Config.base.peakMinRaw, 2u);
     jw.fixed("humanPeakMaxNm", (int32_t)humanV4Config.base.peakMaxRaw, 2u);
@@ -240,17 +289,6 @@ static String nagStatsToJson() {
     jw.fixed("humanCarrierSampleNm", (int32_t)humanV4.lastCarrierMagnitudeRaw, 2u);
     jw.boolean("humanCarrierApplied", humanV4.lastCarrierApplied);
     jw.u32("humanSessionAgeMs", (uint32_t)((humanV4.base.sessionStartMs ? now-humanV4.base.sessionStartMs : 0UL)));
-  } else {
-    jw.string("humanPreset", "HUMAN_INTERACTION");
-    jw.fixed("humanPeakMinNm", (int32_t)humanV1Config.peakMinRaw, 2u);
-    jw.fixed("humanPeakMaxNm", (int32_t)humanV1Config.peakMaxRaw, 2u);
-    jw.string("humanPhase", nagHumanV1PhaseNamePure(humanV1.phase));
-    jw.string("humanMotion", nagHumanV1MotionNamePure(humanV1.motion));
-    jw.string("humanEventType", nagHumanV1EventTypeNamePure(humanV1.event.type));
-    jw.u32("humanEventCount", (uint32_t)(humanV1.eventCount));
-    jw.i32("humanDirection", (int32_t)(humanV1.event.direction));
-    jw.boolean("humanCarrier", humanV1.carrier);
-    jw.u32("humanSessionAgeMs", (uint32_t)((humanV1.eventStartMs ? now-humanV1.eventStartMs : 0UL)));
   }
   jw.fixed("humanOutputNm", (int32_t)humanOutputCenti, 2u);
   jw.boolean("humanPaused", humanPaused);
@@ -494,6 +532,27 @@ static const char *autoBlinkerNoaSessionStateName(
   }
 }
 
+static const char *blinkerTxModeName(uint8_t mode) {
+  return mode == BLINKER_TX_MODE_LEGACY_PURE
+      ? "350ms BURST" : "SINGLE TX";
+}
+
+static const char *blinkerTxSourceName(uint8_t source) {
+  if (source == BLINKER_TX_SOURCE_AUTO_PURE) return "AUTO_BLINKER";
+  if (source == BLINKER_TX_SOURCE_S3XY_PURE) return "S3XY_BUTTON";
+  return "NONE";
+}
+
+static const char *blinkerTxResultName(uint8_t result) {
+  switch (result) {
+    case 1: return "PENDING";
+    case 2: return "TX_OK";
+    case 3: return "TX_FAIL";
+    case 4: return "BLOCKED";
+    default: return "NONE";
+  }
+}
+
 static String blinkAStatsToJson() {
   bool en, ap, noaRaw, noaEffective, dasStateValid, alcValid;
   uint8_t dasState4, alcState, noaStabilizationSeconds, cancelPauseSeconds;
@@ -503,6 +562,8 @@ static String blinkAStatsToJson() {
   uint32_t cancelPauseRemainingMs;
   bool armed, seen, selfTest, noaStabilized, cancelPaused;
   AutoBlinkerNoaPhasePure noaSessionState;
+  uint8_t txMode, txActiveSource, txLastDirection, txLastSource, txLastResult;
+  uint32_t txRequests, txBlocked;
   uint8_t rCnt, rTurn, rCk, rDlc;
   uint8_t raw249[8] = {0};
   portENTER_CRITICAL(&blinkAMux);
@@ -531,6 +592,14 @@ static String blinkAStatsToJson() {
   retryCount = autoRetryCount;
   txOk = blkATxOk;
   txFail = blkATxFail;
+  txMode = blinkerTxMode;
+  txActiveSource = oneShotSource != BLINKER_TX_SOURCE_NONE_PURE
+      ? oneShotSource : blinkerTxRequestState.pendingSource;
+  txLastDirection = blinkerTxLastDir;
+  txLastSource = blinkerTxLastSource;
+  txLastResult = blinkerTxLastResult;
+  txRequests = blinkerTxRequestCount;
+  txBlocked = blinkerTxBlockedCount;
   r249 = rx249;
   rCnt = realCounter;
   rTurn = realTurn;
@@ -607,8 +676,16 @@ static String blinkAStatsToJson() {
   jw.u32("autoRequestAgeMs", requestAge);
   jw.boolean("autoWaitingEligibility", waitingEligibility);
   jw.boolean("pendingAlcAllowed", pendingAlcAllowed);
+  jw.u32("txMode", txMode);
+  jw.string("txModeName", blinkerTxModeName(txMode));
+  jw.string("txActiveSource", blinkerTxSourceName(txActiveSource));
+  jw.u32("txLastDirection", txLastDirection);
+  jw.string("txLastSource", blinkerTxSourceName(txLastSource));
+  jw.string("txLastResult", blinkerTxResultName(txLastResult));
+  jw.u32("txRequests", txRequests);
   jw.u32("txOk", txOk);
   jw.u32("txFail", txFail);
+  jw.u32("txBlocked", txBlocked);
   jw.u32("rx249", r249);
   jw.boolean("seen249", seen);
   jw.u32("realCounter", rCnt);
@@ -856,15 +933,6 @@ static String ulcStatsToJson() {
   return s;
 }
 
-static const char* r79LabTxKindName(uint8_t kind) {
-  switch (kind) {
-    case R79LAB_TX_IMMEDIATE: return "IMMEDIATE";
-    case R79LAB_TX_PERIODIC: return "PERIODIC";
-    case R79LAB_TX_RETRY: return "RETRY";
-    default: return "NONE";
-  }
-}
-
 static const char* r79RuntimeReasonNameForUi(const R79RuntimeStatus &status) {
   switch (status.state) {
     case R79_TX_STATE_SUSPENDED:
@@ -872,25 +940,60 @@ static const char* r79RuntimeReasonNameForUi(const R79RuntimeStatus &status) {
     case R79_TX_STATE_WAIT_TEMPLATE:
     case R79_TX_STATE_CAN_OFFLINE:
     case R79_TX_STATE_ADMIN_HOLD:
+    case R79_TX_STATE_AP_BLOCKED:
+    case R79_TX_STATE_AP_WAIT:
+    case R79_TX_STATE_AP_UNKNOWN:
       return r79RuntimeStateName(status.state);
     default:
       return r79TxReasonNamePure(status.decision.reason);
   }
 }
 
+static String r79ApControlStatsToJson() {
+  const uint32_t now = (uint32_t)millis();
+  portENTER_CRITICAL(&stateMux);
+  const R79ApGateConfigPure config = r79ApGateConfig;
+  const R79ApGateDecisionPure gate = r79ApGateDecisionLocked(now);
+  const bool ap = dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4);
+  portEXIT_CRITICAL(&stateMux);
+  String s; s.reserve(240);
+  JsonWriterArduino jw(s);
+  jw.boolean("enabled", config.enabled);
+  jw.boolean("allowManualDriving", config.allowManualDriving);
+  jw.u32("mode", config.mode);
+  jw.u32("delaySeconds", config.delaySeconds);
+  jw.boolean("apActive", ap);
+  jw.boolean("gateAllowed", gate.allowed);
+  jw.string("gateReason", r79ApGateReasonName(gate.reason));
+  jw.u32("remainingMs", gate.remainingMs);
+  jw.finish();
+  return s;
+}
+
 static String r79StatsToJson() {
   const uint32_t now = (uint32_t)millis();
   const R79RuntimeStatus runtime = r79RuntimeStatusSnapshot(now);
-  uint8_t bit18Policy, stockBit43, effectiveBit43;
-  bool stockValid, lastTxValid, dmsNagEnabled;
+  uint8_t bit18Policy, transportMode, mode1WaitMode, stockBit43, effectiveBit43;
+  bool stockValid, lastTxValid, dmsNagEnabled, mode1Reinject, mode2Reinject;
+  bool hw3Enabled;
+  uint8_t stockBit47;
+  uint16_t mode1Delay, mode2Delay;
   uint32_t bit43Rx0, bit43Rx1, bit43Changes;
   uint32_t rx, txOk, txFail, fastAttempts, fastOk, fastFail;
   uint32_t periodicOk, periodicFail, quietArm, quietFire, quietGuard;
+  uint32_t dmsOnlyOk, dmsOnlyFail, dmsBlockedByR79;
   portENTER_CRITICAL(&r79LabMux);
   bit18Policy = r79Bit18Policy;
+  transportMode = r79ModeSanitizePure(r79TransportMode);
+  mode1WaitMode = r79Mode1WaitModeSanitizePure(r79Mode1TxWaitMode);
+  mode1Reinject = r79Mode1ReinjectEnabled;
+  mode1Delay = r79FixedQuietDelaySanitizePure(r79Mode1DelayMs);
+  mode2Reinject = r79Mode2ReinjectEnabled;
+  mode2Delay = r79Mode2DelayMs;
+  hw3Enabled = r79Hw3Enabled;
+  stockBit47 = (r79LabLastStockRaw[5] >> 7) & 1u;
   stockValid = r79LabStockValid;
   lastTxValid = r79LabLastTxValid;
-  dmsNagEnabled = r79DmsNagBit43Enabled;
   stockBit43 = r79LabStockCabinCamera;
   effectiveBit43 = r79LabEffectiveCabinCamera;
   bit43Rx0 = r79LabBit43Rx0;
@@ -907,21 +1010,59 @@ static String r79StatsToJson() {
   quietArm = r79QuietArmCount;
   quietFire = r79QuietFireCount;
   quietGuard = r79QuietGuardSkip;
+  dmsOnlyOk = r79DmsOnlyTxOk;
+  dmsOnlyFail = r79DmsOnlyTxFail;
+  dmsBlockedByR79 = r79DmsOnlyBlockedByR79;
   portEXIT_CRITICAL(&r79LabMux);
+  portENTER_CRITICAL(&nagCfgMux);
+  dmsNagEnabled = nagCfg.dmsControlEnabled;
+  portEXIT_CRITICAL(&nagCfgMux);
 
   String s;
-  s.reserve(620);
+  s.reserve(760);
   JsonWriterArduino jw(s);
   jw.boolean("fixedPolicy", true);
-  jw.string("transport", "D9_MUX1_FAST_ECHO_2MS");
-  jw.string("periodic", "ALWAYS_MUX2_PLUS_150MS_1X");
-  jw.u32("bit18Mode", bit18Policy);
-  jw.string("bit18ModeName", bit18Policy == R79_BIT18_STOCK_PURE ? "STOCK" : "FORCE_0");
+  jw.u32("mode", transportMode);
+  jw.string("modeName", transportMode == R79_MODE_2_PURE ? "Mode 2" : "Mode 1");
+  jw.string("transport", transportMode == R79_MODE_2_PURE
+      ? "MUX1_FAST_ECHO_0MS"
+      : (mode1WaitMode == R79_MODE1_FAST_ECHO_PURE
+          ? "D9_MUX1_FAST_ECHO_0MS" : "D9_MUX1_2MS_WAIT"));
+  if (transportMode == R79_MODE_2_PURE) {
+    jw.string("periodic", mode2Reinject ? "OPTIONAL_MUX2_REINJECTION" : "OFF");
+  } else {
+    if (mode1Reinject) {
+      String periodic = "MUX2_PLUS_";
+      periodic += (unsigned int)mode1Delay;
+      periodic += "MS_1X";
+      jw.string("periodic", periodic);
+    } else {
+      jw.string("periodic", "OFF");
+    }
+  }
+  jw.u32("mode1TxWaitMode", mode1WaitMode);
+  jw.boolean("mode1ReinjectEnabled", mode1Reinject);
+  jw.u32("mode1DelayMs", mode1Delay);
+  jw.boolean("mode2ReinjectEnabled", mode2Reinject);
+  jw.u32("mode2DelayMs", mode2Delay);
+  jw.u32("bit18Mode", transportMode == R79_MODE_2_PURE
+      ? R79_BIT18_STOCK_PURE : bit18Policy);
+  jw.string("bit18ModeName", transportMode == R79_MODE_2_PURE
+      ? "STOCK" : (bit18Policy == R79_BIT18_STOCK_PURE ? "STOCK" : "FORCE_0"));
   jw.u32("bit19", 0u);
-  jw.u32("bit47", 1u);
+  const bool hw3Supported = activeProfileR79Hw3Supported();
+  const bool hw3Active = hw3Enabled && hw3Supported;
+  jw.boolean("hw3Enabled", hw3Enabled);
+  jw.boolean("hw3Supported", hw3Supported);
+  jw.boolean("hw3Active", hw3Active);
+  jw.string("bit47ModeName", hw3Active ? "STOCK" : "FORCE_1");
+  jw.boolean("stockBit47Valid", stockValid);
+  jw.u32("stockBit47", stockBit47);
+  jw.boolean("bit47Valid", !hw3Active || stockValid);
+  jw.u32("bit47", hw3Active ? stockBit47 : 1u);
   jw.boolean("dmsNagSupported", activeProfileDmsNagSupported());
   jw.boolean("dmsNagEnabled", dmsNagEnabled);
-  jw.boolean("dmsNagActive", labMenuEnabled && activeProfileDmsNagSupported() && dmsNagEnabled);
+  jw.boolean("dmsNagActive", r79DmsNagActive());
   jw.boolean("stockBit43Valid", stockValid);
   jw.u32("stockBit43", stockBit43);
   jw.boolean("effectiveBit43Valid", lastTxValid);
@@ -930,6 +1071,8 @@ static String r79StatsToJson() {
   jw.u32("bit43Rx1", bit43Rx1);
   jw.u32("bit43Changes", bit43Changes);
   jw.string("runtimeState", r79RuntimeStateName(runtime.state));
+  jw.u32("apWaitRemainingMs", runtime.apGate.remainingMs);
+  jw.string("apGateReason", r79ApGateReasonName(runtime.apGate.reason));
   jw.boolean("stockTemplateValid", stockValid);
   jw.u32("stockMux1Rx", rx);
   jw.u32("txOk", txOk);
@@ -942,6 +1085,9 @@ static String r79StatsToJson() {
   jw.u32("quietArm", quietArm);
   jw.u32("quietFire", quietFire);
   jw.u32("quietGuardSkip", quietGuard);
+  jw.u32("dmsOnlyTxOk", dmsOnlyOk);
+  jw.u32("dmsOnlyTxFail", dmsOnlyFail);
+  jw.u32("dmsOnlyBlockedByR79", dmsBlockedByR79);
   jw.finish();
   return s;
 }
@@ -1015,6 +1161,8 @@ static String systemStatsToJson() {
   uint8_t taskHeartbeatLastCause;
   uint32_t taskHeartbeatLastAgeAms, taskHeartbeatLastAgeBms;
   uint32_t taskHeartbeatTimeoutCountA, taskHeartbeatTimeoutCountB, taskHeartbeatTimeoutCountBoth;
+  CanTaskTimeoutSnapshotPure taskSnapshotA = {};
+  CanTaskTimeoutSnapshotPure taskSnapshotB = {};
   portENTER_CRITICAL(&canRecoveryMux);
   busOffSnap = canTwaiLastBusOffSnapshot;
   twaiBusOffCount = canTwaiBusOffCount;
@@ -1034,6 +1182,8 @@ static String systemStatsToJson() {
   taskHeartbeatTimeoutCountA = canTaskHeartbeatTimeoutCountA;
   taskHeartbeatTimeoutCountB = canTaskHeartbeatTimeoutCountB;
   taskHeartbeatTimeoutCountBoth = canTaskHeartbeatTimeoutCountBoth;
+  taskSnapshotA = canTaskHeartbeatLastSnapshotA;
+  taskSnapshotB = canTaskHeartbeatLastSnapshotB;
   portEXIT_CRITICAL(&canRecoveryMux);
   const uint32_t statsNow = (uint32_t)millis();
   const bool canARecordCurrent =
@@ -1069,6 +1219,13 @@ static String systemStatsToJson() {
   jw.u32("mcpRxOverflowCount", (uint32_t)(mcpOverflowCount));
   jw.u32("mcpRxOverflowLastAgeMs", (uint32_t)((mcpOverflowLastMs ? millis() - mcpOverflowLastMs : 999999UL)));
   jw.u32("mcpRxOverflowLastFlags", (uint32_t)(mcpOverflowLastFlags));
+  jw.u32("canARxFramesProcessed", (uint32_t)canARxDiagnostics.framesProcessed);
+  jw.u32("canARxMaxFramesPerLoop", (uint32_t)canARxDiagnostics.maxFramesPerLoop);
+  jw.u32("canARxBudgetExhaustedLoops", (uint32_t)canARxDiagnostics.budgetExhaustedLoops);
+  jw.u32("mcpRx0OverflowObservations", (uint32_t)canARxDiagnostics.rx0OverflowObservations);
+  jw.u32("mcpRx1OverflowObservations", (uint32_t)canARxDiagnostics.rx1OverflowObservations);
+  jw.u32("mcpRxFramesAtLastOverflow", (uint32_t)canARxDiagnostics.framesAtLastOverflow);
+  jw.u32("mcpRxBudgetHitsAtLastOverflow", (uint32_t)canARxDiagnostics.budgetExhaustedAtLastOverflow);
   CanABusOffSnapshot canASnap = {};
   uint8_t canATraceFrozenCountLocal = 0;
   uint32_t canATraceFrozenMsLocal = 0, canATraceBusOffOrdinalLocal = 0;
@@ -1117,6 +1274,26 @@ static String systemStatsToJson() {
   jw.u32("canTaskHeartbeatTimeoutCountA", (uint32_t)taskHeartbeatTimeoutCountA);
   jw.u32("canTaskHeartbeatTimeoutCountB", (uint32_t)taskHeartbeatTimeoutCountB);
   jw.u32("canTaskHeartbeatTimeoutCountBoth", (uint32_t)taskHeartbeatTimeoutCountBoth);
+  jw.string("canTaskSnapshotAStateName", taskHeartbeatLastCause
+      ? canTaskStateName(taskSnapshotA.taskState) : "NONE");
+  jw.string("canTaskSnapshotAStageName", canTaskStageNamePure(taskSnapshotA.stage));
+  jw.u32("canTaskSnapshotAStageAgeMs", (uint32_t)taskSnapshotA.stageAgeMs);
+  jw.u32("canTaskSnapshotAHeartbeatCount", (uint32_t)taskSnapshotA.heartbeatCount);
+  jw.u32("canTaskSnapshotAMaxHeartbeatGapMs", (uint32_t)taskSnapshotA.maxHeartbeatGapMs);
+  jw.u32("canTaskSnapshotALoopCount", (uint32_t)taskSnapshotA.loopCount);
+  jw.u32("canTaskSnapshotALastLoopUs", (uint32_t)taskSnapshotA.lastLoopDurationUs);
+  jw.u32("canTaskSnapshotAMaxLoopUs", (uint32_t)taskSnapshotA.maxLoopDurationUs);
+  jw.u32("canTaskSnapshotAStackHighWater", (uint32_t)taskSnapshotA.stackHighWater);
+  jw.string("canTaskSnapshotBStateName", taskHeartbeatLastCause
+      ? canTaskStateName(taskSnapshotB.taskState) : "NONE");
+  jw.string("canTaskSnapshotBStageName", canTaskStageNamePure(taskSnapshotB.stage));
+  jw.u32("canTaskSnapshotBStageAgeMs", (uint32_t)taskSnapshotB.stageAgeMs);
+  jw.u32("canTaskSnapshotBHeartbeatCount", (uint32_t)taskSnapshotB.heartbeatCount);
+  jw.u32("canTaskSnapshotBMaxHeartbeatGapMs", (uint32_t)taskSnapshotB.maxHeartbeatGapMs);
+  jw.u32("canTaskSnapshotBLoopCount", (uint32_t)taskSnapshotB.loopCount);
+  jw.u32("canTaskSnapshotBLastLoopUs", (uint32_t)taskSnapshotB.lastLoopDurationUs);
+  jw.u32("canTaskSnapshotBMaxLoopUs", (uint32_t)taskSnapshotB.maxLoopDurationUs);
+  jw.u32("canTaskSnapshotBStackHighWater", (uint32_t)taskSnapshotB.stackHighWater);
   jw.boolean("canRecoverySleeping", recoverySleeping);
   jw.i32("twaiState", twaiStatusOk ? (int32_t)twaiNow.state : -1);
   jw.string("twaiStateName", twaiStatusOk ? twaiStateName(twaiNow.state) : "UNAVAILABLE");
@@ -1281,7 +1458,23 @@ static void httpBootCaptureCsv() {
 static const char *canTxTraceSourceName(uint8_t source) {
   if (source == CAN_TX_TRACE_SOURCE_AUTO_BLINKER) return "AUTO_BLINKER";
   if (source == CAN_TX_TRACE_SOURCE_S3XY_BUTTON) return "S3XY_BUTTON";
+  if (source == CAN_TX_TRACE_SOURCE_DRIVER_WINDOW_LAB) return "DRIVER_WINDOW_LAB";
   return nullptr;
+}
+
+static void canTxTraceRawHex(const uint8_t *data, uint8_t dlc,
+                             char *out, size_t outLen) {
+  if (!out || outLen == 0u) return;
+  out[0] = '\0';
+  if (!data) return;
+  char *write = out;
+  size_t remain = outLen;
+  for (uint8_t i = 0; i < dlc && i < 8u; ++i) {
+    const int n = snprintf(write, remain, "%s%02X", i ? " " : "", data[i]);
+    if (n <= 0 || (size_t)n >= remain) break;
+    write += n;
+    remain -= (size_t)n;
+  }
 }
 
 static const char *canATxTraceSourceName(uint8_t source, uint16_t id) {
@@ -1332,13 +1525,7 @@ static void httpCanATxTraceCsv() {
   for (uint8_t i = 0; i < count; i++) {
     const CanATxTraceEntry &e = entries[i];
     char raw[32] = {};
-    char *w = raw;
-    size_t remain = sizeof(raw);
-    for (uint8_t j = 0; j < e.dlc && j < 8; j++) {
-      const int n = snprintf(w, remain, "%s%02X", j ? " " : "", e.data[j]);
-      if (n <= 0 || (size_t)n >= remain) break;
-      w += n; remain -= (size_t)n;
-    }
+    canTxTraceRawHex(e.data, e.dlc, raw, sizeof(raw));
     const int32_t rel = frozenMs ? (int32_t)(e.capturedMs - frozenMs) : 0;
     const char *resultName = e.result == (int32_t)MCP2515::ERROR_OK ? "OK" : "ERROR";
     snprintf(line, sizeof(line), "%lu,%ld,%lu,0x%03X,%s,%u,%ld,%s,%s,%s\n",
@@ -1390,13 +1577,7 @@ static void httpCanBTxTraceCsv() {
   for (uint8_t i = 0; i < count; i++) {
     const CanBTxTraceEntry &e = entries[i];
     char raw[32] = {};
-    char *w = raw;
-    size_t remain = sizeof(raw);
-    for (uint8_t j = 0; j < e.dlc && j < 8; j++) {
-      const int n = snprintf(w, remain, "%s%02X", j ? " " : "", e.data[j]);
-      if (n <= 0 || (size_t)n >= remain) break;
-      w += n; remain -= (size_t)n;
-    }
+    canTxTraceRawHex(e.data, e.dlc, raw, sizeof(raw));
     const int32_t rel = frozenMs ? (int32_t)(e.capturedMs - frozenMs) : 0;
     snprintf(line, sizeof(line), "%lu,%ld,%lu,0x%03X,%s,%u,%ld,%s,%s\n",
              (unsigned long)e.seq, (long)rel, (unsigned long)e.capturedMs,
@@ -1911,6 +2092,11 @@ static void httpOtaUpload() {
         otaErrMsg[0]  = '\0';
         T2CAN_SERIAL_PRINTF("[OTA] Start: %s\n", up.filename.c_str());
 
+        if (!prepareCanForMaintenance()) {
+            otaError = true;
+            strncpy(otaErrMsg, "CAN stop not confirmed; OTA refused. Reboot required.", sizeof(otaErrMsg) - 1);
+            return;
+        }
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
             otaError = true;
             strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
@@ -1935,7 +2121,7 @@ static void httpOtaUpload() {
         }
         otaInProgress = false;
     } else if (up.status == UPLOAD_FILE_ABORTED) {
-        Update.end();
+        Update.abort();
         otaInProgress = false;
         otaError      = true;
         strncpy(otaErrMsg, "aborted", sizeof(otaErrMsg) - 1);
@@ -1951,7 +2137,7 @@ static void httpOtaFinish() {
     server.send(200, "application/json", resp);
     if (ok) {
         delay(700);
-        ESP.restart();
+        restartT2CanSafely();
     }
 }
 
@@ -2290,14 +2476,8 @@ static void httpResearchCaptureMode() {
   uint8_t mode = 0xFF;
   if (raw == "SNAPSHOT" || raw == "0") mode = RESEARCH_CAPTURE_MODE_SNAPSHOT;
   else if (raw == "RAW_TRANSITION" || raw == "RAW" || raw == "1") mode = RESEARCH_CAPTURE_MODE_RAW_TRANSITION;
-  else if (raw == "RAW_AUTO_ALC" || raw == "AUTO_ALC" || raw == "AUTO" || raw == "2") mode = RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC;
-  else if (raw == "ULC_CONFIRM" || raw == "ULC" || raw == "CONFIRM" || raw == "3") mode = RESEARCH_CAPTURE_MODE_ULC_CONFIRM;
   if (mode == 0xFF) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"mode must be SNAPSHOT, RAW_TRANSITION, RAW_AUTO_ALC or ULC_CONFIRM\"}");
-    return;
-  }
-  if (mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC && !activeProfileIsYl()) {
-    server.send(409, "application/json", "{\"ok\":false,\"error\":\"RAW AUTO ALC is available only on Model Y L\"}");
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"mode must be SNAPSHOT or RAW_TRANSITION\"}");
     return;
   }
   if (!researchCaptureSetMode(mode)) {
@@ -2638,6 +2818,20 @@ static void httpSystemStats() { server.send(200, "application/json", systemStats
 
 
 // ─── Universal v3.3 profile / feature policy APIs ───────────────────
+static void writeProfileCapabilityJson(JsonWriterArduino &jw) {
+  jw.boolean("nagSupported", activeProfileNagSupported());
+  jw.boolean("nagTorqueSupported", activeProfileNagTorqueSupported());
+  jw.boolean("nagTsl9Supported", activeProfileNagTsl9Supported());
+  jw.boolean("advancedEapSupported", activeProfileAdvancedEapSupported());
+  jw.boolean("pedalMapSupported", activeProfilePedalMapSupported());
+  jw.boolean("apDriveProfileSupported", activeProfileApDriveProfileSupported());
+  jw.boolean("apDriveProfile", activeProfileApDriveProfileSupported() && apDriveProfileEnabled);
+  jw.u32("apDriveProfileRegenRaw", apDriveProfileRegenRaw);
+  jw.string("apDriveProfileRegenName", apDriveRegenNamePure(apDriveProfileRegenRaw));
+  jw.boolean("bodyControlsSupported", activeProfileBodyControlsSupported());
+  jw.boolean("euUnlockSupported", activeProfileEuUnlockSupported());
+}
+
 static String vehicleProfileStatusJson() {
   String j;
   j.reserve(520);
@@ -2654,15 +2848,7 @@ static String vehicleProfileStatusJson() {
   jw.string("canB", activeProfileCanBName());
   jw.u32("turn", activeTurnSignalVariant);
   jw.string("turnName", turnSignalVariantName(activeTurnSignalVariant));
-  jw.boolean("nagSupported", activeProfileNagSupported());
-  jw.boolean("advancedEapSupported", activeProfileAdvancedEapSupported());
-  jw.boolean("pedalMapSupported", activeProfilePedalMapSupported());
-  jw.boolean("apDriveProfileSupported", activeProfileApDriveProfileSupported());
-  jw.boolean("apDriveProfile", activeProfileApDriveProfileSupported() && apDriveProfileEnabled);
-  jw.u32("apDriveProfileRegenRaw", apDriveProfileRegenRaw);
-  jw.string("apDriveProfileRegenName", apDriveRegenNamePure(apDriveProfileRegenRaw));
-  jw.boolean("bodyControlsSupported", activeProfileBodyControlsSupported());
-  jw.boolean("euUnlockSupported", activeProfileEuUnlockSupported());
+  writeProfileCapabilityJson(jw);
   jw.boolean("tlsscRestoreSupported", activeProfileTlsscRestoreSupported());
   jw.boolean("bannedSupported", activeProfileBannedCarSupported());
   jw.finish();
@@ -2677,15 +2863,7 @@ static String v3FeaturePolicyJson() {
   jw.boolean("ok", true);
   jw.boolean("lab", labMenuEnabled);
   jw.boolean("doorCancel", doorCancelReported);
-  jw.boolean("nagSupported", activeProfileNagSupported());
-  jw.boolean("advancedEapSupported", activeProfileAdvancedEapSupported());
-  jw.boolean("pedalMapSupported", activeProfilePedalMapSupported());
-  jw.boolean("apDriveProfileSupported", activeProfileApDriveProfileSupported());
-  jw.boolean("apDriveProfile", activeProfileApDriveProfileSupported() && apDriveProfileEnabled);
-  jw.u32("apDriveProfileRegenRaw", apDriveProfileRegenRaw);
-  jw.string("apDriveProfileRegenName", apDriveRegenNamePure(apDriveProfileRegenRaw));
-  jw.boolean("bodyControlsSupported", activeProfileBodyControlsSupported());
-  jw.boolean("euUnlockSupported", activeProfileEuUnlockSupported());
+  writeProfileCapabilityJson(jw);
   jw.boolean("banned", bannedCar);
   jw.boolean("tlsscRestore", tlsscRestoreEnabled);
   jw.boolean("tlsscRestoreSupported", activeProfileTlsscRestoreSupported());
@@ -2701,6 +2879,21 @@ static bool httpBoolArg(const char *name, bool &out) {
   if (a == "1" || a == "true" || a == "on") { out = true; return true; }
   if (a == "0" || a == "false" || a == "off") { out = false; return true; }
   return false;
+}
+
+static bool httpDecimalU16InRange(const String &raw, uint16_t minimum,
+                                  uint16_t maximum, uint16_t &out) {
+  if (raw.length() == 0u) return false;
+  uint32_t value = 0u;
+  for (size_t i = 0; i < raw.length(); ++i) {
+    const char ch = raw.charAt(i);
+    if (ch < '0' || ch > '9') return false;
+    value = value * 10u + (uint32_t)(ch - '0');
+    if (value > maximum) return false;
+  }
+  if (value < minimum) return false;
+  out = (uint16_t)value;
+  return true;
 }
 
 static void httpProfileStatus() {
@@ -2759,6 +2952,10 @@ static void httpProfileSelect() {
 
   // Runtime profile changes are boot-boundary only. Close the global TX gate
   // before persistence so no old-profile frame can race the reboot.
+  if (!prepareCanForMaintenance()) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"CAN stop not confirmed; retry reboot\"}");
+    return;
+  }
   setCanTxAdministrativeHold(true);
   if (!vehicleProfileSetupMode) invalidateCanTxStateForFullRecovery();
   if (!vehicleProfileSave((uint8_t)profile, topology, turn)) {
@@ -2768,7 +2965,7 @@ static void httpProfileSelect() {
   }
   server.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
   delay(300);
-  ESP.restart();
+  restartT2CanSafely();
 }
 
 static void httpFeatureLab() {
@@ -2777,10 +2974,13 @@ static void httpFeatureLab() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
     return;
   }
-  labMenuEnabled = enabled;
+  if (!countryOverrideSetLabEnabledWithBarrier(enabled)) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"TX barrier unavailable\"}");
+    return;
+  }
   if (enabled && !researchCaptureEntries) {
     if (!researchCaptureInit()) {
-      labMenuEnabled = false;
+      (void)countryOverrideSetLabEnabledWithBarrier(false);
       featureCfgSave();
       server.send(500, "application/json", "{\"ok\":false,\"error\":\"Research Capture allocation failed\"}");
       return;
@@ -2791,156 +2991,19 @@ static void httpFeatureLab() {
     // the rest of LAB. Its panel will report ERROR if allocation is unavailable.
     driverMonitorCaptureInit();
   } else if (!enabled) {
-    // LAB OFF immediately deactivates DMS/NAG injection through the existing
-    // labMenuEnabled runtime gate, but preserves the NVS-backed user selection
-    // so re-enabling LAB or rebooting restores the requested state.
-    portENTER_CRITICAL(&blinkAMux);
-    const uint8_t profileDefaultBlinkerTx =
-        blinkerTxDefaultModePure(activeProfileIsYl());
-    if (profileDefaultBlinkerTx == BLINKER_TX_MODE_SINGLE_PURE)
-      blinkerTxCancelLegacyLocked();
-    blinkerTxMode = profileDefaultBlinkerTx;
-    portEXIT_CRITICAL(&blinkAMux);
-    // LAB OFF suspends all LAB-only injection through the existing gate, but
-    // preserves the user's NVS-backed Confirm-Free selection for later use.
+    // LAB OFF suspends LAB-only capture and injection features. Production
+    // NAG/DMS ownership is intentionally independent of this menu gate.
     portENTER_CRITICAL(&researchCaptureMux);
     if (!researchCaptureExporting && researchCaptureState == RESEARCH_CAPTURE_CAPTURING)
       researchCaptureState = RESEARCH_CAPTURE_PAUSED;
     portEXIT_CRITICAL(&researchCaptureMux);
     driverMonitorCaptureSuspend();
+    driverWindowLabResetRuntime();
   }
   featureCfgSave();
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
 
-static String apRightScrollStatsToJson() {
-  const uint32_t now = (uint32_t)millis();
-  bool enabled, pending, gateWasOpen, warningDueArmed;
-  uint16_t intervalSeconds;
-  uint32_t nextDueMs, warningDueMs, mux1Rx, physicalDeferrals, upOk, downOk, txFail, lastTxMs;
-  uint8_t lastTxValue, warningRepeatSeconds;
-  portENTER_CRITICAL(&apRightScrollMux);
-  enabled = apRightScrollEnabled;
-  intervalSeconds = apRightScrollIntervalSeconds;
-  warningRepeatSeconds = apRightScrollVisualRepeatSeconds;
-  pending = apRightScrollState.downPending;
-  gateWasOpen = apRightScrollState.gateWasOpen;
-  nextDueMs = apRightScrollState.nextDueMs;
-  warningDueArmed = apRightScrollState.warningDueArmed;
-  warningDueMs = apRightScrollState.warningDueMs;
-  mux1Rx = apRightScrollMux1Rx;
-  physicalDeferrals = apRightScrollPhysicalDeferrals;
-  upOk = apRightScrollTxUpOk;
-  downOk = apRightScrollTxDownOk;
-  txFail = apRightScrollTxFail;
-  lastTxMs = apRightScrollLastTxMs;
-  lastTxValue = apRightScrollLastTxValue;
-  portEXIT_CRITICAL(&apRightScrollMux);
-  bool apActive;
-  portENTER_CRITICAL(&stateMux);
-  apActive = dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4);
-  portEXIT_CRITICAL(&stateMux);
-  uint32_t visualWarningEpoch;
-  bool visualWarningActive;
-  portENTER_CRITICAL(&nagCtxMux);
-  visualWarningEpoch = nagCtx.visualWarningEpoch;
-  visualWarningActive = nagCtx.visualWarningActive;
-  portEXIT_CRITICAL(&nagCtxMux);
-  const bool supported = activeProfileApRightScrollSupported();
-  const bool gateOpen = supported && enabled &&
-                        apActive && twaiReady && !canTxAdministrativeHold;
-  const uint32_t remainingMs = gateWasOpen && nextDueMs
-      ? ((int32_t)(now - nextDueMs) >= 0 ? 0U : nextDueMs - now) : 0U;
-  const uint32_t warningRemainingMs = gateWasOpen && warningDueArmed && warningDueMs
-      ? ((int32_t)(now - warningDueMs) >= 0 ? 0U : warningDueMs - now) : 0U;
-  String j; j.reserve(620); JsonWriterArduino jw(j);
-  jw.boolean("supported", supported);
-  jw.string("routeName", activeProfileIsYl() ? "VH" : "CHASSIS");
-  jw.boolean("enabled", enabled);
-  jw.u32("intervalSeconds", intervalSeconds);
-  jw.u32("visualRepeatSeconds", warningRepeatSeconds);
-  jw.boolean("visualWarningActive", visualWarningActive);
-  jw.u32("visualWarningEpoch", visualWarningEpoch);
-  jw.u32("warningRemainingMs", warningRemainingMs);
-  jw.boolean("apActive", apActive);
-  jw.boolean("gateOpen", gateOpen);
-  jw.boolean("downPending", pending);
-  jw.u32("remainingMs", remainingMs);
-  jw.u32("mux1Rx", mux1Rx);
-  jw.u32("physicalDeferrals", physicalDeferrals);
-  jw.u32("txUpOk", upOk);
-  jw.u32("txDownOk", downOk);
-  jw.u32("txFail", txFail);
-  jw.u32("lastTxAgeMs", lastTxMs ? now - lastTxMs : 999999UL);
-  jw.u32("lastTxValue", lastTxValue);
-  jw.finish();
-  return j;
-}
-
-static void httpApRightScrollStats() {
-  server.send(200, "application/json", apRightScrollStatsToJson());
-}
-
-static void httpApRightScrollUpdate() {
-  if (!activeProfileApRightScrollSupported()) {
-    server.send(409, "application/json", "{\"ok\":false,\"error\":\"AP Right Scroll requires CAN B VH/Chassis\"}");
-    return;
-  }
-  bool enabled;
-  uint16_t intervalSeconds;
-  uint8_t warningRepeatSeconds;
-  portENTER_CRITICAL(&apRightScrollMux);
-  enabled = apRightScrollEnabled;
-  intervalSeconds = apRightScrollIntervalSeconds;
-  warningRepeatSeconds = apRightScrollVisualRepeatSeconds;
-  portEXIT_CRITICAL(&apRightScrollMux);
-  if (server.hasArg("enabled")) {
-    const String raw = server.arg("enabled");
-    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
-      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
-      return;
-    }
-    enabled = raw == "1" || raw == "true";
-  }
-  if (server.hasArg("intervalSeconds")) {
-    const String raw = server.arg("intervalSeconds");
-    bool digits = raw.length() > 0;
-    for (size_t i = 0; i < raw.length(); ++i) {
-      const char c = raw.charAt(i);
-      if (c < '0' || c > '9') { digits = false; break; }
-    }
-    const unsigned long value = digits ? (unsigned long)raw.toInt() : 0UL;
-    if (!digits || value > 65535UL ||
-        !apRightScrollIntervalValidPure((uint16_t)value)) {
-      server.send(400, "application/json", "{\"ok\":false,\"error\":\"intervalSeconds must be 1..600\"}");
-      return;
-    }
-    intervalSeconds = (uint16_t)value;
-  }
-  if (server.hasArg("visualRepeatSeconds")) {
-    const String raw = server.arg("visualRepeatSeconds");
-    bool digits = raw.length() > 0;
-    for (size_t i = 0; i < raw.length(); ++i) {
-      const char c = raw.charAt(i);
-      if (c < '0' || c > '9') { digits = false; break; }
-    }
-    const unsigned long value = digits ? (unsigned long)raw.toInt() : 0UL;
-    if (!digits || value > 255UL ||
-        !apRightScrollWarningRepeatValidPure((uint8_t)value)) {
-      server.send(400, "application/json", "{\"ok\":false,\"error\":\"visualRepeatSeconds must be 1..5\"}");
-      return;
-    }
-    warningRepeatSeconds = (uint8_t)value;
-  }
-  portENTER_CRITICAL(&apRightScrollMux);
-  apRightScrollEnabled = enabled;
-  apRightScrollIntervalSeconds = intervalSeconds;
-  apRightScrollVisualRepeatSeconds = warningRepeatSeconds;
-  apRightScrollState = {};
-  portEXIT_CRITICAL(&apRightScrollMux);
-  featureCfgSave();
-  server.send(200, "application/json", apRightScrollStatsToJson());
-}
 
 static void httpFeatureDoorCancel() {
   if (!activeProfileBodyControlsSupported() && !activeProfileIsYl()) {
@@ -2959,7 +3022,7 @@ static void httpFeatureDoorCancel() {
 
 static void httpFeatureApDriveProfile() {
   if (!activeProfileApDriveProfileSupported()) {
-    server.send(409, "application/json", "{\"ok\":false,\"error\":\"AP Drive Profile requires a supported 0x334 route\"}");
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"AP Pedal / Regen Profile requires a supported 0x334 route\"}");
     return;
   }
 
@@ -3060,8 +3123,8 @@ static bool resetFirmwareSettingsPreserveProfileAndBle() {
   // schema metadata and is also preserved so a settings reset cannot replay
   // old migrations.
   static const char *const clearNamespaces[] = {
-    "nag", "summon", "lab3f8", "ulc", "alc293lab", "r79lab", "r79",
-    "researchcap", "features"
+    "nag", "summon", "lab3f8", "ulc", "alc293lab", "countrylab", "r79lab", "r79", "lanegraph",
+    "researchcap", "features", "labv3fd"
   };
   bool ok = true;
   for (const char *ns : clearNamespaces) {
@@ -3083,9 +3146,97 @@ static bool factoryResetAllNvs() {
   return vehicleProfileWriteBootstrapMarker(false);
 }
 
+static constexpr const char *NVS_KEEP_BLE_RESET_GUARD_NAMESPACE = "t2reset";
+static constexpr const char *NVS_KEEP_BLE_RESET_GUARD_KEY = "pending";
+
+static bool resetNvsKeepBleGuardRead(bool &active) {
+  active = false;
+  Preferences p;
+  // Open read/write so the namespace is created on ordinary installations;
+  // Preferences read-only open reports NOT_FOUND when the guard never existed.
+  if (!p.begin(NVS_KEEP_BLE_RESET_GUARD_NAMESPACE, false)) return false;
+  active = p.getBool(NVS_KEEP_BLE_RESET_GUARD_KEY, false);
+  p.end();
+  return true;
+}
+
+static bool resetNvsKeepBleGuardWrite(bool active) {
+  Preferences p;
+  if (!p.begin(NVS_KEEP_BLE_RESET_GUARD_NAMESPACE, false)) return false;
+  const bool ok = active
+      ? p.putBool(NVS_KEEP_BLE_RESET_GUARD_KEY, true) > 0u
+      : p.clear();
+  p.end();
+  return ok;
+}
+
+static bool resetNvsKeepBleClearApplicationNamespaces() {
+  // Explicit application allowlist: S3XY settings/registry and opaque BLE
+  // stack bond namespaces are intentionally absent.
+  static const char *const clearNamespaces[] = {
+    "v3profile", "wifiap", "nag", "summon", "lab3f8", "ulc",
+    "alc293lab", "countrylab", "r79lab", "r79", "lanegraph", "researchcap", "features",
+    "canDiag", "t2meta", "labv3fd"
+  };
+  static_assert(
+      sizeof(clearNamespaces) / sizeof(clearNamespaces[0]) ==
+          NVS_KEEP_BLE_APPLICATION_NAMESPACE_COUNT_PURE,
+      "keep-BLE reset allowlist count must match the failure model");
+  bool ok = true;
+  for (const char *ns : clearNamespaces) {
+    Preferences p;
+    if (!p.begin(ns, false)) { ok = false; continue; }
+    if (!p.clear()) ok = false;
+    p.end();
+  }
+  return ok;
+}
+
+static bool resetNvsKeepBleFinalize() {
+  if (!resetNvsKeepBleClearApplicationNamespaces()) return false;
+  if (!vehicleProfileWriteBootstrapMarker(false)) return false;
+  return resetNvsKeepBleGuardWrite(false);
+}
+
+static bool resetNvsKeepBleRecoverIfNeeded() {
+  bool active = false;
+  if (!resetNvsKeepBleGuardRead(active)) return false;
+  return !active || resetNvsKeepBleFinalize();
+}
+
+static void httpResetNvsPreserveS3xyBle() {
+  if (!prepareCanForMaintenance()) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"CAN stop not confirmed; retry reboot\"}");
+    return;
+  }
+
+  if (!resetNvsKeepBleGuardWrite(true)) {
+    server.send(500, "application/json",
+                "{\"ok\":false,\"error\":\"BLE-preserving reset guard write failed; nothing was cleared\"}");
+    return;
+  }
+  setCanTxAdministrativeHold(true);
+  if (!vehicleProfileSetupMode && !vehicleProfileNvsError)
+    invalidateCanTxStateForFullRecovery();
+  const bool completed = resetNvsKeepBleFinalize();
+  if (!completed) {
+    server.send(500, "application/json",
+                "{\"ok\":false,\"rebooting\":true,\"error\":\"BLE-preserving reset interrupted; boot recovery will retry without erasing BLE\"}");
+  } else {
+    server.send(200, "application/json",
+                "{\"ok\":true,\"rebooting\":true,\"profileSetup\":true,\"blePreserved\":true}");
+  }
+  delay(300);
+  restartT2CanSafely();
+}
+
 static void httpResetFirmwareSettings() {
   if (vehicleProfileSetupMode || vehicleProfileNvsError) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"not available in setup mode\"}");
+    return;
+  }
+  if (!prepareCanForMaintenance()) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"CAN stop not confirmed; retry reboot\"}");
     return;
   }
   setCanTxAdministrativeHold(true);
@@ -3113,16 +3264,17 @@ static void httpResetFirmwareSettings() {
   autoBlinkerNoaSessionResetPure(autoBlinkerNoaSessionState);
   autoBlinkerCancelPauseResetPure(autoBlinkerCancelPauseState);
   portEXIT_CRITICAL(&blinkAMux);
-  portENTER_CRITICAL(&apRightScrollMux);
-  apRightScrollVisualRepeatSeconds = defaults.rightScrollWarningSeconds;
-  apRightScrollState = {};
-  portEXIT_CRITICAL(&apRightScrollMux);
   server.send(200, "application/json", "{\"ok\":true,\"rebooting\":true,\"profilePreserved\":true,\"blePreserved\":true}");
   delay(300);
-  ESP.restart();
+  restartT2CanSafely();
 }
 
 static void httpFactoryReset() {
+  if (!prepareCanForMaintenance()) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"CAN stop not confirmed; retry reboot\"}");
+    return;
+  }
+
   setCanTxAdministrativeHold(true);
   if (!vehicleProfileSetupMode && !vehicleProfileNvsError) invalidateCanTxStateForFullRecovery();
   const bool ok = factoryResetAllNvs();
@@ -3130,18 +3282,26 @@ static void httpFactoryReset() {
               ok ? "{\"ok\":true,\"rebooting\":true}"
                  : "{\"ok\":false,\"error\":\"factory reset failed; rebooting safe\"}");
   delay(300);
-  ESP.restart();
+  restartT2CanSafely();
 }
 
 static void httpCanHardReinit() {
+  if (canMaintenanceActive()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"CAN stopped for maintenance; reboot required\"}");
+    return;
+  }
   requestCanSubsystemRestart(CAN_SUP_HARD_MANUAL, CAN_REC_MANUAL);
   server.send(202, "application/json", "{\"ok\":true,\"action\":\"hard-can-reinit-requested\"}");
 }
 
 static void httpRebootT2Can() {
+  if (!prepareCanForMaintenance()) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"CAN stop not confirmed; retry reboot\"}");
+    return;
+  }
   server.send(200, "application/json", "{\"ok\":true,\"action\":\"rebooting\"}");
   delay(250);
-  ESP.restart();
+  restartT2CanSafely();
 }
 
 static void httpRoot() {
@@ -3149,14 +3309,48 @@ static void httpRoot() {
   server.sendHeader("Cache-Control", "no-store");
   server.send_P(200, "text/html", (const char*)INDEX_HTML_GZ, INDEX_HTML_GZ_LEN);
 }
+static void httpAppleTouchIcon() {
+  server.sendHeader("Cache-Control", "no-cache");
+  server.send_P(200, "image/png", (const char*)APPLE_TOUCH_ICON, APPLE_TOUCH_ICON_LEN);
+}
+static void httpLabGeistFont() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send_P(200, "font/woff2", (const char*)LAB_GEIST_FONT, LAB_GEIST_FONT_LEN);
+}
+static void httpLabGeistMonoFont() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send_P(200, "font/woff2", (const char*)LAB_GEIST_MONO_FONT, LAB_GEIST_MONO_FONT_LEN);
+}
 static void httpNagConfig() { server.send(200, "application/json", nagCfgToJson()); }
 static void httpNagStats()  { server.send(200, "application/json", nagStatsToJson()); }
 
 static void httpNagSetMode() {
+  if (!activeProfileNagTorqueSupported()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"Torque NAG unavailable for current topology\"}");
+    return;
+  }
   int m = server.arg("m").toInt();
+  bool enabled, ignoreApState;
   bool pauseAtZero = false;
+  uint8_t method = NAG_METHOD_DEFAULT_PURE;
+  uint8_t tsl9Sequence = TSL9_SEQUENCE_DEFAULT_PURE;
+  uint8_t tsl9Window = TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE;
+  uint8_t tsl9InputMode = TSL9_INPUT_MODE_DEFAULT_PURE;
+  bool tsl9IsaChimeSuppress = false;
+  uint8_t tsl9LegacyRoute = TSL9_LEGACY_ROUTE_DEFAULT_PURE;
+  bool dmsControlEnabled = false;
   portENTER_CRITICAL(&nagCfgMux);
+  enabled = nagCfg.enabled;
+  ignoreApState = nagCfg.ignoreApState;
   pauseAtZero = nagCfg.pauseAtZeroSpeed;
+  method = nagMethodSanitizePure(nagCfg.method);
+  tsl9Sequence = tsl9SequenceSanitizePure(nagCfg.tsl9Sequence);
+  tsl9Window = tsl9DowngradeWindowSanitizePure(
+      nagCfg.tsl9DowngradeWindow);
+  tsl9InputMode = tsl9InputModeSanitizePure(nagCfg.tsl9InputMode);
+  tsl9IsaChimeSuppress = nagCfg.tsl9IsaChimeSuppress;
+  tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(nagCfg.tsl9LegacyRoute);
+  dmsControlEnabled = nagCfg.dmsControlEnabled;
   portEXIT_CRITICAL(&nagCfgMux);
 
   NagConfig nc;
@@ -3166,32 +3360,156 @@ static void httpNagSetMode() {
   else                  nagCfgDefaultsModeA(nc);
   // Pause-at-zero is a common NAG policy, not a mode waveform parameter.
   // Preserve it when switching modes. Explicit NAG reset still restores OFF.
+  nc.enabled = enabled;
+  nc.ignoreApState = ignoreApState;
   nc.pauseAtZeroSpeed = pauseAtZero;
+  nc.method = method;
+  nc.tsl9Sequence = tsl9Sequence;
+  nc.tsl9DowngradeWindow = tsl9Window;
+  nc.tsl9InputMode = tsl9InputMode;
+  nc.tsl9IsaChimeSuppress = tsl9IsaChimeSuppress;
+  nc.tsl9LegacyRoute = tsl9LegacyRoute;
+  nc.dmsControlEnabled = dmsControlEnabled;
   nagCfgCommit(nc);
   nagCfgSave();
   server.send(200, "application/json", nagCfgToJson());
 }
 
 static void httpNagSetHumanVariant() {
-  if (!server.hasArg("v")) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing Mode H variant\"}");
-    return;
-  }
-  const int raw = server.arg("v").toInt();
-  if (raw < H_VARIANT_REV1 || raw > H_VARIANT_REV3 || !nagModeHVariantValidPure((uint8_t)raw)) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid Mode H variant\"}");
-    return;
-  }
-  nagHumanRuntimeSetVariant((uint8_t)raw);
-  nagCfgSave();
-  server.send(200, "application/json", nagCfgToJson());
+  server.send(410, "application/json", "{\"ok\":false,\"error\":\"Mode H profiles retired; Mode H uses one engine\"}");
 }
 
 static void httpNagUpdate() {
   NagConfig nc;
   portENTER_CRITICAL(&nagCfgMux); nc = nagCfg; portEXIT_CRITICAL(&nagCfgMux);
+  const NagConfig previous = nc;
+  bool torqueRightScrollEnabled, tsl9RightPeriodicEnabled;
+  uint16_t torqueRightScrollInterval, tsl9RightPeriodicInterval;
+  uint8_t torqueRightScrollPattern;
+  portENTER_CRITICAL(&nagRightScrollMux);
+  torqueRightScrollEnabled = nagTorqueRightScrollEnabled;
+  torqueRightScrollInterval = nagTorqueRightScrollIntervalSeconds;
+  torqueRightScrollPattern =
+      nagRightScrollPatternSanitize(nagTorqueRightScrollPattern);
+  tsl9RightPeriodicEnabled = nagTsl9RightPeriodicEnabled;
+  tsl9RightPeriodicInterval = nagTsl9RightPeriodicIntervalSeconds;
+  portEXIT_CRITICAL(&nagRightScrollMux);
+  const bool previousTorqueRightScrollEnabled = torqueRightScrollEnabled;
+  const uint16_t previousTorqueRightScrollInterval = torqueRightScrollInterval;
+  const uint8_t previousTorqueRightScrollPattern = torqueRightScrollPattern;
+  const bool previousTsl9RightPeriodicEnabled = tsl9RightPeriodicEnabled;
+  const uint16_t previousTsl9RightPeriodicInterval = tsl9RightPeriodicInterval;
+  nagCfgApplyActiveProfilePolicy(nc, false);
+  if (server.hasArg("ignoreApState") && !httpBoolArg("ignoreApState", nc.ignoreApState)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid ignoreApState\"}");
+    return;
+  }
   if (server.hasArg("enabled"))
     nc.enabled = (server.arg("enabled") == "1");
+  if (server.hasArg("method")) {
+    const String raw = server.arg("method");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"method-must-be-0-or-1\"}");
+      return;
+    }
+    const uint8_t requested = nagMethodSanitizePure((uint8_t)raw.toInt());
+    if ((requested == NAG_METHOD_TORQUE_PURE && !activeProfileNagTorqueSupported()) ||
+        (requested == NAG_METHOD_TSL9_PURE && !activeProfileNagTsl9Supported())) {
+      server.send(409, "application/json", "{\"ok\":false,\"error\":\"NAG method unavailable for current topology\"}");
+      return;
+    }
+    nc.method = requested;
+  }
+  if (server.hasArg("tsl9Sequence")) {
+    const String raw = server.arg("tsl9Sequence");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"tsl9Sequence-must-be-0-or-1\"}");
+      return;
+    }
+    nc.tsl9Sequence = tsl9SequenceSanitizePure((uint8_t)raw.toInt());
+  }
+  if (server.hasArg("tsl9Window")) {
+    const String raw = server.arg("tsl9Window");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"tsl9Window-must-be-0-or-1\"}");
+      return;
+    }
+    nc.tsl9DowngradeWindow =
+        tsl9DowngradeWindowSanitizePure((uint8_t)raw.toInt());
+  }
+  if (server.hasArg("tsl9InputMode")) {
+    const String raw = server.arg("tsl9InputMode");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"tsl9InputMode-must-be-0-or-1\"}");
+      return;
+    }
+    nc.tsl9InputMode = tsl9InputModeSanitizePure((uint8_t)raw.toInt());
+  }
+  if (server.hasArg("torqueRightScrollEnabled")) {
+    const String raw = server.arg("torqueRightScrollEnabled");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid torqueRightScrollEnabled\"}");
+      return;
+    }
+    torqueRightScrollEnabled = raw == "1" || raw == "true";
+  }
+  if (server.hasArg("torqueRightScrollIntervalSeconds")) {
+    uint16_t value;
+    if (!httpDecimalU16InRange(
+            server.arg("torqueRightScrollIntervalSeconds"), 1u, 600u,
+            value)) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"torqueRightScrollIntervalSeconds must be 1..600\"}");
+      return;
+    }
+    torqueRightScrollInterval = value;
+  }
+  if (server.hasArg("torqueRightScrollPattern")) {
+    const String raw = server.arg("torqueRightScrollPattern");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"torqueRightScrollPattern must be 0 or 1\"}");
+      return;
+    }
+    torqueRightScrollPattern =
+        nagRightScrollPatternSanitize((uint8_t)raw.toInt());
+  }
+  if (server.hasArg("tsl9RightPeriodicEnabled")) {
+    const String raw = server.arg("tsl9RightPeriodicEnabled");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid tsl9RightPeriodicEnabled\"}");
+      return;
+    }
+    tsl9RightPeriodicEnabled = raw == "1" || raw == "true";
+  }
+  if (server.hasArg("tsl9RightPeriodicIntervalSeconds")) {
+    uint16_t value;
+    if (!httpDecimalU16InRange(
+            server.arg("tsl9RightPeriodicIntervalSeconds"), 1u, 600u,
+            value)) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"tsl9RightPeriodicIntervalSeconds must be 1..600\"}");
+      return;
+    }
+    tsl9RightPeriodicInterval = value;
+  }
+  if (server.hasArg("tsl9IsaChimeSuppress"))
+    nc.tsl9IsaChimeSuppress = server.arg("tsl9IsaChimeSuppress") == "1" ||
+        server.arg("tsl9IsaChimeSuppress") == "true";
+  if (server.hasArg("dmsControlEnabled"))
+    nc.dmsControlEnabled = server.arg("dmsControlEnabled") == "1" ||
+        server.arg("dmsControlEnabled") == "true";
+  if (server.hasArg("tsl9LegacyRoute")) {
+    const String raw = server.arg("tsl9LegacyRoute");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"tsl9LegacyRoute-must-be-0-or-1\"}");
+      return;
+    }
+    if (!vehicleProfileLegacyTsl9RouteSelectable(
+            activeVehicleProfile, activeVehicleTopology)) {
+      server.send(409, "application/json", "{\"ok\":false,\"error\":\"Legacy TSL9 route selector unavailable for current profile\"}");
+      return;
+    }
+    nc.tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(
+        (uint8_t)raw.toInt());
+  }
   if (server.hasArg("pauseAtZeroSpeed"))
     nc.pauseAtZeroSpeed = (server.arg("pauseAtZeroSpeed") == "1" || server.arg("pauseAtZeroSpeed") == "true");
   if (server.hasArg("modeHStopBehavior")) {
@@ -3255,14 +3573,70 @@ static void httpNagUpdate() {
     nc.torqueCount = n;
   }
   nagCfgClampAll(nc);
+  const bool tsl9TransportChanged =
+      previous.enabled != nc.enabled ||
+      nagMethodSanitizePure(previous.method) !=
+          nagMethodSanitizePure(nc.method) ||
+      tsl9InputModeSanitizePure(previous.tsl9InputMode) !=
+          tsl9InputModeSanitizePure(nc.tsl9InputMode) ||
+      tsl9LegacyRouteSanitizePure(previous.tsl9LegacyRoute) !=
+          tsl9LegacyRouteSanitizePure(nc.tsl9LegacyRoute);
+  const bool rightScrollChanged =
+      previousTorqueRightScrollEnabled != torqueRightScrollEnabled ||
+      previousTorqueRightScrollInterval != torqueRightScrollInterval ||
+      previousTorqueRightScrollPattern != torqueRightScrollPattern ||
+      previousTsl9RightPeriodicEnabled != tsl9RightPeriodicEnabled ||
+      previousTsl9RightPeriodicInterval != tsl9RightPeriodicInterval ||
+      nagMethodSanitizePure(previous.method) != nagMethodSanitizePure(nc.method) ||
+      tsl9InputModeSanitizePure(previous.tsl9InputMode) !=
+          tsl9InputModeSanitizePure(nc.tsl9InputMode);
+  const bool inputTransportChanged =
+      tsl9TransportChanged || rightScrollChanged;
+  if (inputTransportChanged && !tsl9InputQuiesceForConfig()) {
+    server.send(503, "application/json",
+                "{\"ok\":false,\"error\":\"TSL9 input cleanup pending; retry after a fresh MUX1 frame\"}");
+    return;
+  }
+  if (server.hasArg("ignoreApState") && !nagIgnoreApStatePersist(nc.ignoreApState)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"NAG option NVS write failed\"}");
+    return;
+  }
+  if (inputTransportChanged) setCanTxAdministrativeHold(true);
+  if (tsl9TransportChanged) nagTsl9RuntimeReset();
   nagCfgCommit(nc);
+  if (previous.ignoreApState != nc.ignoreApState) {
+    nagExactEchoReset();
+    nagHumanRuntimeReset(false);
+  }
   nagCfgSave();
+  if (rightScrollChanged) {
+    portENTER_CRITICAL(&nagRightScrollMux);
+    nagTorqueRightScrollEnabled = torqueRightScrollEnabled;
+    nagTorqueRightScrollIntervalSeconds = torqueRightScrollInterval;
+    nagTorqueRightScrollPattern = torqueRightScrollPattern;
+    nagTsl9RightPeriodicEnabled = tsl9RightPeriodicEnabled;
+    nagTsl9RightPeriodicIntervalSeconds = tsl9RightPeriodicInterval;
+    portEXIT_CRITICAL(&nagRightScrollMux);
+    featureCfgSave();
+  }
+  if (inputTransportChanged) {
+    tsl9InputHardResetAfterQuiesce(false);
+    setCanTxAdministrativeHold(false);
+  }
   server.send(200, "application/json", nagCfgToJson());
 }
 
 static void httpNagReset() {
+  if (!tsl9InputQuiesceForConfig()) {
+    server.send(503, "application/json",
+                "{\"ok\":false,\"error\":\"TSL9 input cleanup pending; retry after a fresh MUX1 frame\"}");
+    return;
+  }
+  setCanTxAdministrativeHold(true);
   NagConfig nc;
-  nagCfgDefaultsModeA(nc);
+  nagCfgDefaultsModeH(nc);
+  nagCfgApplyActiveProfilePolicy(nc, true);
+  nagHumanRuntimeLoadDefaults();
   nagCfgCommit(nc);
   nagCfgSave();
   nagRxFrames = nagEchoCount = mcpTxOk = mcpTxFail = 0;
@@ -3276,6 +3650,23 @@ static void httpNagReset() {
   portENTER_CRITICAL(&nagExactEchoMux);
   nagExactEchoLastTxValid=false; nagExactEchoLastTxMs=0; memset(nagExactEchoLastTxRaw,0,sizeof(nagExactEchoLastTxRaw));
   portEXIT_CRITICAL(&nagExactEchoMux);
+  portENTER_CRITICAL(&nagTsl9Mux);
+  nagTsl9State = {};
+  nagTsl9Rx = nagTsl9Modified = nagTsl9HandsOnModified =
+      nagTsl9IsaModified = nagTsl9TxOk = nagTsl9TxFail = 0;
+  portEXIT_CRITICAL(&nagTsl9Mux);
+  portENTER_CRITICAL(&nagRightScrollMux);
+  nagTorqueRightScrollEnabled = false;
+  nagTorqueRightScrollIntervalSeconds =
+      AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE;
+  nagTorqueRightScrollPattern = NAG_RIGHT_SCROLL_PATTERN_DEFAULT;
+  nagTsl9RightPeriodicEnabled = false;
+  nagTsl9RightPeriodicIntervalSeconds =
+      AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE;
+  portEXIT_CRITICAL(&nagRightScrollMux);
+  featureCfgSave();
+  tsl9InputHardResetAfterQuiesce(true);
+  setCanTxAdministrativeHold(false);
   server.send(200, "application/json", nagCfgToJson());
 }
 
@@ -3331,61 +3722,144 @@ static bool httpRequireLab() {
   return false;
 }
 
-static String dmsNagLabStatsToJson() {
-  bool enabled, stockValid, txValid;
-  uint8_t stockBit43, txBit43;
-  uint32_t rx0, rx1, changes;
-  portENTER_CRITICAL(&r79LabMux);
-  enabled = r79DmsNagBit43Enabled;
-  stockValid = r79LabStockValid;
-  txValid = r79LabLastTxValid;
-  stockBit43 = r79LabStockCabinCamera;
-  txBit43 = r79LabEffectiveCabinCamera;
-  rx0 = r79LabBit43Rx0;
-  rx1 = r79LabBit43Rx1;
-  changes = r79LabBit43Changes;
-  portEXIT_CRITICAL(&r79LabMux);
+static String driverWindowLabStatsToJson() {
+  const uint32_t now = (uint32_t)millis();
+  const DriverWindowArmResultPure availability = driverWindowLabAvailability(now);
+  bool pending, stockValid, lastTxValid;
+  uint8_t framesSent, lastArm, lastConsume, lastState;
+  uint32_t stockMs, lastTxMs, requests, completed, txOk, txFail, blocked;
+  uint8_t stockRaw[8], lastTxRaw[8];
+  portENTER_CRITICAL(&driverWindowLabMux);
+  pending = driverWindowLabState.pending;
+  framesSent = driverWindowLabState.framesSent;
+  stockValid = driverWindowLabStockValid;
+  stockMs = driverWindowLabStockMs;
+  memcpy(stockRaw, driverWindowLabStockRaw, sizeof(stockRaw));
+  lastTxValid = driverWindowLabLastTxValid;
+  lastTxMs = driverWindowLabLastTxMs;
+  memcpy(lastTxRaw, driverWindowLabLastTxRaw, sizeof(lastTxRaw));
+  requests = driverWindowLabRequests;
+  completed = driverWindowLabCompleted;
+  txOk = driverWindowLabTxOk;
+  txFail = driverWindowLabTxFail;
+  blocked = driverWindowLabBlocked;
+  lastArm = driverWindowLabLastArmResult;
+  lastConsume = driverWindowLabLastConsumeReason;
+  lastState = driverWindowLabLastResult;
+  portEXIT_CRITICAL(&driverWindowLabMux);
 
+  const char *lastResult = "IDLE";
+  if (pending || lastState == DRIVER_WINDOW_RESULT_ARMED) lastResult = "PENDING";
+  else if (lastState == DRIVER_WINDOW_RESULT_COMPLETED) lastResult = "COMPLETED";
+  else if (lastState == DRIVER_WINDOW_RESULT_CANCELED) lastResult = "CANCELED";
+  else if (lastState == DRIVER_WINDOW_RESULT_BLOCKED)
+    lastResult = driverWindowLabConsumeReasonName(lastConsume);
+  else if (lastState == DRIVER_WINDOW_RESULT_REJECTED)
+    lastResult = driverWindowLabArmResultName(lastArm);
   String j;
-  j.reserve(260);
+  j.reserve(512);
   JsonWriterArduino jw(j);
   jw.boolean("ok", true);
-  jw.boolean("labEnabled", labMenuEnabled);
-  jw.boolean("supported", activeProfileDmsNagSupported());
-  jw.boolean("enabled", enabled);
-  jw.boolean("active", labMenuEnabled && activeProfileDmsNagSupported() && enabled);
-  jw.boolean("stockValid", stockValid);
-  jw.u32("stockBit43", stockBit43);
-  jw.boolean("txValid", txValid);
-  jw.u32("txBit43", txBit43);
-  jw.u32("rx0", rx0);
-  jw.u32("rx1", rx1);
-  jw.u32("changes", changes);
+  jw.boolean("supported", driverWindowLabProfileSupported());
+  jw.boolean("available", availability == DRIVER_WINDOW_ARM_OK);
+  jw.boolean("pending", pending);
+  jw.u32("framesSent", framesSent);
+  jw.u32("stockAgeMs", stockValid ? (uint32_t)(now - stockMs) : 999999u);
+  jw.u32("lastTxAgeMs", lastTxValid ? (uint32_t)(now - lastTxMs) : 999999u);
+  jw.u32("requests", requests);
+  jw.u32("completed", completed);
+  jw.u32("txOk", txOk);
+  jw.u32("txFail", txFail);
+  jw.u32("blocked", blocked);
+  jw.string("availability", driverWindowLabArmResultName(availability));
+  jw.string("lastResult", lastResult);
+  jw.string("stockRaw", lab3f8RawHex(stockRaw, stockValid ? 8u : 0u));
+  jw.string("lastTxRaw", lab3f8RawHex(lastTxRaw, lastTxValid ? 8u : 0u));
   jw.finish();
   return j;
 }
 
-static void httpDmsNagLabStats() {
+static void httpDriverWindowLabStats() {
   if (!httpRequireLab()) return;
-  server.send(200, "application/json", dmsNagLabStatsToJson());
+  server.send(200, "application/json", driverWindowLabStatsToJson());
 }
 
-static void httpDmsNagLabUpdate() {
+static void httpDriverWindowLabOpen() {
   if (!httpRequireLab()) return;
-  bool enabled;
-  if (!httpBoolArg("enabled", enabled)) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
+  const DriverWindowArmResultPure result = driverWindowLabRequestOpen();
+  server.send(result == DRIVER_WINDOW_ARM_OK ? 202 : 409,
+              "application/json", driverWindowLabStatsToJson());
+}
+
+static void writeCanARxLabJson(JsonWriterArduino &jw) {
+  const uint8_t savedMode = canARxSavedMode;
+  jw.u32("savedMode", savedMode);
+  jw.u32("effectiveMode", canARxReadBatchBudgetPure(labMenuEnabled, savedMode) == 1
+                            ? CAN_A_RX_IMMEDIATE : CAN_A_RX_PREFETCH_4);
+  jw.boolean("labEnabled", labMenuEnabled);
+}
+
+static String canARxLabStatsToJson() {
+  String j;
+  j.reserve(96);
+  JsonWriterArduino jw(j);
+  jw.boolean("ok", true);
+  writeCanARxLabJson(jw);
+  jw.finish();
+  return j;
+}
+
+static void httpCanARxLabStats() {
+  if (!httpRequireLab()) return;
+  server.send(200, "application/json", canARxLabStatsToJson());
+}
+
+static void httpCanARxLabUpdate() {
+  if (!httpRequireLab()) return;
+  if (!server.hasArg("mode")) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing mode\"}");
     return;
   }
-  if (enabled && !activeProfileDmsNagSupported()) {
-    server.send(409, "application/json", "{\"ok\":false,\"error\":\"DMS bit43 LAB unavailable on active 0x3FD/R79 route\"}");
+  const String mode = server.arg("mode");
+  if (mode != "0" && mode != "1") {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid mode\"}");
     return;
   }
-  portENTER_CRITICAL(&r79LabMux);
-  r79DmsNagBit43Enabled = enabled;
-  portEXIT_CRITICAL(&r79LabMux);
-  featureCfgSave();
-  server.send(200, "application/json", dmsNagLabStatsToJson());
+  const uint8_t requested = mode == "1" ? CAN_A_RX_IMMEDIATE : CAN_A_RX_PREFETCH_4;
+  if (!canARxModePersist(requested)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"CAN A RX mode NVS write failed\"}");
+    return;
+  }
+  canARxSavedMode = requested;
+  server.send(200, "application/json", canARxLabStatsToJson());
+}
+
+
+static void writeNagHumanV1ConfigJson(JsonWriterArduino &jw,
+                                      const NagHumanV1ConfigPure &config) {
+  jw.raw("tuningEditable", "true");
+  jw.fixed("peakMinNm", (int32_t)config.peakMinRaw, 2u);
+  jw.fixed("peakMaxNm", (int32_t)config.peakMaxRaw, 2u);
+  jw.u32("waitMinMs", (uint32_t)config.waitMinMs);
+  jw.u32("waitMaxMs", (uint32_t)config.waitMaxMs);
+  jw.u32("refractoryMinMs", (uint32_t)config.refractoryMinMs);
+  jw.u32("refractoryMaxMs", (uint32_t)config.refractoryMaxMs);
+}
+
+static void writeNagHumanV1StateJson(JsonWriterArduino &jw,
+                                     const NagHumanV1StatePure &state,
+                                     uint16_t outputRaw,
+                                     uint8_t stopBehavior) {
+  jw.string("phase", nagHumanV1PhaseNamePure(state.phase));
+  jw.string("motion", nagHumanV1MotionNamePure(state.motion));
+  jw.string("eventType", nagHumanV1EventTypeNamePure(state.event.type));
+  jw.fixed("activeEventPeakNm", (int32_t)state.event.peakRaw, 2u);
+  jw.u32("eventCount", (uint32_t)state.eventCount);
+  jw.fixed("outputNm", (int32_t)outputRaw - 2050, 2u);
+  jw.boolean("carrier", state.carrier);
+  jw.boolean("stopCarrierActive",
+             state.phase == H1_PAUSED_STOPPED &&
+                 stopBehavior == H_STOP_STOCK_CARRIER);
 }
 
 static String nagHumanProfileStatsToJson() {
@@ -3408,67 +3882,11 @@ static String nagHumanProfileStatsToJson() {
   jw.u32("stopBehavior", (uint32_t)(stopBehavior));
   jw.string("stopBehaviorName", nagModeHStopBehaviorNamePure(stopBehavior));
   jw.u32("stopCarrierTxOk", stopCarrierTxOk);
-  if (variant == H_VARIANT_REV2) {
-    const NagHumanV2ConfigPure c = nagHumanV2RuntimeConfigSnapshot();
-    const NagHumanV2StatePure state = nagHumanV2RuntimeSnapshot();
-    const uint16_t outputRaw = state.outputRaw != 0u ? state.outputRaw : NAG_HUMAN_V2_TORQUE_CENTER_RAW;
-    jw.raw("tuningEditable", "false");
-    jw.fixed("peakMinNm", (int32_t)c.naturalTapMinRaw, 2u);
-    jw.fixed("peakMaxNm", (int32_t)c.naturalTapMaxRaw, 2u);
-    jw.fixed("holdMinNm", (int32_t)c.holdNormalMinRaw, 2u);
-    jw.fixed("holdMaxNm", (int32_t)c.holdNormalMaxRaw, 2u);
-    jw.fixed("excursionMaxNm", (int32_t)c.holdExcursionMaxRaw, 2u);
-    jw.u32("intervalMinMs", (uint32_t)(c.naturalTapIntervalMinMs));
-    jw.u32("intervalMaxMs", (uint32_t)(c.naturalTapIntervalMaxMs));
-    jw.u32("durationMinMs", (uint32_t)((c.tapAttackMinMs+c.tapPeakMinMs+c.tapReleaseMinMs)));
-    jw.u32("durationMaxMs", (uint32_t)((c.tapAttackMaxMs+c.tapPeakMaxMs+c.tapReleaseMaxMs)));
-    jw.raw("negativeBiasPct", "80");
-    jw.string("phase", nagHumanV2PhaseNamePure(state.phase));
-    jw.string("motion", nagHumanV2MotionNamePure(state.motion));
-    jw.string("eventType", nagHumanV2EventTypeNamePure(state.event.type));
-    jw.fixed("activeEventPeakNm", (int32_t)state.event.peakRaw, 2u);
-    jw.u32("eventCount", (uint32_t)(state.eventCount));
-    jw.fixed("outputNm", (int32_t)outputRaw - 2050, 2u);
-    jw.boolean("carrier", state.carrier);
-    jw.boolean("stopCarrierActive", state.phase == H_PAUSED_STOPPED && stopBehavior == H_STOP_STOCK_CARRIER);
-  } else if (variant == H_VARIANT_REV3) {
-    const NagHumanV3ConfigPure c = nagHumanV3RuntimeConfigSnapshot();
-    const NagHumanV3StatePure state = nagHumanV3RuntimeSnapshot();
-    const uint16_t outputRaw = state.base.outputRaw != 0u ? state.base.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW;
-    jw.raw("tuningEditable", "true");
-    jw.fixed("peakMinNm", (int32_t)c.base.peakMinRaw, 2u);
-    jw.fixed("peakMaxNm", (int32_t)c.base.peakMaxRaw, 2u);
-    jw.u32("waitMinMs", (uint32_t)(c.base.waitMinMs));
-    jw.u32("waitMaxMs", (uint32_t)(c.base.waitMaxMs));
-    jw.u32("refractoryMinMs", (uint32_t)(c.base.refractoryMinMs));
-    jw.u32("refractoryMaxMs", (uint32_t)(c.base.refractoryMaxMs));
-    jw.fixed("carrierMinNm", (int32_t)c.carrierMinRaw, 2u);
-    jw.fixed("carrierMaxNm", (int32_t)c.carrierMaxRaw, 2u);
-    jw.u32("carrierDirectionMode", (uint32_t)(c.carrierDirectionMode));
-    jw.string("carrierDirectionName", nagHumanV3CarrierDirectionNamePure(c.carrierDirectionMode));
-    jw.u32("hoPolicy", (uint32_t)(c.hoPolicy));
-    jw.string("hoPolicyName", nagHumanV3HoPolicyNamePure(c.hoPolicy));
-    jw.fixed("ho1ThresholdNm", (int32_t)c.ho1ThresholdRaw, 2u);
-    jw.fixed("ho2ThresholdNm", (int32_t)c.ho2ThresholdRaw, 2u);
-    jw.string("phase", nagHumanV1PhaseNamePure(state.base.phase));
-    jw.string("motion", nagHumanV1MotionNamePure(state.base.motion));
-    jw.string("eventType", nagHumanV1EventTypeNamePure(state.base.event.type));
-    jw.fixed("activeEventPeakNm", (int32_t)state.base.event.peakRaw, 2u);
-    jw.u32("eventCount", (uint32_t)(state.base.eventCount));
-    jw.fixed("outputNm", (int32_t)outputRaw - 2050, 2u);
-    jw.boolean("carrier", state.base.carrier);
-    jw.boolean("stopCarrierActive", state.base.phase == H1_PAUSED_STOPPED && stopBehavior == H_STOP_STOCK_CARRIER);
-  } else if (variant == H_VARIANT_REV4) {
+{
     const NagHumanV4ConfigPure c = nagHumanV4RuntimeConfigSnapshot();
     const NagHumanV4StatePure state = nagHumanV4RuntimeSnapshot();
     const uint16_t outputRaw = state.base.outputRaw != 0u ? state.base.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW;
-    jw.raw("tuningEditable", "true");
-    jw.fixed("peakMinNm", (int32_t)c.base.peakMinRaw, 2u);
-    jw.fixed("peakMaxNm", (int32_t)c.base.peakMaxRaw, 2u);
-    jw.u32("waitMinMs", (uint32_t)(c.base.waitMinMs));
-    jw.u32("waitMaxMs", (uint32_t)(c.base.waitMaxMs));
-    jw.u32("refractoryMinMs", (uint32_t)(c.base.refractoryMinMs));
-    jw.u32("refractoryMaxMs", (uint32_t)(c.base.refractoryMaxMs));
+    writeNagHumanV1ConfigJson(jw, c.base);
     jw.fixed("carrierMinNm", (int32_t)c.carrierMinRaw, 2u);
     jw.fixed("carrierMaxNm", (int32_t)c.carrierMaxRaw, 2u);
     jw.u32("hoPolicy", (uint32_t)c.hoPolicy);
@@ -3484,34 +3902,7 @@ static String nagHumanProfileStatsToJson() {
     jw.u32("visualRescueCount", state.visualRescueCount);
     jw.fixed("carrierSampleNm", (int32_t)state.lastCarrierMagnitudeRaw, 2u);
     jw.boolean("carrierApplied", state.lastCarrierApplied);
-    jw.string("phase", nagHumanV1PhaseNamePure(state.base.phase));
-    jw.string("motion", nagHumanV1MotionNamePure(state.base.motion));
-    jw.string("eventType", nagHumanV1EventTypeNamePure(state.base.event.type));
-    jw.fixed("activeEventPeakNm", (int32_t)state.base.event.peakRaw, 2u);
-    jw.u32("eventCount", (uint32_t)(state.base.eventCount));
-    jw.fixed("outputNm", (int32_t)outputRaw - 2050, 2u);
-    jw.boolean("carrier", state.base.carrier);
-    jw.boolean("stopCarrierActive", state.base.phase == H1_PAUSED_STOPPED && stopBehavior == H_STOP_STOCK_CARRIER);
-  } else {
-    const NagHumanV1ConfigPure c = nagHumanV1RuntimeConfigSnapshot();
-    const NagHumanV1StatePure state = nagHumanV1RuntimeSnapshot();
-    const uint16_t outputRaw = state.outputRaw != 0u ? state.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW;
-    jw.raw("tuningEditable", "true");
-    jw.fixed("peakMinNm", (int32_t)c.peakMinRaw, 2u);
-    jw.fixed("peakMaxNm", (int32_t)c.peakMaxRaw, 2u);
-    jw.u32("waitMinMs", (uint32_t)(c.waitMinMs));
-    jw.u32("waitMaxMs", (uint32_t)(c.waitMaxMs));
-    jw.u32("refractoryMinMs", (uint32_t)(c.refractoryMinMs));
-    jw.u32("refractoryMaxMs", (uint32_t)(c.refractoryMaxMs));
-    jw.u32("hoOverridePct", (uint32_t)(c.hoOverridePct));
-    jw.string("phase", nagHumanV1PhaseNamePure(state.phase));
-    jw.string("motion", nagHumanV1MotionNamePure(state.motion));
-    jw.string("eventType", nagHumanV1EventTypeNamePure(state.event.type));
-    jw.fixed("activeEventPeakNm", (int32_t)state.event.peakRaw, 2u);
-    jw.u32("eventCount", (uint32_t)(state.eventCount));
-    jw.fixed("outputNm", (int32_t)outputRaw - 2050, 2u);
-    jw.boolean("carrier", state.carrier);
-    jw.boolean("stopCarrierActive", state.phase == H1_PAUSED_STOPPED && stopBehavior == H_STOP_STOCK_CARRIER);
+    writeNagHumanV1StateJson(jw, state.base, outputRaw, stopBehavior);
   }
   jw.finish();
   return j;
@@ -3524,7 +3915,7 @@ static bool httpParseHumanNm(const String &arg, uint16_t &rawOut) {
 }
 
 static void httpNagHumanProfileStats() {
-  if (!activeProfileNagSupported()) {
+  if (!activeProfileNagTorqueSupported()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"NAG unavailable for current topology\"}");
     return;
   }
@@ -3532,15 +3923,11 @@ static void httpNagHumanProfileStats() {
 }
 
 static void httpNagHumanProfileUpdate() {
-  if (!activeProfileNagSupported()) {
+  if (!activeProfileNagTorqueSupported()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"NAG unavailable for current topology\"}");
     return;
   }
-  const uint8_t variant = nagHumanVariantSnapshot();
-  if (variant == H_VARIANT_REV2) {
-    server.send(409, "application/json", "{\"ok\":false,\"error\":\"Rev.2 uses fixed b20 peak/hold parameters\"}");
-    return;
-  }
+
 
   auto parse16=[&](const char* name,uint16_t& dst)->bool{
     if(!server.hasArg(name)) return true;
@@ -3549,31 +3936,7 @@ static void httpNagHumanProfileUpdate() {
     dst=(uint16_t)n; return true;
   };
 
-  if (variant == H_VARIANT_REV3) {
-    NagHumanV3ConfigPure c = nagHumanV3RuntimeConfigSnapshot();
-    uint16_t peakMinRaw=c.base.peakMinRaw, peakMaxRaw=c.base.peakMaxRaw;
-    uint16_t waitMinMs=c.base.waitMinMs, waitMaxMs=c.base.waitMaxMs;
-    uint16_t refMinMs=c.base.refractoryMinMs, refMaxMs=c.base.refractoryMaxMs;
-    uint16_t carrierMinRaw=c.carrierMinRaw, carrierMaxRaw=c.carrierMaxRaw;
-    uint16_t ho1Raw=c.ho1ThresholdRaw, ho2Raw=c.ho2ThresholdRaw;
-    uint8_t direction=c.carrierDirectionMode, hoPolicy=c.hoPolicy;
-
-    if (server.hasArg("peakMinNm") && !httpParseHumanNm(server.arg("peakMinNm"), peakMinRaw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid peakMinNm\"}"); return; }
-    if (server.hasArg("peakMaxNm") && !httpParseHumanNm(server.arg("peakMaxNm"), peakMaxRaw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid peakMaxNm\"}"); return; }
-    if (server.hasArg("carrierMinNm") && !httpParseHumanNm(server.arg("carrierMinNm"), carrierMinRaw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid carrierMinNm\"}"); return; }
-    if (server.hasArg("carrierMaxNm") && !httpParseHumanNm(server.arg("carrierMaxNm"), carrierMaxRaw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid carrierMaxNm\"}"); return; }
-    if (server.hasArg("ho1ThresholdNm") && !httpParseHumanNm(server.arg("ho1ThresholdNm"), ho1Raw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid ho1ThresholdNm\"}"); return; }
-    if (server.hasArg("ho2ThresholdNm") && !httpParseHumanNm(server.arg("ho2ThresholdNm"), ho2Raw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid ho2ThresholdNm\"}"); return; }
-    if (!parse16("waitMinMs",waitMinMs)||!parse16("waitMaxMs",waitMaxMs)||!parse16("refractoryMinMs",refMinMs)||!parse16("refractoryMaxMs",refMaxMs)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid Mode H timing\"}"); return; }
-    if (server.hasArg("carrierDirectionMode")) { int v=server.arg("carrierDirectionMode").toInt(); if(v<0||v>255||!nagHumanV3CarrierDirectionValidPure((uint8_t)v)){server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid carrierDirectionMode\"}");return;} direction=(uint8_t)v; }
-    if (server.hasArg("hoPolicy")) { int v=server.arg("hoPolicy").toInt(); if(v<0||v>255||!nagHumanV3HoPolicyValidPure((uint8_t)v)){server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid hoPolicy\"}");return;} hoPolicy=(uint8_t)v; }
-
-    if (!nagHumanV3RuntimeSetLabTuning(peakMinRaw,peakMaxRaw,waitMinMs,waitMaxMs,refMinMs,refMaxMs,
-                                       carrierMinRaw,carrierMaxRaw,direction,hoPolicy,ho1Raw,ho2Raw)) {
-      server.send(400,"application/json","{\"ok\":false,\"error\":\"Rev.3 ranges invalid: peak 1.00..3.00 Nm, carrier 0.10..0.80 Nm, HO thresholds 0.10..3.00 Nm with HO1 <= HO2\"}");
-      return;
-    }
-  } else if (variant == H_VARIANT_REV4) {
+{
     NagHumanV4ConfigPure c = nagHumanV4RuntimeConfigSnapshot();
     uint16_t peakMinRaw=c.base.peakMinRaw, peakMaxRaw=c.base.peakMaxRaw;
     uint16_t waitMinMs=c.base.waitMinMs, waitMaxMs=c.base.waitMaxMs;
@@ -3598,70 +3961,228 @@ static void httpNagHumanProfileUpdate() {
       server.send(400,"application/json","{\"ok\":false,\"error\":\"Rev.4 ranges invalid: peak 1.00..3.00 Nm, carrier 0.10..0.80 Nm, HO thresholds 0.10..3.00 Nm with HO1 <= HO2, wait 0.3..5.0 s, refractory 0.3..2.5 s, rescue delay 0..2.0 s\"}");
       return;
     }
-  } else {
-    NagHumanV1ConfigPure c = nagHumanV1RuntimeConfigSnapshot();
-    uint16_t peakMinRaw = c.peakMinRaw, peakMaxRaw = c.peakMaxRaw;
-    uint16_t waitMinMs = c.waitMinMs, waitMaxMs = c.waitMaxMs;
-    uint16_t refMinMs = c.refractoryMinMs, refMaxMs = c.refractoryMaxMs;
-    uint8_t hoPct = c.hoOverridePct;
-    if (server.hasArg("peakMinNm") && !httpParseHumanNm(server.arg("peakMinNm"), peakMinRaw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid peakMinNm\"}"); return; }
-    if (server.hasArg("peakMaxNm") && !httpParseHumanNm(server.arg("peakMaxNm"), peakMaxRaw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid peakMaxNm\"}"); return; }
-    if (!parse16("waitMinMs",waitMinMs)||!parse16("waitMaxMs",waitMaxMs)||!parse16("refractoryMinMs",refMinMs)||!parse16("refractoryMaxMs",refMaxMs)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid Mode H timing\"}"); return; }
-    if (server.hasArg("hoOverridePct")) { int v=server.arg("hoOverridePct").toInt(); if(v<0||v>100){server.send(400,"application/json","{\"ok\":false,\"error\":\"hoOverridePct must be 0..100\"}");return;} hoPct=(uint8_t)v; }
-    if (!nagHumanV1RuntimeSetLabTuning(peakMinRaw,peakMaxRaw,waitMinMs,waitMaxMs,refMinMs,refMaxMs,hoPct)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"Mode H ranges: peak 1.00..3.00 Nm, wait 0.3..5.0 s, refractory 0.3..2.5 s\"}"); return; }
   }
   nagCfgSave();
   server.send(200,"application/json",nagHumanProfileStatsToJson());
 }
 
 static void httpNagHumanProfileReset() {
-  if (!activeProfileNagSupported()) {
+  if (!activeProfileNagTorqueSupported()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"NAG unavailable for current topology\"}");
     return;
   }
-  const uint8_t v = nagHumanVariantSnapshot();
-  if (v == H_VARIANT_REV2) {
-    nagHumanRuntimeReset(true);
-  } else if (v == H_VARIANT_REV3) {
-    const NagHumanV3ConfigPure d = nagHumanV3DefaultConfigPure();
-    (void)nagHumanV3RuntimeSetLabTuning(d.base.peakMinRaw,d.base.peakMaxRaw,
-        d.base.waitMinMs,d.base.waitMaxMs,d.base.refractoryMinMs,d.base.refractoryMaxMs,
-        d.carrierMinRaw,d.carrierMaxRaw,d.carrierDirectionMode,d.hoPolicy,
-        d.ho1ThresholdRaw,d.ho2ThresholdRaw);
-  } else if (v == H_VARIANT_REV4) {
+{
     const NagHumanV4ConfigPure d = nagHumanV4DefaultConfigPure();
     (void)nagHumanV4RuntimeSetLabTuning(d.base.peakMinRaw,d.base.peakMaxRaw,
         d.base.waitMinMs,d.base.waitMaxMs,d.base.refractoryMinMs,d.base.refractoryMaxMs,
         d.carrierMinRaw,d.carrierMaxRaw,d.hoPolicy,d.ho1ThresholdRaw,d.ho2ThresholdRaw,
         d.visualRescueEnabled,d.visualRescueDelayMs);
-  } else {
-    const NagHumanV1ConfigPure d = nagHumanV1Rev1ConfigPure();
-    (void)nagHumanV1RuntimeSetLabTuning(d.peakMinRaw,d.peakMaxRaw,d.waitMinMs,d.waitMaxMs,d.refractoryMinMs,d.refractoryMaxMs,d.hoOverridePct);
   }
   nagCfgSave();
   server.send(200, "application/json", nagHumanProfileStatsToJson());
 }
 
+static void httpR79ApControlStats() {
+  server.send(200, "application/json", r79ApControlStatsToJson());
+}
+
+static void httpR79ApControlUpdate() {
+  if (!labMenuEnabled) {
+    server.send(403, "application/json", "{\"error\":\"lab-disabled\"}");
+    return;
+  }
+  if (!server.hasArg("enabled") || !server.hasArg("mode") ||
+      !server.hasArg("delaySeconds") || !server.hasArg("allowManualDriving")) {
+    server.send(400, "application/json", "{\"error\":\"missing-ap-control-setting\"}");
+    return;
+  }
+  const String enabled = server.arg("enabled");
+  const String mode = server.arg("mode");
+  const String delay = server.arg("delaySeconds");
+  const String allowManual = server.arg("allowManualDriving");
+  uint16_t seconds = 0u;
+  if ((enabled != "0" && enabled != "1") ||
+      (mode != "0" && mode != "1") ||
+      (allowManual != "0" && allowManual != "1") ||
+      !r79DelayTextParsePure(delay.c_str(), 10u, seconds) || seconds < 2u) {
+    server.send(400, "application/json", "{\"error\":\"invalid-ap-control-setting\"}");
+    return;
+  }
+  const R79ApGateConfigPure next = {enabled == "1", (uint8_t)(mode == "1"), (uint8_t)seconds, allowManual == "1"};
+  if (!r79ApControlApply(next)) {
+    server.send(503, "application/json", "{\"error\":\"ap-control-save-failed\"}");
+    return;
+  }
+  server.send(200, "application/json", r79ApControlStatsToJson());
+}
+
 static void httpR79Stats() { server.send(200, "application/json", r79StatsToJson()); }
 static void httpR79Update() {
-  if (!server.hasArg("bit18Mode")) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing-bit18Mode\"}");
+  if (server.hasArg("hw3Enabled")) {
+    // One scalar transaction; do not partially commit a mixed settings request.
+    if (server.hasArg("mode") || server.hasArg("bit18Mode") ||
+        server.hasArg("mode1TxWaitMode") || server.hasArg("mode1Reinject") ||
+        server.hasArg("mode1DelayMs") || server.hasArg("mode2Reinject") ||
+        server.hasArg("mode2DelayMs")) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"mixed-hw3-settings\"}");
+      return;
+    }
+    const String raw = server.arg("hw3Enabled");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"hw3Enabled-must-be-0-or-1\"}");
+      return;
+    }
+    if (raw == "1" && !activeProfileR79Hw3Supported()) {
+      server.send(409, "application/json", "{\"ok\":false,\"error\":\"hw3-unsupported-profile\"}");
+      return;
+    }
+    if (!r79Hw3Apply(raw == "1")) {
+      server.send(503, "application/json", "{\"ok\":false,\"error\":\"hw3-save-failed\"}");
+      return;
+    }
+    server.send(200, "application/json", r79StatsToJson());
     return;
   }
-  const String raw = server.arg("bit18Mode");
-  if (raw != "0" && raw != "1") {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"bit18Mode-must-be-0-or-1\"}");
+  const bool hasMode = server.hasArg("mode");
+  const bool hasBit18 = server.hasArg("bit18Mode");
+  const bool hasMode1Wait = server.hasArg("mode1TxWaitMode");
+  const bool hasMode1Reinject = server.hasArg("mode1Reinject");
+  const bool hasMode1Delay = server.hasArg("mode1DelayMs");
+  const bool hasMode2Reinject = server.hasArg("mode2Reinject");
+  const bool hasMode2Delay = server.hasArg("mode2DelayMs");
+  if (!hasMode && !hasBit18 && !hasMode1Wait && !hasMode1Reinject && !hasMode1Delay &&
+      !hasMode2Reinject && !hasMode2Delay) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing-r79-setting\"}");
     return;
   }
-  const uint8_t mode = (uint8_t)raw.toInt();
-  if (mode > R79_BIT18_FORCE_0_PURE) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid-bit18Mode\"}");
-    return;
-  }
+  uint8_t nextMode, nextBit18, nextMode1Wait;
+  bool nextMode1Reinject, nextMode2Reinject;
+  uint16_t nextMode1Delay, nextMode2Delay;
   portENTER_CRITICAL(&r79LabMux);
-  r79Bit18Policy = mode;
+  nextMode = r79TransportMode;
+  nextBit18 = r79Bit18Policy;
+  nextMode1Wait = r79Mode1TxWaitMode;
+  nextMode1Reinject = r79Mode1ReinjectEnabled;
+  nextMode1Delay = r79Mode1DelayMs;
+  nextMode2Reinject = r79Mode2ReinjectEnabled;
+  nextMode2Delay = r79Mode2DelayMs;
   portEXIT_CRITICAL(&r79LabMux);
+  if (hasMode) {
+    const String raw = server.arg("mode");
+    if (raw != "1" && raw != "2") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"mode-must-be-1-or-2\"}");
+      return;
+    }
+    nextMode = (uint8_t)raw.toInt();
+  }
+  if (hasBit18) {
+    const String raw = server.arg("bit18Mode");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"bit18Mode-must-be-0-or-1\"}");
+      return;
+    }
+    nextBit18 = (uint8_t)raw.toInt();
+  }
+  if (hasMode1Wait) {
+    const String raw = server.arg("mode1TxWaitMode");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"mode1TxWaitMode-must-be-0-or-1\"}");
+      return;
+    }
+    nextMode1Wait = (uint8_t)raw.toInt();
+  }
+  if (hasMode1Reinject) {
+    const String raw = server.arg("mode1Reinject");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid-mode1Reinject\"}");
+      return;
+    }
+    nextMode1Reinject = raw == "1" || raw == "true";
+  }
+  if (hasMode1Delay) {
+    const String rawText = server.arg("mode1DelayMs");
+    uint16_t raw = 0u;
+    if (!r79DelayTextParsePure(
+            rawText.c_str(), R79_FIXED_QUIET_HARD_END_MS_PURE, raw)) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"mode1DelayMs-must-be-0-to-340\"}");
+      return;
+    }
+    nextMode1Delay = raw;
+  }
+  if (hasMode2Reinject) {
+    const String raw = server.arg("mode2Reinject");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid-mode2Reinject\"}");
+      return;
+    }
+    nextMode2Reinject = raw == "1" || raw == "true";
+  }
+  if (hasMode2Delay) {
+    const String rawText = server.arg("mode2DelayMs");
+    uint16_t raw = 0u;
+    if (!r79DelayTextParsePure(
+            rawText.c_str(), R79_MODE2_DELAY_MAX_MS_PURE, raw)) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"mode2DelayMs-must-be-0-to-2000\"}");
+      return;
+    }
+    nextMode2Delay = raw;
+  }
+
+  uint8_t currentMode, currentBit18, currentMode1Wait;
+  bool currentMode1Reinject, currentMode2Reinject;
+  uint16_t currentMode1Delay, currentMode2Delay;
+  portENTER_CRITICAL(&r79LabMux);
+  currentMode = r79TransportMode;
+  currentBit18 = r79Bit18Policy;
+  currentMode1Wait = r79Mode1TxWaitMode;
+  currentMode1Reinject = r79Mode1ReinjectEnabled;
+  currentMode1Delay = r79Mode1DelayMs;
+  currentMode2Reinject = r79Mode2ReinjectEnabled;
+  currentMode2Delay = r79Mode2DelayMs;
+  portEXIT_CRITICAL(&r79LabMux);
+  const bool onlyMode1ReinjectChanged =
+      nextMode1Reinject != currentMode1Reinject &&
+      nextMode == currentMode && nextBit18 == currentBit18 &&
+      nextMode1Wait == currentMode1Wait &&
+      nextMode1Delay == currentMode1Delay &&
+      nextMode2Reinject == currentMode2Reinject &&
+      nextMode2Delay == currentMode2Delay;
+  const bool disablingMode1Reinject =
+      currentMode1Reinject && !nextMode1Reinject;
+
+  if (!onlyMode1ReinjectChanged) setCanTxAdministrativeHold(true);
+  portENTER_CRITICAL(&r79LabMux);
+  r79TransportMode = r79ModeSanitizePure(nextMode);
+  r79Bit18Policy = r79Bit18PolicySanitizePure(nextBit18);
+  r79Mode1TxWaitMode = r79Mode1WaitModeSanitizePure(nextMode1Wait);
+  r79Mode1ReinjectEnabled = nextMode1Reinject;
+  r79Mode1DelayMs = r79FixedQuietDelaySanitizePure(nextMode1Delay);
+  r79Mode2ReinjectEnabled = nextMode2Reinject;
+  r79Mode2DelayMs = r79Mode2DelaySanitizePure(nextMode2Delay);
+  r79FixedQuietState = {};
+  if (onlyMode1ReinjectChanged) {
+    if (disablingMode1Reinject &&
+        r79Mode1DisableCancelsRetryPure(
+            r79RetryPending, r79RetryOriginKind == R79LAB_TX_PERIODIC)) {
+      r79RetryPending = false;
+      r79RetryIndex = 0;
+      r79RetryOriginKind = R79LAB_TX_NONE;
+      r79RetryDueMs = 0;
+      r79RetryGeneration = 0u;
+    }
+  } else {
+    r79Mode2DelayedState = {};
+    r79RetryPending = false;
+    r79RetryIndex = 0;
+    r79RetryOriginKind = R79LAB_TX_NONE;
+    r79RetryDueMs = 0;
+    r79RetryGeneration = 0u;
+  }
+  portEXIT_CRITICAL(&r79LabMux);
+  if (disablingMode1Reinject)
+    canTxCancellationGenerationAdvance(&r79Mode1PostMux2Generation);
   r79CfgSave();
+  if (!onlyMode1ReinjectChanged) setCanTxAdministrativeHold(false);
   server.send(200, "application/json", r79StatsToJson());
 }
 static void httpUlcStats() {
@@ -3744,6 +4265,47 @@ static void httpAutoLaneChangeLabStats() {
   server.send(200, "application/json", ulcStatsToJson());
 }
 
+
+static void httpVisionControlStats() {
+  if (!httpRequireLab()) return;
+  server.send(200, "application/json", getVisionControlStatsJson());
+}
+
+static void httpVisionControlUpdate() {
+  if (!httpRequireLab()) return;
+  if (!visionControlSupported()) {
+    server.send(409, "application/json", "{\"error\":\"unsupported-profile\"}"); return;
+  }
+  const bool hasDisabled = server.hasArg("disabled"), hasBus = server.hasArg("bus");
+  if ((!hasDisabled && !hasBus) || server.args() != (int)hasDisabled + (int)hasBus) {
+    server.send(400, "application/json", "{\"error\":\"disabled-or-bus-only\"}"); return;
+  }
+  bool disabled = visionControlRequestDisabled();
+  uint8_t bus = visionControlBusSnapshot();
+  if (hasDisabled) {
+    const String raw = server.arg("disabled");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"error\":\"invalid-disabled\"}"); return;
+    }
+    disabled = raw == "1" || raw == "true";
+  }
+  if (hasBus) {
+    const String raw = server.arg("bus");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"error\":\"invalid-bus\"}"); return;
+    }
+    bus = raw == "1" ? 1u : 0u;
+  }
+  if (!visionControlBusSupported(bus)) {
+    server.send(409, "application/json", "{\"error\":\"unsupported-bus\"}"); return;
+  }
+  if (!visionControlApplySettings(disabled, bus)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  server.send(200, "application/json", getVisionControlStatsJson());
+}
+
+
 static void httpAutoLaneChangeLabUpdate() {
   if (!httpRequireLab()) return;
   const bool hasEnabled = server.hasArg("enabled");
@@ -3776,6 +4338,207 @@ static void httpAutoLaneChangeLabUpdate() {
     server.send(500, "application/json", "{\"ok\":false,\"error\":\"NVS write failed\"}"); return;
   }
   server.send(200, "application/json", ulcStatsToJson());
+}
+
+static String countryOverrideStatsToJson() {
+  const uint32_t now = (uint32_t)millis();
+  uint8_t mode, mapMode, lastBus, lastPage, lastResult;
+  uint16_t lastId;
+  uint32_t rx238, rx7ffA, rx7ffB, blocked, txOk, txFail, lastMs;
+  bool lastValid;
+  uint8_t lastRaw[8];
+  portENTER_CRITICAL(&countryOverrideMux);
+  mode = countryOverrideMode;
+  mapMode = countryOverrideMapMode;
+  rx238 = countryOverrideRx238;
+  rx7ffA = countryOverrideRx7ffA;
+  rx7ffB = countryOverrideRx7ffB;
+  blocked = countryOverrideBlocked;
+  txOk = countryOverrideTxOk;
+  txFail = countryOverrideTxFail;
+  lastValid = countryOverrideLastValid;
+  lastResult = countryOverrideLastResult;
+  lastBus = countryOverrideLastBus;
+  lastPage = countryOverrideLastPage;
+  lastId = countryOverrideLastId;
+  lastMs = countryOverrideLastMs;
+  memcpy(lastRaw, countryOverrideLastRaw, sizeof(lastRaw));
+  portEXIT_CRITICAL(&countryOverrideMux);
+
+  bool r79StockValid;
+  uint32_t r79StockMs, r79StockRx;
+  uint8_t r79StockRaw[8];
+  portENTER_CRITICAL(&r79LabMux);
+  r79StockValid = r79LabStockValid;
+  r79StockMs = r79LabLastStockMs;
+  r79StockRx = r79Lab3fdRx;
+  memcpy(r79StockRaw, r79LabLastStockRaw, sizeof(r79StockRaw));
+  portEXIT_CRITICAL(&r79LabMux);
+
+  String s;
+  s.reserve(820);
+  JsonWriterArduino jw(s);
+  jw.boolean("countrySupported",
+      vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology));
+  jw.i32("countryMode", (int32_t)mode);
+  jw.string("countryModeName", mode == COUNTRY_OVERRIDE_US_PURE ? "US" :
+      mode == COUNTRY_OVERRIDE_KR_PURE ? "KOREA" :
+      mode == COUNTRY_OVERRIDE_NZ_PURE ? "NEW ZEALAND" : "STOCK");
+  const bool gate = countryOverrideGateOpen();
+  jw.i32("mode", (int32_t)mode);
+  jw.string("modeName", mode == 1u ? "US" : mode == 2u ? "KOREA" : mode == 3u ? "NEW ZEALAND" : "STOCK");
+  jw.i32("mapMode", (int32_t)mapMode);
+  jw.string("mapModeName", mapMode == 1u ? "US" : mapMode == 2u ? "KOREA" : "STOCK");
+  jw.boolean("gateAllowed", gate);
+  jw.boolean("countryActive", gate && mode != 0u);
+  jw.boolean("mapActive", gate && mapMode != 0u);
+  jw.string("countryCanAName", activeProfileCanAName());
+  jw.string("countryCanBName", activeProfileCanBName());
+  jw.boolean("countryGateOpen", countryOverrideGateOpen());
+  jw.u32("countryRx238", rx238);
+  jw.u32("countryRx7ffA", rx7ffA);
+  jw.u32("countryRx7ffB", rx7ffB);
+  jw.u32("countryBlocked", blocked);
+  jw.u32("countryTxOk", txOk);
+  jw.u32("countryTxFail", txFail);
+  jw.boolean("countryLastValid", lastValid);
+  jw.string("countryLastResult", lastResult == 1u ? "QUEUED" : lastResult == 2u ? "FAILED" : "NONE");
+  jw.i32("countryLastBus", (int32_t)lastBus);
+  jw.i32("countryLastId", (int32_t)lastId);
+  jw.i32("countryLastPage", lastValid && lastPage != 0xFFu ? (int32_t)lastPage : -1);
+  jw.u32("countryLastAgeMs", !lastValid || lastMs == 0 ? 999999UL : (uint32_t)(now - lastMs));
+  jw.string("countryLastRaw", lastValid ? lab3f8RawHex(lastRaw, 8) : String());
+  jw.boolean("r79StockValid", r79StockValid);
+  jw.u32("r79StockBit19", r79StockValid ? ((r79StockRaw[2] >> 3) & 0x01u) : 0u);
+  jw.u32("r79StockBit47", r79StockValid ? ((r79StockRaw[5] >> 7) & 0x01u) : 0u);
+  jw.u32("r79StockAgeMs", !r79StockValid || r79StockMs == 0
+      ? 999999UL : (uint32_t)(now - r79StockMs));
+  jw.u32("r79StockRx", r79StockRx);
+  jw.string("r79StockRaw", r79StockValid ? lab3f8RawHex(r79StockRaw, 8) : String());
+  jw.finish();
+  return s;
+}
+
+static void httpCountryOverrideStats() {
+  server.send(200, "application/json", countryOverrideStatsToJson());
+}
+
+static void httpCountryOverrideUpdate() {
+  if (!vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology)) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"Invalid vehicle topology\"}"); return;
+  }
+  const bool hasCountry = server.hasArg("countryMode"), hasLegacy = server.hasArg("mode");
+  const bool hasMap = server.hasArg("mapMode");
+  if ((!hasCountry && !hasLegacy && !hasMap) || (hasCountry && hasLegacy)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"countryMode or mapMode required\"}"); return;
+  }
+  uint8_t country = countryOverrideModeSnapshot(), map = countryOverrideMapModeSnapshot();
+  if (hasCountry || hasLegacy) {
+    const String arg = server.arg(hasCountry ? "countryMode" : "mode");
+    if (arg != "0" && arg != "1" && arg != "2" && arg != "3") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid countryMode\"}"); return;
+    }
+    country = (uint8_t)arg.toInt();
+  }
+  if (hasMap) {
+    const String arg = server.arg("mapMode");
+    if (arg != "0" && arg != "1" && arg != "2") {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid mapMode\"}"); return;
+    }
+    map = (uint8_t)arg.toInt();
+  }
+  if (!countryOverrideApplySelection(country, map)) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"settings save failed\"}"); return;
+  }
+  server.send(200, "application/json", countryOverrideStatsToJson());
+}
+
+static String laneGraphStatsToJson() {
+  const uint32_t now = (uint32_t)millis(), epoch = canTxEpochSnapshot();
+  uint8_t mode, bus, lastBit; bool lastValid; uint32_t ok, fail;
+  LaneGraphStockPure stock = {};
+  portENTER_CRITICAL(&r79LabMux);
+  mode = laneGraphMode; bus = laneGraphBus;
+  if (laneGraphBusValidPure(bus)) stock = laneGraphStock[bus];
+  lastBit = laneGraphLastTxBit45; lastValid = laneGraphLastTxValid;
+  ok = laneGraphTxOk; fail = laneGraphTxFail;
+  portEXIT_CRITICAL(&r79LabMux);
+  portENTER_CRITICAL(&stateMux);
+  const bool ap = dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4);
+  const bool fresh = dasAutopilotStateValid && (uint32_t)(now - lastDASStatusMillis) <= LANE_GRAPH_AP_FRESH_MS_PURE;
+  portEXIT_CRITICAL(&stateMux);
+  const bool supported = vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology);
+  const bool busSupported = laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus);
+  const bool stockCurrent = stock.valid && stock.epoch == epoch &&
+      stock.profile == activeVehicleProfile && stock.topology == activeVehicleTopology;
+  const bool stockValid = busSupported && laneGraphStockFreshPure(stock, now, epoch, activeVehicleProfile, activeVehicleTopology);
+  const uint8_t stockBit = stockCurrent ? ((stock.raw[5] >> 5) & 1u) : 0u;
+  const bool transportReady = !canTxAdministrativeHold &&
+      (bus == LANE_GRAPH_BODY_PURE ? mcpReady : twaiReady) &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch,
+          bus == LANE_GRAPH_BODY_PURE ? CAN_TX_FRESH_PARTY : CAN_TX_FRESH_VH);
+  const bool active = laneGraphActive() && stockValid && transportReady;
+  const char *state = !busSupported ? "UNSUPPORTED" : mode == 0u || !labMenuEnabled ? "OFF" :
+      !transportReady ? "TRANSPORT_BLOCKED" : !stockCurrent ? "WAITING" :
+      !stockValid ? "STOCK_STALE" : !active ? "AP_INACTIVE" : "ACTIVE";
+  String out; out.reserve(600); JsonWriterArduino jw(out);
+  jw.u32("mode", mode);
+  jw.string("modeName", mode == 1u ? "AP_ACTIVE" : mode == 2u ? "ALWAYS" : "OFF");
+  jw.u32("bus", bus); jw.string("busName", bus == 1u ? "BODY" : "CHASSIS");
+  jw.boolean("busSelectorVisible", activeVehicleProfile != VEHICLE_MODEL_YL);
+  jw.boolean("bodySupported", laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, LANE_GRAPH_BODY_PURE));
+  jw.boolean("busSupported", busSupported);
+  jw.string("selectedBusName", bus == LANE_GRAPH_BODY_PURE ? "BODY" : activeVehicleProfile == VEHICLE_MODEL_YL ? "VH" : "CHASSIS");
+  jw.u32("selectedBusRx", stock.rx);
+  jw.u32("stockAgeMs", stockCurrent ? (uint32_t)(now - stock.lastMs) : 999999u);
+  jw.string("state", state);
+  jw.boolean("supported", supported); jw.boolean("labEnabled", labMenuEnabled);
+  jw.boolean("apActive", ap); jw.boolean("apFresh", fresh); jw.boolean("active", active);
+  jw.boolean("stockValid", stockValid); jw.u32("stockBit45", stockBit);
+  jw.boolean("effectiveBit45Valid", stockValid); jw.u32("effectiveBit45", active ? 1u : stockBit);
+  jw.boolean("lastTxValid", lastValid); jw.u32("lastTxBit45", lastBit);
+  jw.u32("txOk", ok); jw.u32("txFail", fail); jw.finish(); return out;
+}
+
+static void httpLaneGraphStats() {
+  if (!httpRequireLab()) return;
+  server.send(200, "application/json", laneGraphStatsToJson());
+}
+
+static void httpLaneGraphUpdate() {
+  if (!httpRequireLab()) return;
+  if (!vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology)) {
+    server.send(409, "application/json", "{\"error\":\"unsupported-profile\"}"); return;
+  }
+  const bool hasMode = server.hasArg("mode"), hasBus = server.hasArg("bus");
+  if (!hasMode && !hasBus) {
+    server.send(400, "application/json", "{\"error\":\"mode-or-bus-required\"}"); return;
+  }
+  uint8_t mode, bus;
+  portENTER_CRITICAL(&r79LabMux);
+  mode = laneGraphMode; bus = laneGraphBus;
+  portEXIT_CRITICAL(&r79LabMux);
+  if (hasMode) {
+    const String raw = server.arg("mode");
+    if (raw != "0" && raw != "1" && raw != "2") {
+      server.send(400, "application/json", "{\"error\":\"invalid-mode\"}"); return;
+    }
+    mode = (uint8_t)raw.toInt();
+  }
+  if (hasBus) {
+    const String raw = server.arg("bus");
+    if (raw != "0" && raw != "1") {
+      server.send(400, "application/json", "{\"error\":\"invalid-bus\"}"); return;
+    }
+    bus = (uint8_t)raw.toInt();
+  }
+  if (!laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus)) {
+    server.send(409, "application/json", "{\"error\":\"unsupported-bus\"}"); return;
+  }
+  if (!laneGraphApplySelection(mode, bus)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  server.send(200, "application/json", laneGraphStatsToJson());
 }
 
 static void httpUlcMonitorLabStats() {
@@ -3864,82 +4627,26 @@ static void httpBlinkATiming() {
   server.send(200, "application/json", blinkAStatsToJson());
 }
 
-static const char *blinkerTxModeName(uint8_t mode) {
-  return mode == BLINKER_TX_MODE_LEGACY_PURE
-      ? "LEGACY 350ms BURST" : "SINGLE TX";
-}
-
-static const char *blinkerTxSourceName(uint8_t source) {
-  if (source == BLINKER_TX_SOURCE_AUTO_PURE) return "AUTO_BLINKER";
-  if (source == BLINKER_TX_SOURCE_S3XY_PURE) return "S3XY_BUTTON";
-  return "NONE";
-}
-
-static const char *blinkerTxResultName(uint8_t result) {
-  switch (result) {
-    case 1: return "PENDING";
-    case 2: return "TX_OK";
-    case 3: return "TX_FAIL";
-    case 4: return "BLOCKED";
-    default: return "NONE";
-  }
-}
-
-static String blinkerTxLabStatsToJson() {
-  uint8_t requestedMode, activeSource, lastDir, lastSource, lastResult;
-  uint32_t requests, txOk, txFail, blocked;
-  portENTER_CRITICAL(&blinkAMux);
-  requestedMode = blinkerTxMode;
-  activeSource = oneShotSource != BLINKER_TX_SOURCE_NONE_PURE
-      ? oneShotSource : blinkerTxRequestState.pendingSource;
-  lastDir = blinkerTxLastDir;
-  lastSource = blinkerTxLastSource;
-  lastResult = blinkerTxLastResult;
-  requests = blinkerTxRequestCount;
-  txOk = blkATxOk;
-  txFail = blkATxFail;
-  blocked = blinkerTxBlockedCount;
-  portEXIT_CRITICAL(&blinkAMux);
-
-  const uint8_t effectiveMode =
-      blinkerTxEffectiveModePure(requestedMode, labMenuEnabled);
-  String json;
-  json.reserve(360);
-  JsonWriterArduino jw(json);
-  jw.boolean("ok", true);
-  jw.boolean("labEnabled", labMenuEnabled);
-  jw.u32("mode", effectiveMode);
-  jw.string("modeName", blinkerTxModeName(effectiveMode));
-  jw.string("activeSource", blinkerTxSourceName(activeSource));
-  jw.u32("lastDirection", lastDir);
-  jw.string("lastSource", blinkerTxSourceName(lastSource));
-  jw.string("lastResult", blinkerTxResultName(lastResult));
-  jw.u32("requests", requests);
-  jw.u32("txOk", txOk);
-  jw.u32("txFail", txFail);
-  jw.u32("blocked", blocked);
-  jw.finish();
-  return json;
-}
-
-static void httpBlinkerTxLabStats() {
-  if (!httpRequireLab()) return;
-  server.send(200, "application/json", blinkerTxLabStatsToJson());
-}
-
-static void httpBlinkerTxLabUpdate() {
-  if (!httpRequireLab()) return;
+static void httpBlinkATxMode() {
   if (!server.hasArg("mode")) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing mode\"}");
     return;
   }
   const String modeArg = server.arg("mode");
-  if ((modeArg != "0" && modeArg != "1") ||
-      !blinkerTxSetMode((uint8_t)modeArg.toInt())) {
+  if (modeArg != "0" && modeArg != "1") {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid mode\"}");
     return;
   }
-  server.send(200, "application/json", blinkerTxLabStatsToJson());
+  const uint8_t requested = (uint8_t)modeArg.toInt();
+  if (!blinkerTxModePersist(requested)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"NVS write failed\"}");
+    return;
+  }
+  if (!blinkerTxSetMode(requested)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"runtime mode update failed\"}");
+    return;
+  }
+  server.send(200, "application/json", blinkAStatsToJson());
 }
 
 
@@ -3952,12 +4659,17 @@ static String homeFastSnapshotToJson() {
 
   bool apActive, noaRaw, dasValid;
   uint8_t dasState4;
+  ApDisplayHoldPure apDisplayHoldLocal;
   portENTER_CRITICAL(&stateMux);
   apActive = gateAPActive;
   noaRaw = gateNOAActive;
   dasValid = dasAutopilotStateValid;
   dasState4 = dasAutopilotState4;
+  apDisplayHoldLocal = apDisplayHold;
   portEXIT_CRITICAL(&stateMux);
+  const bool canReinitializing = canSubsystemBusy;
+  const ApDisplayValuePure apDisplay = apDisplayResolvePure(
+      apDisplayHoldLocal, dasValid, dasState4, canReinitializing, now);
 
   NagContext nagHomeCtx;
   portENTER_CRITICAL(&nagCtxMux); nagHomeCtx = nagCtx; portEXIT_CRITICAL(&nagCtxMux);
@@ -3974,10 +4686,7 @@ static String homeFastSnapshotToJson() {
   const bool nagSpeedFresh = nagHomeCtx.vehicleSpeedValid && nagHomeCtx.lastVehicleSpeedMs != 0 && nagSpeedAge <= NAG_SPEED_FRESH_MS;
   bool nagHumanPaused = false;
   if (nagModeHome == MODE_H) {
-    const uint8_t hv = nagHumanVariantSnapshot();
-    if (hv == H_VARIANT_REV2) nagHumanPaused = nagHumanV2RuntimeSnapshot().phase == H_PAUSED_STOPPED;
-    else if (hv == H_VARIANT_REV3) nagHumanPaused = nagHumanV3RuntimeSnapshot().base.phase == H1_PAUSED_STOPPED;
-    else nagHumanPaused = nagHumanV1RuntimeSnapshot().phase == H1_PAUSED_STOPPED;
+    nagHumanPaused = nagHumanV4RuntimeSnapshot().base.phase == H1_PAUSED_STOPPED;
   }
   const bool nagStoppedGate = nagPauseAtZeroBlocksPure(nagPauseZero, nagHomeCtx.vehicleSpeedValid, nagSpeedFresh, nagHomeCtx.vehicleSpeedRaw) || nagHumanPaused;
   const bool nagStopCarrierActive = nagModeHome == MODE_H && nagHumanPaused && nagStopBehaviorHome == H_STOP_STOCK_CARRIER;
@@ -4012,10 +4721,11 @@ static String homeFastSnapshotToJson() {
   twai_status_info_t twaiHome = {};
   const bool twaiHomeOk = twai_get_status_info(&twaiHome) == ESP_OK;
 
-  String j; j.reserve(720);
+  String j; j.reserve(820);
   JsonWriterArduino jw(j);
   jw.beginObject("nag");
   jw.fixed("torque", (int32_t)nagRealTorqueCenti, 2u);
+  jw.u32("handsOnState", nagHomeCtx.handsOnState);
   jw.boolean("stoppedGate", nagStoppedGate);
   jw.boolean("stopCarrierActive", nagStopCarrierActive);
   jw.boolean("apActive", dasValid && apActive);
@@ -4032,6 +4742,9 @@ static String homeFastSnapshotToJson() {
   jw.boolean("cancelPaused", blinkCancelPaused);
   jw.boolean("dasStateValid", dasValid);
   jw.u32("dasState", dasState4);
+  jw.boolean("displayStateValid", apDisplay.valid);
+  jw.u32("displayState", apDisplay.state);
+  jw.boolean("canReinitializing", canReinitializing);
   jw.endObject();
   jw.beginObject("summon");
   jw.i32("canState", twaiHomeOk ? (int32_t)twaiHome.state : -1);
@@ -4047,6 +4760,8 @@ static String homeFastSnapshotToJson() {
   jw.endObject();
   jw.beginObject("r79");
   jw.string("txState", r79RuntimeStateName(r79RuntimeLocal.state));
+  jw.u32("apWaitRemainingMs", r79RuntimeLocal.apGate.remainingMs);
+  jw.string("apGateReason", r79ApGateReasonName(r79RuntimeLocal.apGate.reason));
   jw.string("txReason", r79TxReasonLocal);
   jw.string("gearName", r79RuntimeLocal.gearValid ? r79GearName(r79RuntimeLocal.gearRaw) : "UNKNOWN");
   jw.u32("dasState", r79RuntimeLocal.dasState4);
@@ -4103,48 +4818,6 @@ static String homeSlowSnapshotToJson() {
   jw.endObject();
   jw.beginObject("lab3f8");
   jw.u32("alcMode", alcModeLocal);
-  jw.endObject();
-  jw.finish();
-  return j;
-}
-
-static String homeLiveSnapshotToJson() {
-  const uint32_t now = (uint32_t)millis();
-  uint32_t nagTxOkLocal, nagTxFailLocal, nagLastTxLocal, nagMaxGapLocal;
-  portENTER_CRITICAL(&nagDiagMux);
-  nagTxOkLocal = nagTxOk; nagTxFailLocal = nagTxFail;
-  nagLastTxLocal = nagLastTxOkMs; nagMaxGapLocal = nagMaxTxGapMs;
-  portEXIT_CRITICAL(&nagDiagMux);
-
-  uint32_t blinkRx249Local;
-  portENTER_CRITICAL(&blinkAMux); blinkRx249Local = rx249; portEXIT_CRITICAL(&blinkAMux);
-  uint32_t sumTxOkLocal, sumTxFailLocal;
-  portENTER_CRITICAL(&stateMux); sumTxOkLocal = sumTxOk; sumTxFailLocal = sumTxFail; portEXIT_CRITICAL(&stateMux);
-  uint32_t ulcTxOkLocal, ulcTxFailLocal;
-  portENTER_CRITICAL(&ulcSnoozeMux); ulcTxOkLocal = ulcSnoozeTxOk; ulcTxFailLocal = ulcSnoozeTxFail; portEXIT_CRITICAL(&ulcSnoozeMux);
-
-  String j; j.reserve(430);
-  JsonWriterArduino jw(j);
-  jw.beginObject("nag");
-  jw.u32("ho", nagRealHo);
-  jw.fixed("injNm", (int32_t)nagLastInjectedCenti, 2u);
-  jw.u32("injHo", nagLastInjectedHo);
-  jw.u32("rx", nagRxFrames);
-  jw.u32("txOk", nagTxOkLocal);
-  jw.u32("txFail", nagTxFailLocal);
-  jw.u32("lastTxAgeMs", nagLastTxLocal ? now - nagLastTxLocal : 999999UL);
-  jw.u32("maxTxGapMs", nagMaxGapLocal);
-  jw.endObject();
-  jw.beginObject("blink");
-  jw.u32("rx249", blinkRx249Local);
-  jw.endObject();
-  jw.beginObject("summon");
-  jw.u32("txOk", sumTxOkLocal);
-  jw.u32("txFail", sumTxFailLocal);
-  jw.endObject();
-  jw.beginObject("s3xy");
-  jw.u32("ulcTxOk", ulcTxOkLocal);
-  jw.u32("ulcTxFail", ulcTxFailLocal);
   jw.endObject();
   jw.finish();
   return j;
@@ -4217,8 +4890,10 @@ static String labLiteSnapshotToJson() {
   const char *r79TxReason = r79RuntimeReasonNameForUi(r79Runtime);
   bool dmsNagEnabled, dmsStockValid, dmsTxValid;
   uint8_t dmsStockBit43, dmsTxBit43;
+  portENTER_CRITICAL(&nagCfgMux);
+  dmsNagEnabled = nagCfg.dmsControlEnabled;
+  portEXIT_CRITICAL(&nagCfgMux);
   portENTER_CRITICAL(&r79LabMux);
-  dmsNagEnabled = r79DmsNagBit43Enabled;
   dmsStockValid = r79LabStockValid;
   dmsTxValid = r79LabLastTxValid;
   dmsStockBit43 = r79LabStockCabinCamera;
@@ -4244,6 +4919,8 @@ static String labLiteSnapshotToJson() {
   JsonWriterArduino jw(j);
   jw.beginObject("r79");
   jw.string("txState", r79RuntimeStateName(r79Runtime.state));
+  jw.u32("apWaitRemainingMs", r79Runtime.apGate.remainingMs);
+  jw.string("apGateReason", r79ApGateReasonName(r79Runtime.apGate.reason));
   jw.string("txReason", r79TxReason);
   jw.boolean("txEnabled", r79Runtime.state == R79_TX_STATE_ACTIVE);
   jw.boolean("manualSuppressed", r79Runtime.decision.manualSuppressed);
@@ -4256,11 +4933,14 @@ static String labLiteSnapshotToJson() {
   jw.beginObject("dmsNag");
   jw.boolean("supported", activeProfileDmsNagSupported());
   jw.boolean("enabled", dmsNagEnabled);
-  jw.boolean("active", labMenuEnabled && activeProfileDmsNagSupported() && dmsNagEnabled);
+  jw.boolean("active", r79DmsNagActive());
   jw.boolean("stockValid", dmsStockValid);
   jw.u32("stockBit43", dmsStockBit43);
   jw.boolean("txValid", dmsTxValid);
   jw.u32("txBit43", dmsTxBit43);
+  jw.endObject();
+  jw.beginObject("canARx");
+  writeCanARxLabJson(jw);
   jw.endObject();
   jw.beginObject("alc");
   jw.boolean("alcValid", alcValid);
@@ -4325,10 +5005,7 @@ static String homeSnapshotToJson() {
   const bool nagSpeedFresh = nagHomeCtx.vehicleSpeedValid && nagHomeCtx.lastVehicleSpeedMs != 0 && nagSpeedAge <= NAG_SPEED_FRESH_MS;
   bool nagHumanPaused = false;
   if (nagModeHome == MODE_H) {
-    const uint8_t hv = nagHumanVariantSnapshot();
-    if (hv == H_VARIANT_REV2) nagHumanPaused = nagHumanV2RuntimeSnapshot().phase == H_PAUSED_STOPPED;
-    else if (hv == H_VARIANT_REV3) nagHumanPaused = nagHumanV3RuntimeSnapshot().base.phase == H1_PAUSED_STOPPED;
-    else nagHumanPaused = nagHumanV1RuntimeSnapshot().phase == H1_PAUSED_STOPPED;
+    nagHumanPaused = nagHumanV4RuntimeSnapshot().base.phase == H1_PAUSED_STOPPED;
   }
   const bool nagStoppedGate = nagPauseAtZeroBlocksPure(nagPauseZero, nagHomeCtx.vehicleSpeedValid, nagSpeedFresh, nagHomeCtx.vehicleSpeedRaw) || nagHumanPaused;
   const bool nagStopCarrierActive = nagModeHome == MODE_H && nagHumanPaused && nagStopBehaviorHome == H_STOP_STOCK_CARRIER;
@@ -4461,6 +5138,8 @@ static String homeSnapshotToJson() {
   jw.beginObject("r79");
   jw.u32("smartMode", r79Smart);
   jw.string("txState", r79RuntimeStateName(r79RuntimeLocal.state));
+  jw.u32("apWaitRemainingMs", r79RuntimeLocal.apGate.remainingMs);
+  jw.string("apGateReason", r79ApGateReasonName(r79RuntimeLocal.apGate.reason));
   jw.string("txReason", r79TxReasonLocal);
   jw.boolean("txEnabled", r79RuntimeLocal.state == R79_TX_STATE_ACTIVE);
   jw.boolean("manualSuppressed", r79RuntimeLocal.decision.manualSuppressed);
@@ -4535,14 +5214,12 @@ static void httpSnapshot() {
   groups = server.hasArg("groups") ? server.arg("groups") : "home";
   if (groups == "home-fast") {
     const bool includeSlow = server.hasArg("slow") && server.arg("slow") == "1";
-    const bool includeLive = server.hasArg("live") && server.arg("live") == "1";
     server.sendHeader("Cache-Control", "no-store");
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "application/json", "");
     server.sendContent("{\"fast\":");
     server.sendContent(homeFastSnapshotToJson());
     if (includeSlow) { server.sendContent(",\"slow\":"); server.sendContent(homeSlowSnapshotToJson()); }
-    if (includeLive) { server.sendContent(",\"live\":"); server.sendContent(homeLiveSnapshotToJson()); }
     server.sendContent("}");
     server.sendContent("");
     return;
@@ -4615,14 +5292,8 @@ static bool resetRuntimeStats() {
   portEXIT_CRITICAL(&stateMux);
 
   portENTER_CRITICAL(&r79LabMux);
-  r79LabNoTemplateSkip = 0;
-  r79LabManualSuspendSkip = 0;
-  r79LabCanOfflineSkip = 0;
-  r79LabAdminHoldSkip = 0;
   r79LabTxOk = 0;
   r79LabTxFail = 0;
-  r79LabImmediateTxOk = 0;
-  r79LabImmediateTxFail = 0;
   r79LabPeriodicTxOk = 0;
   r79LabPeriodicTxFail = 0;
   r79RetryScheduled = 0;
@@ -4633,50 +5304,19 @@ static bool resetRuntimeStats() {
   r79EmergencyQueueFlushCount = 0;
   r79FlushTriggeredRetryOk = 0;
   r79FlushTriggeredRetryFail = 0;
-  r79LabAppliedFrames = 0;
   r79LabBit43Rx0 = 0;
   r79LabBit43Rx1 = 0;
   r79LabBit43Changes = 0;
+  r79DmsOnlyTxOk = 0;
+  r79DmsOnlyTxFail = 0;
+  r79DmsOnlyBlockedByR79 = 0;
   r79QuietArmCount = 0;
-  r79QuietCancelCount = 0;
-  r79QuietDueCount = 0;
   r79QuietFireCount = 0;
   r79QuietGuardSkip = 0;
-  r79QuietDisallowedSkip = 0;
-  r79PeriodicRetryCancelledByStock = 0;
-  r79PeriodicSlotDue = 0;
-  r79PeriodicSlotFire = 0;
-  r79PeriodicSlotGuard = 0;
   r79FixedQuietState = {};
   r79FastEchoAttempts = 0;
   r79FastEchoTxOk = 0;
   r79FastEchoTxFail = 0;
-  r79FastEchoBlocked = 0;
-  r79FastEchoLatencyLastUs = 0;
-  r79FastEchoLatencyMinUs = 0;
-  r79FastEchoLatencyMaxUs = 0;
-  r79FastEchoLatencyTotalUs = 0;
-  r79FastEchoLatencySamples = 0;
-  r79FastEchoLt100Us = 0;
-  r79FastEchoLt250Us = 0;
-  r79FastEchoLt1000Us = 0;
-  r79FastEchoGe1000Us = 0;
-  r79FastSuccessPending = false;
-  r79FastSuccessAcceptedSerial = 0;
-  r79FastSuccessRxDequeueUs = 0;
-  r79FastSuccessRequestUs = 0;
-  r79FastSuccessSamples = 0;
-  r79FastSuccessAmbiguous = 0;
-  r79FastSuccessLastRxUs = 0;
-  r79FastSuccessMinRxUs = 0;
-  r79FastSuccessMaxRxUs = 0;
-  r79FastSuccessTotalRxUs = 0;
-  r79FastSuccessLastReqUs = 0;
-  r79FastSuccessMinReqUs = 0;
-  r79FastSuccessMaxReqUs = 0;
-  r79FastSuccessTotalReqUs = 0;
-  r79LabLastBlockReason = R79LAB_BLOCK_NONE;
-  r79LabLastBlockMs = 0;
   portEXIT_CRITICAL(&r79LabMux);
 
   portENTER_CRITICAL(&blinkAMux);
@@ -4690,7 +5330,18 @@ static bool resetRuntimeStats() {
   blinkerTxLastResult = 0;
   autoRetryCount = 0;
   portEXIT_CRITICAL(&blinkAMux);
-  apRightScrollRuntimeReset(true);
+  portENTER_CRITICAL(&driverWindowLabMux);
+  driverWindowLabRequests = 0;
+  driverWindowLabCompleted = 0;
+  driverWindowLabTxOk = 0;
+  driverWindowLabTxFail = 0;
+  driverWindowLabBlocked = 0;
+  driverWindowLabLastTxValid = false;
+  driverWindowLabLastTxMs = 0;
+  driverWindowLabLastResult = DRIVER_WINDOW_RESULT_IDLE;
+  memset(driverWindowLabLastTxRaw, 0, sizeof(driverWindowLabLastTxRaw));
+  portEXIT_CRITICAL(&driverWindowLabMux);
+  tsl9InputResetCounters();
   visualDebugRxCount = 0;
 
   portENTER_CRITICAL(&lab3f8Mux);
@@ -4721,6 +5372,16 @@ static bool resetRuntimeStats() {
   uiAutoLaneChangeLastTxMs = 0;
   portEXIT_CRITICAL(&autoLc293Mux);
 
+  portENTER_CRITICAL(&countryOverrideMux);
+  countryOverrideRx238 = 0;
+  countryOverrideRx7ffA = countryOverrideRx7ffB = 0;
+  countryOverrideBlocked = 0;
+  countryOverrideTxOk = countryOverrideTxFail = 0;
+  countryOverrideLastValid = false;
+  countryOverrideLastResult = 0;
+  countryOverrideLastMs = 0;
+  portEXIT_CRITICAL(&countryOverrideMux);
+
 
   portENTER_CRITICAL(&roadContextMux);
   tlsscHighwayGateBlockedCount = 0;
@@ -4749,6 +5410,8 @@ static bool resetRuntimeStats() {
   canTaskHeartbeatTimeoutCountA = 0;
   canTaskHeartbeatTimeoutCountB = 0;
   canTaskHeartbeatTimeoutCountBoth = 0;
+  canTaskHeartbeatLastSnapshotA = {};
+  canTaskHeartbeatLastSnapshotB = {};
   canTwaiBusOffCount = 0;
   canTwaiStoppedCount = 0;
   canTwaiLocalRecoveryStartCount = 0;
@@ -4761,6 +5424,9 @@ static bool resetRuntimeStats() {
   canBMaxRxGapMs = 0;
   canTwaiLastBusOffSnapshot = {};
   portEXIT_CRITICAL(&canRecoveryMux);
+  canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
+  canTaskDiagnosticsResetPure(canTaskTwaiDiagnostics);
+  canARxDiagnosticsResetPure(canARxDiagnostics);
   canATraceReset();
   canBTraceReset();
 
@@ -4799,9 +5465,13 @@ static void webTask(void *arg) {
 #endif
 
   server.on("/", HTTP_GET, httpRoot);
+  server.on("/apple-touch-icon.png", HTTP_GET, httpAppleTouchIcon);
+  server.on("/fonts/geist-lab.woff2", HTTP_GET, httpLabGeistFont);
+  server.on("/fonts/geist-mono-lab.woff2", HTTP_GET, httpLabGeistMonoFont);
   server.on("/api/profile/status", HTTP_GET, httpProfileStatus);
   server.on("/api/profile/select", HTTP_POST, httpProfileSelect);
   server.on("/api/system/factory-reset", HTTP_POST, httpFactoryReset);
+  server.on("/api/system/reset-nvs-keep-ble", HTTP_POST, httpResetNvsPreserveS3xyBle);
   server.on("/api/system/reboot", HTTP_POST, httpRebootT2Can);
   server.on("/api/wifi/status", HTTP_GET, httpWifiStatus);
   server.on("/api/wifi/apply", HTTP_POST, httpWifiApply);
@@ -4827,14 +5497,13 @@ static void webTask(void *arg) {
     server.on("/api/blinkA/disable", HTTP_POST, httpBlinkADisable);
     server.on("/api/blinkA/delay", HTTP_POST, httpBlinkADelay);
     server.on("/api/blinkA/timing", HTTP_POST, httpBlinkATiming);
-    server.on("/api/lab/blinker-tx/stats", HTTP_GET, httpBlinkerTxLabStats);
-    server.on("/api/lab/blinker-tx/update", HTTP_POST, httpBlinkerTxLabUpdate);
-    server.on("/api/lab/dms-nag/stats", HTTP_GET, httpDmsNagLabStats);
-    server.on("/api/lab/dms-nag/update", HTTP_POST, httpDmsNagLabUpdate);
+    server.on("/api/blinkA/tx-mode", HTTP_POST, httpBlinkATxMode);
+    server.on("/api/lab/can-a-rx/stats", HTTP_GET, httpCanARxLabStats);
+    server.on("/api/lab/can-a-rx/update", HTTP_POST, httpCanARxLabUpdate);
+    server.on("/api/lab/driver-window/stats", HTTP_GET, httpDriverWindowLabStats);
+    server.on("/api/lab/driver-window/open", HTTP_POST, httpDriverWindowLabOpen);
     server.on("/api/features/status", HTTP_GET, httpFeatureStatus);
     server.on("/api/features/lab", HTTP_POST, httpFeatureLab);
-    server.on("/api/ap-right-scroll/stats", HTTP_GET, httpApRightScrollStats);
-    server.on("/api/ap-right-scroll/update", HTTP_POST, httpApRightScrollUpdate);
     server.on("/api/features/door-cancel", HTTP_POST, httpFeatureDoorCancel);
     server.on("/api/features/ap-drive-profile", HTTP_POST, httpFeatureApDriveProfile);
     server.on("/api/features/banned", HTTP_POST, httpFeatureBanned);
@@ -4843,6 +5512,8 @@ static void webTask(void *arg) {
     server.on("/api/das/stats", HTTP_GET, httpDasTelemetryStats);
     server.on("/api/r79/stats", HTTP_GET, httpR79Stats);
     server.on("/api/r79/update", HTTP_POST, httpR79Update);
+    server.on("/api/r79/ap-control/stats", HTTP_GET, httpR79ApControlStats);
+    server.on("/api/r79/ap-control/update", HTTP_POST, httpR79ApControlUpdate);
     server.on("/api/nag/h-profile/stats", HTTP_GET, httpNagHumanProfileStats);
     server.on("/api/nag/h-profile/update", HTTP_POST, httpNagHumanProfileUpdate);
     server.on("/api/nag/h-profile/reset", HTTP_POST, httpNagHumanProfileReset);
@@ -4850,6 +5521,14 @@ static void webTask(void *arg) {
     server.on("/api/ulc/update", HTTP_POST, httpUlcUpdate);
     server.on("/api/lab/auto-lane-change/stats", HTTP_GET, httpAutoLaneChangeLabStats);
     server.on("/api/lab/auto-lane-change/update", HTTP_POST, httpAutoLaneChangeLabUpdate);
+    server.on("/api/lab/vision-control/stats", HTTP_GET, httpVisionControlStats);
+    server.on("/api/lab/vision-control/update", HTTP_POST, httpVisionControlUpdate);
+    server.on("/api/country/stats", HTTP_GET, httpCountryOverrideStats);
+    server.on("/api/country/update", HTTP_POST, httpCountryOverrideUpdate);
+    server.on("/api/lab/lane-graph/stats", HTTP_GET, httpLaneGraphStats);
+    server.on("/api/lab/lane-graph/update", HTTP_POST, httpLaneGraphUpdate);
+    server.on("/api/lab/country/stats", HTTP_GET, httpCountryOverrideStats);
+    server.on("/api/lab/country/update", HTTP_POST, httpCountryOverrideUpdate);
     server.on("/api/lab/ulc-monitor/stats", HTTP_GET, httpUlcMonitorLabStats);
     server.on("/api/researchcapture/stats", HTTP_GET, httpResearchCaptureStats);
     server.on("/api/researchcapture/start", HTTP_POST, httpResearchCaptureStart);

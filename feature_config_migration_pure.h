@@ -14,14 +14,9 @@ struct FeatureConfigV37Pure {
   uint8_t rightScrollWarningSeconds;
 };
 
-struct FeatureConfigSchema3CommitPure {
-  bool markerAllowed;
-  bool cleanupAllowed;
-};
-
 static inline FeatureConfigV37Pure featureConfigV37DefaultsPure() {
   FeatureConfigV37Pure config = {};
-  config.r79Bit18Mode = FEATURE_CONFIG_R79_FORCE_0_PURE;
+  config.r79Bit18Mode = FEATURE_CONFIG_R79_STOCK_PURE;
   config.noaStabilizationSeconds = 10u;
   config.cancelPauseSeconds = 20u;
   config.rightScrollWarningSeconds = 2u;
@@ -36,14 +31,6 @@ static inline FeatureConfigV37Pure featureConfigV37FromLegacyPure(
     config.r79Bit18Mode = legacyR79Bit18Mode;
   }
   return config;
-}
-
-static inline FeatureConfigSchema3CommitPure featureConfigSchema3CommitPure(
-    bool valuesWritten, bool valuesVerified, bool markerDurable) {
-  FeatureConfigSchema3CommitPure result = {};
-  result.markerAllowed = valuesWritten && valuesVerified;
-  result.cleanupAllowed = result.markerAllowed && markerDurable;
-  return result;
 }
 
 struct LegacyLab3f8ConfigPure {

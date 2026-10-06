@@ -77,23 +77,26 @@ static inline uint8_t blinkerTxDefaultModePure(bool isModelYl) {
                    : BLINKER_TX_MODE_LEGACY_PURE;
 }
 
-static inline uint8_t blinkerTxEffectiveModePure(uint8_t requested,
-                                                 bool labEnabled) {
-  (void)labEnabled;
-  return requested <= BLINKER_TX_MODE_LEGACY_PURE
-      ? requested
-      : (uint8_t)BLINKER_TX_MODE_SINGLE_PURE;
+static inline bool blinkerTxModeValidPure(uint8_t mode) {
+  return mode <= BLINKER_TX_MODE_LEGACY_PURE;
+}
+
+static inline uint8_t blinkerTxStoredModePure(uint8_t stored,
+                                              bool isModelYl) {
+  return blinkerTxModeValidPure(stored)
+      ? stored
+      : blinkerTxDefaultModePure(isModelYl);
 }
 
 static inline BlinkerTxModeTransitionPure blinkerTxModeTransitionPure(
-    uint8_t current, uint8_t requested, bool labEnabled) {
+    uint8_t current, uint8_t requested) {
   BlinkerTxModeTransitionPure transition = {};
-  if (!labEnabled || current > BLINKER_TX_MODE_LEGACY_PURE ||
-      requested > BLINKER_TX_MODE_LEGACY_PURE) {
+  if (!blinkerTxModeValidPure(current) ||
+      !blinkerTxModeValidPure(requested)) {
     return transition;
   }
   transition.valid = true;
-  transition.effectiveMode = blinkerTxEffectiveModePure(requested, labEnabled);
+  transition.effectiveMode = requested;
   transition.cancelLegacy = current == BLINKER_TX_MODE_LEGACY_PURE &&
       transition.effectiveMode == BLINKER_TX_MODE_SINGLE_PURE;
   return transition;

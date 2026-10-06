@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "ulc_stalk_confirm_pure.h"
+#include "tsl9_hands_on_0x399_pure.h"
 
 enum VehicleProfileId : uint8_t {
   VEHICLE_PROFILE_NONE = 0,
@@ -86,13 +87,59 @@ static inline bool vehicleProfileCanBIsChassis(uint8_t id, uint8_t topology) {
           topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS);
 }
 
-static inline bool vehicleProfileApRightScrollSupported(uint8_t id, uint8_t topology) {
+static inline bool vehicleProfileTsl9InputSupported(uint8_t id, uint8_t topology) {
   return vehicleProfileTopologyValid(id, topology) &&
          (id == VEHICLE_MODEL_YL || vehicleProfileCanBIsChassis(id, topology));
 }
 
-static inline bool vehicleProfileNagSupported(uint8_t id, uint8_t topology) {
+// Standard Body+Chassis profiles use the Body CAN scroll control. Model YL
+// and Standard Party+Chassis retain their existing CAN B routes.
+static inline bool vehicleProfileTsl9InputOnBodyCanA(uint8_t id,
+                                                     uint8_t topology) {
+  return vehicleProfileCanAIsBody(id, topology);
+}
+
+static inline bool vehicleProfileNagTorqueSupported(uint8_t id, uint8_t topology) {
   return vehicleProfileCanAIsParty(id, topology);
+}
+
+static inline bool vehicleProfileNagTsl9Supported(uint8_t id, uint8_t topology) {
+  if (!vehicleProfileTopologyValid(id, topology)) return false;
+  return id == VEHICLE_MODEL_YL || vehicleProfileCanAIsBody(id, topology);
+}
+
+// Only pre-refresh Legacy 3/Y uses the gateway-translated DAS_status 0x39B
+// TSL9 route on Body CAN A. YL, Juniper, and Highland retain their proven
+// 0x399 transports.
+// An explicit Legacy-user selection; no automatic FSD/HW classification.
+static inline bool vehicleProfileR79Hw3Supported(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology) &&
+         (id == VEHICLE_MODEL_Y_LEGACY || id == VEHICLE_MODEL_3_LEGACY);
+}
+
+static inline bool vehicleProfileLegacyTsl9RouteSelectable(
+    uint8_t id, uint8_t topology) {
+  return vehicleProfileCanAIsBody(id, topology) &&
+         (id == VEHICLE_MODEL_Y_LEGACY || id == VEHICLE_MODEL_3_LEGACY);
+}
+
+static inline bool vehicleProfileNagTsl9OnBody39B(
+    uint8_t id, uint8_t topology, uint8_t legacyRoute) {
+  return vehicleProfileLegacyTsl9RouteSelectable(id, topology) &&
+      tsl9LegacyRouteSanitizePure(legacyRoute) ==
+          TSL9_LEGACY_ROUTE_BODY_39B_PURE;
+}
+
+// Compatibility/default policy for older pure callers.
+static inline bool vehicleProfileNagTsl9OnBody39B(uint8_t id,
+                                                   uint8_t topology) {
+  return vehicleProfileNagTsl9OnBody39B(
+      id, topology, TSL9_LEGACY_ROUTE_DEFAULT_PURE);
+}
+
+static inline bool vehicleProfileNagSupported(uint8_t id, uint8_t topology) {
+  return vehicleProfileNagTorqueSupported(id, topology) ||
+         vehicleProfileNagTsl9Supported(id, topology);
 }
 
 static inline bool vehicleProfileAdvancedEapSupported(uint8_t id, uint8_t topology) {
@@ -247,14 +294,34 @@ static inline bool activeCanBIsChassis() {
   return vehicleProfileCanBIsChassis(activeVehicleProfile, activeVehicleTopology);
 }
 
-static inline bool activeProfileApRightScrollSupported() {
-  return vehicleProfileApRightScrollSupported(
+static inline bool activeProfileTsl9InputSupported() {
+  return vehicleProfileTsl9InputSupported(
+      activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileTsl9InputOnBodyCanA() {
+  return vehicleProfileTsl9InputOnBodyCanA(
       activeVehicleProfile, activeVehicleTopology);
 }
 
 
 static inline bool activeProfileNagSupported() {
   return vehicleProfileNagSupported(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileNagTorqueSupported() {
+  return vehicleProfileNagTorqueSupported(
+      activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileNagTsl9Supported() {
+  return vehicleProfileNagTsl9Supported(
+      activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileNagTsl9OnBody39B() {
+  return vehicleProfileNagTsl9OnBody39B(
+      activeVehicleProfile, activeVehicleTopology);
 }
 
 static inline bool activeProfileAdvancedEapSupported() {
@@ -279,6 +346,10 @@ static inline bool activeProfileUlcNoConfirmSupported() {
 
 static inline bool activeProfileNagGateDependsOnCanB() {
   return vehicleProfileNagGateDependsOnCanB(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileR79Hw3Supported() {
+  return vehicleProfileR79Hw3Supported(activeVehicleProfile, activeVehicleTopology);
 }
 
 static inline bool activeProfileEuUnlockSupported() {
