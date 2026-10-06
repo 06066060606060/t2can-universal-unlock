@@ -8,14 +8,20 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.7.2
+# T2CAN Universal Unlock v3.21 Pre release
 
 **Major Universal Release**  
-**Release date:** 26 September 2026  
+**Release date:** 6 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
+**v3.21 Highlights**
+- Added Vision Speed Control — 0x3FD, which requests UI_enableVisionSpeedControl=0.
+- Independent Country and Map Region settings
+- Improved CAN task diagnostics and Research Capture reliability.
+- Fixed several CAN synchronization and transmission safety issues.
 
+- 
 **v3.7.2 Highlights**
 - Lane-change instant cancel hotfix
 - new R79 policy
