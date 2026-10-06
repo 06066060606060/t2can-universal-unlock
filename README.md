@@ -8,7 +8,7 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.21 Pre release
+# T2CAN Universal Unlock v3.21
 
 **Major Universal Release**  
 **Release date:** 6 October 2026  
