@@ -20,7 +20,7 @@
 - Independent Country and Map Region settings
 - Improved CAN task diagnostics and Research Capture reliability.
 - Fixed several CAN synchronization and transmission safety issues.
-
+- And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/CHANGELOG.md)
 - 
 **v3.7.2 Highlights**
 - Lane-change instant cancel hotfix
@@ -30,7 +30,7 @@
 - AP Right Scroll warning recovery
 - Full mobile dashboard redesign
 - Performance and resource optimizations
-- And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md)
+
 
 ## 📋3.0 Release Highlights  
 
@@ -76,38 +76,6 @@
 - eliminate the "hands on the wheel" prompt while using Autopilot/FSD*
 
 ---
-
-# 🚗 T2CAN Universal Unlock v3.7.2
-
-> Universal firmware for supported Tesla Model 3 / Model Y platforms.
-
-| 📅 Release | 👨‍💻 Firmware rewrite | 🌐 Dashboard | 📜 History |
-|---|---|---|---|
-| 27 September 2026 | LP_YL | [Open dashboard demo](https://06066060606060.github.io/t2can-universal-unlock/) | [CHANGELOG.md](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md) |
-
-## ✨ What’s new in v3.7.2
-
-- Profile-based Auto Blinker TX defaults:
-  - **Model YL:** Single TX
-  - **Other supported Model 3/Y profiles:** legacy 350 ms burst
-- New persistent LAB experiment: **Disable Driver Monitoring (NAG)** via `0x3FD` mux1 bit 43.
-- The LAB NAG setting is saved in NVS, defaults to OFF, and remains experimental.
-- Added R79 LAB telemetry for bit 43: stock value, effective value, and RX change counters.
-
-
-## 🚀 v3.7 Highlights
-
-| Area | Changes |
-|---|---|
-| AP / NAG decoding | Corrected `0x399` AP and Hands-On decoding, full AP-state validation, and short-frame rejection |
-| Auto Blinker | NOA stabilization (1–20 s, default 10 s), cancel pause (10–100 s, default 20 s), and clearer dashboard states |
-| Lane-change cancel | Door-open and S3XY cancel work even when the live `0x24A` context remains `IN_LANE` |
-| R79 | Fixed production policy: 2 ms mux1 fast echo plus one +150 ms mux2 refresh |
-| Summon | SmartSummonOnly bit 18 moved to **Settings → Summon** (`FORCE 0` by default or `STOCK`) |
-| NAG Killer | Mode H Rev.4 production defaults and profiles in **Settings → NAG KILLER** |
-| AP Right Scroll | Warning recovery for all supported profiles, with 1–5 s repeat interval (default 2 s) |
-| Dashboard | New production controls, persistent migrations, firmware identity updated to v3.7 |
-| Nag Killer | New mode tsl9 using chassis/body configuration (doesn't work in all region/country)
 
 ## 🚙 Supported profiles
 
