@@ -38,9 +38,6 @@ Physical mapping is fixed:
 - J3 = CHASSIS
 - J4 = PARTY
 
-`VH` is an alias of `BODY` for every profile. Therefore legacy VH TX paths
-are routed to J2 BODY rather than to J3 CHASSIS.
-
 ## Runtime architecture
 
 - `canTaskMcp` services J2 BODY and J4 PARTY.
