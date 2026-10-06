@@ -2,7 +2,7 @@
 >
 > This project interacts with a Tesla vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.
 >
-> It sends signals directly to the controller, not a physical command to the steering wheel. **Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk.**
+> It sends signals directly to vehicle controllers; it is **not** a physical steering-wheel command. **Do not use it on public roads or in any situation where unsafe behavior could put people or property at risk.**
 >
 > You are responsible for your own testing, wiring, configuration, and compliance with local laws.
 
@@ -77,338 +77,165 @@
 
 ---
 
-# 🚙 1. Universal Vehicle Architecture
+# 🚗 T2CAN Universal Unlock v3.7.2
 
-### Universal v3.0
-Universal v3.0 replaces both separate branches with a persistent **Vehicle Profile** system.
+> Universal firmware for supported Tesla Model 3 / Model Y platforms.
 
-The selected profile determines:
+| 📅 Release | 👨‍💻 Firmware rewrite | 🌐 Dashboard | 📜 History |
+|---|---|---|---|
+| 27 September 2026 | LP_YL | [Open dashboard demo](https://06066060606060.github.io/t2can-universal-unlock/) | [CHANGELOG.md](https://github.com/06066060606060/t2can-universal-unlock/blob/pre-release/CHANGELOG.md) |
 
-- CAN A / CAN B topology.
-- Turn-signal transport.
-- Feature availability.
-- Vehicle-specific CAN routing.
-- Nag Killer availability.
-- TLSSC Restore capability.
-- Profile-specific safety restrictions.
+## ✨ What’s new in v3.7.2
 
-## ✅ Supported Profiles
+- Profile-based Auto Blinker TX defaults:
+  - **Model YL:** Single TX
+  - **Other supported Model 3/Y profiles:** legacy 350 ms burst
+- New persistent LAB experiment: **Disable Driver Monitoring (NAG)** via `0x3FD` mux1 bit 43.
+- The LAB NAG setting is saved in NVS, defaults to OFF, and remains experimental.
+- Added R79 LAB telemetry for bit 43: stock value, effective value, and RX change counters.
+
+
+## 🚀 v3.7 Highlights
+
+| Area | Changes |
+|---|---|
+| AP / NAG decoding | Corrected `0x399` AP and Hands-On decoding, full AP-state validation, and short-frame rejection |
+| Auto Blinker | NOA stabilization (1–20 s, default 10 s), cancel pause (10–100 s, default 20 s), and clearer dashboard states |
+| Lane-change cancel | Door-open and S3XY cancel work even when the live `0x24A` context remains `IN_LANE` |
+| R79 | Fixed production policy: 2 ms mux1 fast echo plus one +150 ms mux2 refresh |
+| Summon | SmartSummonOnly bit 18 moved to **Settings → Summon** (`FORCE 0` by default or `STOCK`) |
+| NAG Killer | Mode H Rev.4 production defaults and profiles in **Settings → NAG KILLER** |
+| AP Right Scroll | Warning recovery for all supported profiles, with 1–5 s repeat interval (default 2 s) |
+| Dashboard | New production controls, persistent migrations, firmware identity updated to v3.7 |
+| Nag Killer | New mode tsl9 using chassis/body configuration (doesn't work in all region/country)
+
+## 🚙 Supported profiles
 
 | Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
 |---|:---:|:---:|:---:|:---:|
-| **YL · Party + VH** | ✅ | ✅ | ✅ | ✅ |
-| **Standard 3/Y · Body + Chassis** | ❌ | ✅ | ✅ | ✅ |
-| **Standard 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
+| **Model YL · Party + VH** | ✅ | ✅ | ✅ | ✅ |
+| **Standard Model 3/Y · Body + Chassis** | ❌✅ | ✅ | ✅ | ✅ |
+| **Standard Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
 
-Model 3 Highland requires the user to select the physically installed turn-control type during profile setup. Other profiles resolve to Stalk automatically.
+> Model 3 Highland requires selecting the installed turn-control type during profile setup. Other supported profiles automatically use the Stalk configuration.
 
----
+## 🧩 Main features
 
-# 🔧 2. Safe Profile Setup and Migration
+### 🛡️ Vehicle-profile safety
 
-Universal v3.0 adds a fail-closed setup state for first boot and major migration.
+A saved Vehicle Profile determines the CAN topology, turn-signal route, supported features, and profile-specific restrictions.
 
-Before a valid Vehicle Profile is saved:
+On first boot or after a major migration, firmware remains in a fail-closed setup state until a valid profile is saved:
 
-- CAN transmission is disabled.
-- CAN injection is disabled.
+- CAN transmission and injection are disabled.
 - CAN recovery supervision is disabled.
 - Bluetooth is not started.
 - Wi-Fi and the Profile Setup page remain available.
 
-This prevents an old or incompatible v2.x configuration from authorizing CAN traffic on the wrong vehicle topology.
+> Migrating from pre-Universal v2.x firmware intentionally erases NVS before creating the Universal bootstrap configuration.
 
-The one-time migration from the pre-Universal v2.x architecture intentionally performs a **full NVS erase** before the new Universal bootstrap state is written.
+### 🚦 Advanced EAP and Auto Blinker
 
----
+Advanced EAP can automatically request a turn signal when the vehicle requests a lane change, with configurable delay and retained cancellation options through the screen, door-open action, or S3XY button.
 
-# 🛠️ 3. CAN Runtime Safety and Recovery
+Auto Blinker is profile-aware and validates the requested direction before transmission:
 
-Universal v3.0 introduces a stricter **CAN TX Recovery Barrier / Epoch Model**.
+- `DAS_autoLaneChangeState` must permit the requested left or right maneuver.
+- The condition is checked when the request is armed and again when it fires.
+- A lane becoming unavailable during the delay cancels the pending action.
+- NOA must remain eligible through the configured stabilization interval.
+- Door-open or S3XY cancellation can apply a shared, configurable pause; triggering cancel again releases it early.
 
-When a CAN controller recovery or reinitialization boundary occurs, transient authorization from the previous CAN session is invalidated.
+> Direct S3XY left/right blinker actions remain independent from the Auto Blinker enable, stabilization, and pause states.
 
-# 4. Direct S3XY Button Bluetooth Support — NEW
+### 🔁 R79 and Summon
 
-Direct S3XY Button integration is a new subsystem compared with both predecessor firmware lines.
+The production R79 path applies a fixed policy to accepted stock frames:
 
-Universal v3.0 supports **up to 3 registered S3XY Buttons**.
+- `UI_applyEceR79` bit 19: forced to `0`.
+- `UI_hardCoreSummon` bit 47: forced to `1`.
+- SmartSummonOnly bit 18: selectable in **Settings → Summon** as `FORCE 0` or `STOCK`.
 
+Each accepted stock mux1 frame is echoed with a bounded 2 ms queue wait. Each accepted mux2 frame schedules one +150 ms refresh. The LAB page now exposes a read-only R79 status card rather than transport/timing experiments.
 
-# 5. Auto Blinker — REWORKED
+A separate always-on Summon Monitor provides state observation, gate telemetry, ACA/SPR monitoring, park-state monitoring, and queue/transport telemetry.
 
-Auto Blinker existed in the previous firmware lines, but Universal v3.0 significantly changes routing and authorization.
+### 💪 NAG Killer and AP Right Scroll
 
-## Profile-Aware Routing
+NAG Killer remains profile-gated. Mode H Rev.4 is available as a production profile in **Settings → NAG KILLER** with these defaults:
 
-### Model Y L
-Uses the Party CAN + VH CAN topology required by the long-body YL platform.
+- Primary: 1.80–2.60 Nm
+- Wait: 0.90–3.00 s
+- Refractory: 0.50–1.50 s
+- Opposite carrier: 0.10–0.60 Nm
+- Tiered Hands-On thresholds: 0.40 / 2.00 Nm
+- Visual Warning Rescue: ON after 0.5 s
+- Hard pause while stopped
 
-### Standard Model 3/Y
-Uses the CAN A / CAN B topology selected by the active Vehicle Profile.
-- Body + Chassis (Advanced-EAP + EU-Unlock) 
-- Party + Chassis (Nag-Killer + EU-Unlock) 
+AP Right Scroll is available in Settings for Model YL and standard Model 3/Y profiles. A newly detected visual warning triggers an immediate UP/DOWN pair; if the warning stays active, it repeats every 1–5 seconds (default: 2 seconds). Physical right-scroll input always has priority.
 
-## Direction-Specific ALC Gate
+### 🔘 S3XY Button support
 
-Universal v3.0 evaluates `DAS_autoLaneChangeState` from 0x399 before authorizing the delayed turn-signal TX.
+- Register up to **three S3XY Buttons**.
+- Enable or disable Bluetooth Master at runtime without rebooting.
+- Saved devices, bonds, button mappings, and Auto Connect settings are retained.
+- S3XY actions can control direct blinkers, lane-change cancellation, and CAN research capture.
 
-- LEFT request requires valid LEFT or BOTH availability.
-- RIGHT request requires valid RIGHT or BOTH availability.
-- BLOCKED / UNAVAILABLE / mismatched direction prevents TX.
-- The direction condition is checked through ARM and again at FIRE.
+## 🧪 Dashboard and LAB
 
-If the requested lane becomes unavailable during the delay, the pending turn-signal action is cancelled.
+The mobile dashboard has four persistent sections:
 
-## AP State and Freshness Handling
+| Section | Purpose |
+|---|---|
+| **HOME** | Status and quick controls |
+| **DEVICES** | S3XY / Bluetooth devices |
+| **SETTINGS** | Supported production features and system configuration |
+| **LAB** | Experimental tools and CAN research |
 
-AP mode state and transient lane-change requests are handled separately:
+### 🔬 LAB tools
 
-- Valid AP state can remain latched until a CAN recovery boundary.
-- Transient lane-change requests still use freshness constraints.
+> ⚠️ LAB is intended for controlled research only.
 
----
+- Read-only R79 status and bit telemetry.
+- Experimental **Disable Driver Monitoring (NAG)** control using `0x3FD` mux1 bit 43, where supported.
+- ULC Blind Spot research modes: Stock, Standard, Aggressive, and Mad Max.
+- Auto Lane Change experiment.
+- CAN capture: Snapshot, Raw Transition, and Auto ALC Transition.
 
-# 6. R79 and Summon Architecture — REWORKED
+> CAN Research Capture is RX-only: it observes and exports CAN traffic but does not replay captured frames.
 
-Universal v3.0 separates R79 handling from Summon monitoring.
+## 📶 Wi-Fi and resets
 
-## Independent R79 Engine
+### 📡 Wi-Fi access point
 
-The 0x3FD mux1 R79 engine owns the production R79 policy.
+Default access point:
 
-### Fixed Policy
+| Setting | Default |
+|---|---|
+| SSID | `T2CAN-****` |
+| Password | `12345678` |
+| Dashboard | [http://192.168.4.1](http://192.168.4.1) |
 
-- **bit 19 (`UI_applyEceR79`) → FORCE 0**
-- **bit 47 (`UI_hardCoreSummon`) → FORCE 1**
-- **bit 18 → STOCK by default, optional LAB override**
+SSID and password can be changed from the dashboard. Applying a Wi-Fi change restarts only the access point; CAN, BLE, and the MCU continue running.
 
-## Immediate + Periodic Reassertion
+### ♻️ Reset options
 
-### Immediate
-- A real stock mux1 frame is captured.
-- The stock frame is used as the template.
-- R79 policy is applied.
-- Reassertion is attempted immediately when the gate is valid.
+| Action | What it clears | What it preserves |
+|---|---|---|
+| Reset Firmware Settings | Normal firmware settings | Vehicle profile, Wi-Fi, and S3XY/Bluetooth data |
+| Reset Bluetooth Data | S3XY registry, mappings, bonds, discovery/cache | Bluetooth Master and Global Auto Connect settings |
+| Factory Reset | All NVS data | Nothing; returns to Vehicle Profile Setup |
 
-### Periodic
-- Runs on an independent scheduler.
-- Stock RX does not reset the periodic timer.
-- Available periods: 20 / 100 / 250 / 500 / 1000 ms.
-- A real stock template must exist in the current CAN epoch.
+## 🔧 Hardware note
 
-## Fail-Closed Gate
-
-R79 TX is allowed only through the defined AP / Summon / Park gate logic.
-
-Manual driving remains fail-closed.
-
-## Summon Monitor
-
-The previous EU-Unlock / Summon ownership model is replaced by an always-on **Summon Monitor** responsible for:
-
-- Summon state observation.
-- Gate telemetry.
-- ACA / SPR monitoring.
-- Park state.
-- Summon TX priority state.
-- Queue and transport telemetry.
-
-R79 bit ownership is now handled separately by the R79 engine.
-
----
-
-# 7. Driving Feature Improvements
-
-## Off-Highway ALC — NEW BETA
-
-Off-Highway ALC is promoted to a normal BETA feature and appears in:
-
-- HOME → Quick Controls.
-- SETTINGS → Features.
-
-Behavior:
-
-- **ON:** Off-Highway ALC override enabled.
-- **OFF:** STOCK behavior.
-
----
-
-## TLSSC Highway Block — NEW
-
-Universal v3.0 adds an optional **Highway / Controlled-Access Road Block** for TLSSC.
-
-When enabled, TLSSC can automatically remain **OFF** when the map context indicates a highway or controlled-access road.
-
-The feature uses the available map / road-context signal path and applies hysteresis so short or unstable road-context changes do not continuously toggle TLSSC.
-
----
-
-## Nag Killer 
-
-Nag Killer remains profile-gated.
-
-Universal v3.0 preserves the existing functionality and adds deeper diagnostics plus **Mode C**, a continuous bounded random-walk mode.
-
-Mode C behavior:
-
-- Approximate target range: +1.50 to +1.80 Nm.
-- Maximum step: 0.15 Nm per 200 ms.
-- Continuous bounded variation rather than a fixed repeating torque sequence.
-
----
-
-# 8. TLSSC Restore Safety
-
-Universal v3.0 adds stronger exposure and profile gating through a separate **Banned Car** control.
-
-TLSSC Restore is exposed only when:
-
-1. The selected Vehicle Profile supports it.
-2. `Banned Car` is explicitly enabled.
-3. The user passes the dedicated warning / confirmation flow.
-
----
-
-# 9. LAB and CAN Research Capture — MAJOR NEW TOOLING
-
-Universal v3.0 introduces a dedicated LAB area to separate research functions from normal driving controls.
-
-## LAB Research Tools
-
-### R79 Control
-- Fixed bit 19 / bit 47 policy telemetry.
-- Experimental bit 18 control.
-- Immediate / Periodic TX counters.
-- Stock and injected raw-frame comparison.
-- Refresh-period selection.
-- Gate and TX telemetry.
-
-### ULC Blind Spot
-Research options:
-
-- STOCK
-- STANDARD
-- AGGRESSIVE
-- MAD MAX
-
-### ACC Follow Distance
-New research-only 0x3F8 control:
-
-- STOCK
-- Values 1 through 7
-
-## CAN Research Capture
-
-A new RX-focused research recorder supports:
-
-- **SNAPSHOT**
-- **RAW TRANSITION**
-- **AUTO ALC TRANSITION**
-
-Capabilities:
-
-- CAN A + CAN B observation.
-- Labels A / B / C / D.
-- User-defined persistent labels.
-- PRE and POST windows.
-- Multi-segment capture.
-- RAW PRE rolling ring / archive.
-- Automatic ALC transition qualification.
-- CSV download.
-- S3XY-triggered Capture A/B/C/D.
-- S3XY-triggered Capture Reset.
-
-The capture subsystem is **RX-only** and does not transmit or replay CAN traffic.
-
----
-
-# 10. Dashboard — REBUILT
-
-The previous scrolling dashboard architecture is reorganized into four persistent mobile sections:
-
-- **HOME**
-- **DEVICES**
-- **SETTINGS**
-- **LAB**
-
-The fixed top connection header and fixed bottom navigation remain available throughout the main interface.
-
-## Firmware Identification
-
-SETTINGS → System identifies the running application as:
-
-**T2CAN Universal v3.0**
-
-The main dashboard branding remains:
-
-**TESLA UNLOCK**
-
----
-
-# 11. Configurable Wi-Fi
-
-Universal v3.0 adds persistent Wi-Fi AP configuration.  
-Default:
-- SSID: T2CAN-****
-- Password: 12345678
-- dashboard: http://192.168.4.1  
-
-Users can change:
-
-- SSID. 
-- Password.
-
-Applying a Wi-Fi change restarts only the access point:
-
-- CAN remains running.
-- BLE remains running.
-- MCU reboot is not required.
-
----
-
-# 12. Reset Architecture
-
-Universal v3.0 separates reset scope into dedicated operations.
-
-## Reset Firmware Settings
-
-Clears normal firmware settings while preserving:
-
-- Vehicle Profile.
-- Wi-Fi configuration.
-- S3XY / Bluetooth data.
-
-## Reset Bluetooth Data
-
-Clears:
-
-- S3XY registry.
-- Button action mappings.
-- BLE bonds.
-- BLE discovery / cache state.
-
-Bluetooth Master and Global Auto Connect configuration are preserved.
-
-## Factory Reset — Erase All NVS
-
-Erases all stored configuration and returns T-2CAN to Vehicle Profile Setup Mode.
-
----
-
-### ⚠️ Important: 120 Ω resistors
-
-Don't forget to remove the two **120-ohm resistors**, as they can cause signal errors.
+> ⚠️ Remove the two **120 Ω termination resistors** if they are not appropriate for your wiring. Leaving them in place can cause CAN signal errors.
 
 <img width="407" height="180" alt="LILYGO-T-2CAN_9" src="https://github.com/user-attachments/assets/0d272b7e-bd82-408f-9ca1-239e6dab44d5" />
 
----
+## 📚 Scope
 
+This Universal release is based on source-level comparison and consolidation of:
 
-## Source Basis and Scope
-
-This release note was prepared from source-level comparison of:
-
-- **LP_YL V2.0**
-- **Advanced EAP & EU-Unlock V2.6.0 for T-2Can**
-- **T2CAN Universal v3.0**
+- LP_YL V2.0
+- Advanced EAP & EU-Unlock V2.6.0 for T-2CAN
+- T2CAN Universal v3.x
