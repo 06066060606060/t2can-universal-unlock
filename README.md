@@ -82,9 +82,8 @@ The selected profile determines:
 
 | Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
 |---|:---:|:---:|:---:|:---:|
-| **YL · Party + VH** | ✅ | ✅ | ✅ | ✅ |
-| **Standard 3/Y · Body + Chassis** | ✅ | ✅ | ✅ | ✅ |
-| **Standard 3/Y · Party + Chassis** | ✅ | ✅ | ✅ | ✅ |
+| **3/Y/YL ** | ✅ | ✅ | ✅ | ✅ |
+
 
 # 11. Configurable Wi-Fi
 
