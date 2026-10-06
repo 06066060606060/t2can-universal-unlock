@@ -15,7 +15,6 @@ static inline uint32_t canRxTotal();
 static const char *s3xyStateName(uint8_t st);
 static const char *s3xyActionCode(uint8_t action);
 static const char *s3xyActionLabel(uint8_t action);
-static uint8_t s3xyParseAction(const String &s);
 static const char *s3xyLogTypeName(uint8_t t);
 static void s3xyLogPush(uint8_t type, const char *detail, const uint8_t *data, size_t len, int16_t rssi, int8_t slot);
 static void s3xyBytesToHex(const uint8_t *data, size_t len, char *out, size_t outLen);
@@ -96,11 +95,29 @@ static void canTxMarkFresh(uint8_t busBit);
 static esp_err_t canTxTwaiTransmitTagged(const twai_message_t *msg,
                                          uint32_t expectedEpoch,
                                          uint8_t traceSource);
+static esp_err_t canTxTwaiTransmitWithMaskTagged(
+    const twai_message_t *msg, uint32_t expectedEpoch,
+    uint8_t requiredFreshMask, uint8_t traceSource);
+static uint32_t canTxCancellationGenerationSnapshot(
+    const volatile uint32_t *generation);
+static void canTxCancellationGenerationAdvance(
+    volatile uint32_t *generation);
+static esp_err_t canTxTwaiTransmitWithMaskTaggedGuarded(
+    const twai_message_t *msg, uint32_t expectedEpoch,
+    uint8_t requiredFreshMask, uint8_t traceSource,
+    const volatile uint32_t *generation, uint32_t expectedGeneration);
 static esp_err_t canTxTwaiTransmit(const twai_message_t *msg, uint32_t expectedEpoch);
+static esp_err_t canTxTwaiTransmitValidated(
+    twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
+    bool (*validate)(twai_message_t *, void *), void *context);
 static bool canTxMcpSendTagged(const struct can_frame *msg,
                                uint32_t expectedEpoch, uint8_t traceSource,
                                MCP2515::ERROR &errOut,
                                McpTxResultReason *reasonOut = nullptr);
+static bool canTxMcpSendTaggedGuarded(
+    const struct can_frame *msg, uint32_t expectedEpoch, uint8_t traceSource,
+    const volatile uint32_t *generation, uint32_t expectedGeneration,
+    MCP2515::ERROR &errOut, McpTxResultReason *reasonOut = nullptr);
 static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch, MCP2515::ERROR &errOut,
                          McpTxResultReason *reasonOut = nullptr);
 static void nagClampTorque(uint8_t& b2, uint8_t& b3);
@@ -110,6 +127,7 @@ static void nagCfgDefaultsModeB(NagConfig& c);
 static void nagCfgDefaultsModeC(NagConfig& c);
 static void nagCfgDefaultsModeH(NagConfig& c);
 static void nagCfgClampAll(NagConfig& c);
+static bool nagCfgApplyActiveProfilePolicy(NagConfig& c, bool disableIfFallback);
 static void nagCfgLoad();
 static void nagCfgSave();
 static bool nagDecideInjection(uint8_t dlc, uint8_t& out_b2, uint8_t& out_b3, bool& out_setHo);
@@ -120,10 +138,6 @@ static void nagHumanRuntimeSetVariant(uint8_t variant);
 static NagHumanV1StepResultPure nagHumanRuntimeStep(uint32_t nowMs, uint16_t sourceRaw,
                                                     bool runAllowed, bool speedValid,
                                                     bool speedFresh, uint16_t speedRaw);
-static NagHumanV1StatePure nagHumanV1RuntimeSnapshot();
-static NagHumanV2StatePure nagHumanV2RuntimeSnapshot();
-static NagHumanV1ConfigPure nagHumanV1RuntimeConfigSnapshot();
-static NagHumanV2ConfigPure nagHumanV2RuntimeConfigSnapshot();
 static void nagHumanRuntimeApTransition(bool apActive, bool wasApActive);
 static void nagUpdateApState(const uint8_t* data, uint8_t dlc);
 static void nagUpdateSteering(const uint8_t* data, uint8_t dlc);
@@ -136,16 +150,11 @@ enum T2CanBusId : uint8_t {
 };
 static inline bool getBit(const uint8_t *data, int bit);
 static inline void setBit(uint8_t *data, int bit, bool val);
-static bool r79LabPeriodValid(uint16_t ms);
 static const char* r79RuntimeStateName(uint8_t state);
 static const char* r79GearName(uint8_t raw);
-static const char* r79LabBlockReasonName(uint8_t reason);
-static void r79PeriodicObserveStock(const uint8_t *data, uint8_t dlc, uint8_t mux);
-static void r79PreObserveStock(uint8_t mux, const uint8_t *data, uint8_t dlc, int64_t rxDequeueUs);
 static void r79LabObserve3fdMux1(const uint8_t *data, uint8_t dlc);
 static bool r79LabApplySelectedBits(uint8_t *data);
 static void r79LabRecordTxResult(bool ok, const twai_message_t &out, uint8_t txKind);
-static void r79LabObserve7ff(uint8_t bus, uint8_t dlc, const uint8_t *data);
 static inline uint8_t readVehicleGear(const uint8_t *data);
 static inline int gearState(uint8_t gear);
 static inline uint8_t readDASState4(const uint8_t *data);
@@ -209,8 +218,20 @@ static inline uint8_t dirToTurn(uint8_t dir);
 static void handle249OnCanB(const uint8_t *data, uint8_t dlc);
 static void handle249OnCanA(const uint8_t *data, uint8_t dlc);
 static void handle3C2OnCanA(const struct can_frame &incoming);
-static void handle3C2OnCanBRightScroll(const twai_message_t &incoming);
-static void apRightScrollRuntimeReset(bool resetCounters = false);
+static void handleDriverWindowLab3C2CanB(const twai_message_t &incoming);
+static void driverWindowLabResetRuntime();
+static void driverWindowLabResetRuntimeUnderTxBarrier();
+static void driverWindowLabServiceTick();
+static bool r79FreshGearRawLocked(uint32_t now, uint8_t &rawOut);
+static void tsl9InputObserveCanA(const struct can_frame &incoming);
+static void tsl9InputObserveCanB(const twai_message_t &incoming);
+static void tsl9InputServiceCanA();
+static void tsl9InputServiceCanB();
+static void tsl9InputRequestCancel(Tsl9InputFailurePure reason,
+                                   bool invalidateTemplates = false);
+static void tsl9InputHardResetAfterQuiesce(bool resetCounters = false);
+static void tsl9InputResetCounters();
+static bool tsl9InputQuiesceForConfig();
 static void handle102LaneChangeCancel(const uint8_t *data, uint8_t dlc);
 static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser);
 static void sendStalkFrameCanA(uint8_t turn, uint32_t txEpoch, bool directUser);
@@ -227,7 +248,7 @@ static bool ulcNoConfirmGateOpen();
 static bool lab3f8AutosteerGateOpen(uint32_t now);
 static bool lab3f8AnyOverrideSelected();
 static void injectDriverAssistControl(const twai_message_t &src);
-static void injectUlcSnooze3fdMux1(const twai_message_t &src);
+static bool injectUlcSnooze3fdMux1(const twai_message_t &src);
 static void doInjectTlsscRestore(const twai_message_t &src);
 static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now);
 static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now, uint8_t txKind);
@@ -241,6 +262,8 @@ static bool ulcCfgLoadAndMigrate();
 static bool ulcCfgSave();
 static bool autoLaneChangeLabCfgLoadAndMigrate();
 static bool autoLaneChangeLabCfgSave();
+static void countryOverrideCfgLoad();
+static bool countryOverrideCfgSave();
 static void r79CfgLoad();
 static void r79CfgSave();
 static String nagCfgToJson();
@@ -249,8 +272,6 @@ static String summonStatsToJson();
 static String blinkAStatsToJson();
 static String dasTelemetryStatsToJson();
 static String ulcStatsToJson();
-static const char* r79LabTxKindName(uint8_t kind);
-static String r79LabStatsToJson();
 static String systemStatsToJson();
 static const char* bootCaptureHardReasonName(uint8_t reason);
 static void bootCaptureAppendEvent(String &out, const char *event, uint32_t t, const String &detail);
@@ -290,11 +311,6 @@ static void httpSummonStats();
 static void httpSummonTlsscEnable();
 static void httpSummonTlsscDisable();
 static void httpDasTelemetryStats();
-static void httpR79LabStats();
-static void httpR79LabUpdate();
-static void httpR79LabStock();
-static void httpApRightScrollStats();
-static void httpApRightScrollUpdate();
 static void httpUlcStats();
 static void httpAutoLaneChangeLabStats();
 static void httpBlinkAStats();
@@ -320,3 +336,6 @@ static void recoveryStopCanTasks();
 static bool recoveryStartCanTasks();
 static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason);
 static void canSupervisorTask(void* arg);
+
+static bool prepareCanForMaintenance();
+static void restartT2CanSafely();

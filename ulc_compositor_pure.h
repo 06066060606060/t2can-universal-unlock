@@ -3,6 +3,10 @@
 #include <stdint.h>
 
 static constexpr uint8_t ULC_COMPOSITE_STOCK_PURE = 0xFFu;
+static constexpr uint32_t LAB3F8_FRESH_MS_PURE = 3000u;
+static inline bool lab3f8FrameValidPure(uint32_t id, uint8_t dlc, bool extended, bool remote) {
+  return id == 0x3F8u && dlc == 8u && !extended && !remote;
+}
 
 struct UlcCompositeSelectionPure {
   bool alcOffHighwayEnabled;

@@ -1,3 +1,426 @@
+# T2CAN Universal v3.21.0
+
+## LAB R79 manual-driving injection — 2026-10-05
+- Adds `Allow R79 During Manual Driving` inside LAB `R79 AP Control`, saved across reboots and defaulting OFF. The option is independent of the existing AP policy master.
+- ON bypasses only the established manual D/R suppression clause. The manual-driving latch remains observable, while existing AP block/delay, administrative hold, CAN readiness, valid-stock, freshness, generation, cancellation and queue-admission protections remain active.
+- Applies the same policy to cached country/R79 authorization, runtime status, receive-synchronized immediate sends, periodic sends and retries. A successful setting change updates authorization immediately and invalidates work prepared under the previous policy.
+- Stores the new option in the previously unused `r79/apctl` bit2. Existing saved values load with the option OFF; failed mutex, NVS-open or NVS-write operations leave live behavior unchanged.
+- Keeps completed v3.20.0 unchanged. Local validation and OTA evidence are recorded in `VALIDATION.md`; no physical controller or vehicle behavior is implied.
+
+# T2CAN Universal v3.20.0
+
+## Retired 0x3F8 speed experiments — 2026-10-05
+- Removes the failed LAB `Vision Speed Control` (`UI_visionSpeedType`, bits20–21) and `Adaptive Set Speed` (`UI_adaptiveSetSpeedEnable`, bit39) experiments from the dashboard, API, runtime and compositor. Those stock fields are no longer overridden by these experiments.
+- Retires their saved `lab3f8/visionDisabled` and `lab3f8/adaptiveOff` keys without clearing the shared namespace or other saved settings. Failed NVS cleanup cannot reactivate the removed functions.
+- Keeps `Vision Speed Control — 0x3FD` (`UI_enableVisionSpeedControl`, MUX1 bit49), its independent saved settings and vehicle-specific routes unchanged.
+- Preserves existing ALC/ULC, R79, Lane Graph and final transport-admission policies. Completed source and OTA packages remain unchanged; only the new package removes these experiments.
+- Marks the two earlier experiments as retired after reported vehicle ineffectiveness. Host success in their historical validation entries was never proof of vehicle acceptance.
+
+# T2CAN Universal v3.19.0
+
+## LAB Vision Speed Control — 0x3FD — 2026-10-05
+- Adds an independent saved default-OFF experiment requesting `UI_enableVisionSpeedControl=0` in stock `0x3FD` MUX1 bit49.
+- Uses fixed VH on Model YL; Chassis by default on Juniper, Y Legacy, 3 Highland and 3 Legacy, with Body selectable only on Body + Chassis topology. Received stock and transmission stay on the selected physical bus.
+- Requires LAB enabled, fresh active AP and fresh valid stock. Other fields retain their existing policies; acceptance and sign-specific slowing effects are unverified.
+- Signal-coordinate reference: `dzid26/ESP32-DualCAN` commit `2b4d7404ccbb984d57150e9f12421c30e1327bec`, `dbc/Model3_CH.dbc:6252` and `dbc/Model3_VEH.dbc:12667` (`m1 : 49|1@1+`). These community definitions do not establish support on every Tesla software version or a sign-only behavior.
+- Completed v3.18.0 is preserved. Validation and local OTA evidence follow in VALIDATION.md.
+
+# T2CAN Universal v3.18.0
+
+## LAB Adaptive Set Speed — 2026-10-05
+- Adds a saved default-OFF LAB experiment requesting `UI_adaptiveSetSpeedEnable=0` in live CAN B `0x3F8` bit39 across all supported vehicle profiles and valid topologies.
+- Independent of the existing Vision Speed option; applies only with LAB enabled and fresh active AP state. Uses same-bus received stock and the existing single compositor, preserving unrelated fields and speed/acceleration/AEB commands.
+- Actual vehicle acceptance, sign-related slowing and phantom-braking reduction are unverified. This is an experimental request, not a verified sign-only bypass.
+- Preserves completed v3.17.0. Local validation and OTA evidence are recorded in VALIDATION.md.
+
+# T2CAN Universal v3.17.0
+
+## LAB Vision Speed Control — 2026-10-05
+- Adds a saved default-OFF LAB experiment to request UI_visionSpeedType=0 in live CAN B 0x3F8 UI_driverAssistControl frames across all valid Universal vehicle profiles and topologies.
+- Applies only with LAB enabled and fresh active AP state, using same-bus received stock and the existing single compositor. Other 0x3F8 fields and DAS speed/acceleration commands retain their existing policies.
+- The DBC identifies raw 0 as DISABLED; a sign-only interpretation and actual vehicle acceptance are not established. This option does not promise to remove phantom braking.
+- Preserves completed v3.16.0. Local validation and OTA evidence are recorded in VALIDATION.md.
+
+# T2CAN Universal v3.16.0
+
+## LAB Lane Graph injection bus — 2026-10-05
+- Adds a saved Injection Bus selector for non-YL Lane Graph: Chassis (default) or Body. Body is available only with a valid Body + Chassis topology; Party + Chassis cannot select Body. YL keeps its VH route and hides the selector.
+- Preserves the existing OFF / During AP / Always policy independently of the selected bus. Existing saved modes load with Chassis as the default route.
+- Uses stock 0x3FD MUX1 frames from the selected bus and transmits on that same bus. There is no cross-bus template fallback. A saved Body selection on an unsupported non-YL topology remains blocked; switching to YL normalizes the route to fixed VH.
+- Body and independent Chassis display sends reject stock older than 3,000 ms at final admission, using timestamps captured immediately after reception.
+- Displays selected-bus receive state and age, including waiting for stock. Route changes invalidate pending display work; existing R79 behavior and manual D/R policy remain unchanged.
+- v3.15.0 is preserved. Local validation and OTA evidence are recorded in VALIDATION.md; actual Body-bus visualization remains unverified.
+
+# T2CAN Universal v3.15.0
+
+## Independent map region and LAB Lane Graph — 2026-10-04
+- Separates Country and Map Region selections in the existing Settings panel. Country retains STOCK/US/KOREA/NEW ZEALAND; Map Region offers STOCK/US/KOREA. Existing saved presets migrate to equivalent country/map combinations. Japan is omitted because its map-region encoding is unverified.
+- Adds saved LAB Lane Graph modes OFF (default), AP ACTIVE, and ALWAYS. OFF preserves stock; AP ACTIVE applies the display flag only with fresh active AP state. Existing transport and maintenance protections remain in effect.
+- Preserves the R79 manual D/R blocking policy. No manual-drive bypass is added.
+- v3.14.0 is preserved. Host, browser and target-build evidence is recorded in VALIDATION.md; no physical vehicle or visualization outcome is implied.
+
+# T2CAN Universal v3.14.0
+
+## Legacy V12/V13 HW3 R79 option — 2026-10-04
+- Adds a saved default-OFF V12/V13 HW3 toggle to Settings → R79 Mode, visible only for Model Y Legacy and Model 3 Legacy with either supported CAN topology.
+- When selected on a supported Legacy profile, both R79 modes preserve the received MUX1 bit47 instead of forcing it to 1, including reinjection and retry paths. Existing bit19, bit18, DMS, authorization and timing policies remain in effect.
+- Setting publication follows successful NVS persistence and invalidates pending R79 work at the TX admission barrier. Unsupported profiles cannot activate the override.
+- v3.13.0 is preserved. Local test/build evidence is recorded in VALIDATION.md; no device or vehicle outcome is implied.
+
+# T2CAN Universal v3.13.0
+
+## NAG settings and Country promotion — 2026-10-04
+- Adds saved torque-only Ignore AP State, default OFF, for A/B/C/H. TSL9, scroll, and DMS keep their original AP conditions. Other torque eligibility, speed, transport and maintenance gates remain in force. When ON, torque processing may continue after AP disengagement.
+- Missing NAG enabled NVS values now default OFF; existing values are preserved. Mode changes preserve enabled and Ignore AP State.
+- Mode H uses the established Rev.4 engine only. Previous revision selections normalize to persisted slot 1, and h4 tuning is retained. Shared pure algorithm helpers remain for the engine.
+- Country / Map Region moves to Settings and operates independently of LAB. Country choices, stored values, R79 authorization, frame validity and CAN routing remain unchanged.
+- v3.12.0 is preserved. Local validation and OTA evidence are recorded in VALIDATION.md; no device or vehicle validation is implied.
+
+# T2CAN Universal v3.12.0
+
+## New Zealand country preset — 2026-10-04
+- Adds saved LAB Country / Map Region preset NEW ZEALAND (mode 3), preserving existing STOCK/US/KOREA numeric identities and defaults.
+- Sets UI_countryCode (0x238) to ISO numeric 554 and GTW_country (0x7FF MUX1) to NZ using the established little-endian encoding. Existing route, fresh-stock, LAB, R79 and maintenance gates remain in effect.
+- Preserves the complete GTW MUX3 map-region page because no NZ-specific encoding is verified. Preserves right-hand-drive and all other GTW MUX1 fields. The dashboard explicitly describes this country-only behavior.
+- NZ/554 reference: https://www.ncei.noaa.gov/archive/archive-management-system/OAS/bin/prd/jquery/country/details/163 ; field locations follow research/can-logs/Model3CAN.dbc.
+- No FSD enablement, R79 exemption or on-vehicle outcome is established by this preset. Existing v3.11.1 remains unchanged.
+
+# T2CAN Universal v3.11.1
+
+## OTA/reboot CAN shutdown and reconnect backdrop — 2026-10-04
+- OTA now requires a confirmed maintenance shutdown before starting flash writes. The sticky TX hold, supervisor handshake and CAN-task quiescence prevent controller recovery or settings changes from reopening communication.
+- CAN A is held in hardware reset; CAN B is stopped/uninstalled to discard queued traffic. Failed or aborted OTA leaves CAN stopped until reboot; the dashboard explains this state.
+- Software reboot paths use the same shutdown, including reset/profile handlers, BLE reset, supervisor failure and startup failure. Stop failure refuses OTA and does not fall through to an uncoordinated reboot.
+- Reconnect/OTA overlays override AP/NOA page backgrounds, matching html/body safe-area and browser theme color in light and dark themes.
+- Existing v3.11.0 remains unchanged. No device or vehicle validation is implied.
+
+# T2CAN Universal v3.11.0
+
+## LAB R79 AP Control — 2026-10-04
+- Adds a saved opt-in master (default OFF). OFF retains the existing R79 authorization policy, payload transforms, mode selection, and configured enqueue wait.
+- ON offers Block during AP or Delay after AP for 2–10 whole seconds (default 2). The timer restarts on AP re-engagement, settings changes, DAS freshness loss, and relevant CAN recovery. AP states 3–6 share a continuous session.
+- The opt-in gate fails closed on unknown/stale DAS state. Immediate, retry, and periodic R79 sends recheck authorization and cancellation generation under the shared TX barrier before enqueue.
+- Existing LAB controls/styles show AP blocked, waiting with remaining seconds, and unknown state. R79 AP control stays configured when the LAB navigation menu is hidden; use its own master to restore the original policy.
+- This controls new R79 enqueue admission. Frames already accepted into the hardware/driver queue are not selectively retractable; no global TX queue flush is added for AP transitions.
+- Preserves completed v3.10.2. No device or vehicle validation is implied.
+
+# T2CAN Universal v3.10.2
+
+## Periodic Interval alignment — 2026-10-04
+- Balance the existing field card with its label on the left and editable value on the right, vertically centered on one row.
+- Preserve input bounds, saving, and CAN behavior.
+
+# T2CAN Universal v3.10.1
+
+## Periodic Interval dashboard input styling — 2026-10-04
+- Replaced the unstyled browser-native TSL9 **Periodic Interval** number control with the same full-width field-card component used by Auto Blinker timing inputs.
+- Preserved the existing control ID, 1–600 second bounds, default, and save behavior; CAN scheduling and runtime policy are unchanged.
+- Advanced the firmware and package identity to `v3.10.1`; released `v3.10.0` remains immutable.
+
+# T2CAN Universal v3.10.0
+
+## Universal LAB Country / Map Region — 2026-10-03
+- Based on v3.9.3, with the separate v3.9.2 country experiment ported into LAB.
+- Adds STOCK, US, and KOREA selections across valid Universal vehicle profiles and CAN topologies.
+- Applies country transforms only to received route-local stock frames, preserving unrelated fields and the existing R79 authorization and cancellation barriers.
+- Vehicle acceptance remains unverified; host and target-build evidence is recorded separately.
+
+# T2CAN Universal v3.9.3
+
+## R79 and NAG right-scroll controls — 2026-10-03
+- Added a saved Mode 1 Post-MUX2 reinjection toggle while preserving the existing Mode 1 wait and delay controls. Disabling it cancels pending periodic work through the transport generation barrier.
+- Added Torque-mode **Auto Right Scroll**, shown directly below NAG Method. It supports configurable 1–600 second AP-active periodic injection, immediate injection on a new torque warning, and selectable `+1 → 0 → -1 → 0` or `+1 → -1` waveforms.
+- Added optional periodic injection to TSL9 **Right Speed** only. TSL9 Left Volume remains warning-only and keeps its existing randomized warning repeat behavior.
+- Unified Torque and TSL9 right-scroll output under the timer-owned route scheduler so 100 ms steps, physical-input priority, CENTER cleanup, configuration quiesce, and CAN recovery cannot overlap across producers.
+- Advanced the firmware and package identity to `v3.9.3`; `v3.9.2` remains an immutable prior release.
+
+# T2CAN Universal v3.9.2
+
+## AP profile naming and failed experiment removal — 2026-10-02
+- Renamed the existing Settings feature to **AP Pedal / Regen Profile** while retaining its established API and NVS keys.
+- Removed the failed LAB driving-aggressiveness experiment completely, including its `0x398` detection, `0x3FD` overlays, CAN trace source, API, NVS reads/writes, dashboard controls, helper, and dedicated tests.
+- Existing **AP Pedal / Regen Profile**, TLSSC, and other `0x3FD` behavior remain independent and supported.
+
+# T2CAN Universal v3.9.1.4
+
+## Stable two-mode CAN Research Capture — 2026-10-02
+- Reduced the CAN Research Capture selector to **SNAPSHOT** and **RAW TRANSITION**. The former AUTO ALC and ULC / CONFIRM-FREE choices are no longer accepted by the mode API or shown in LAB.
+- Fixed RAW TRANSITION silently reverting to SNAPSHOT. Both supported modes now share the same fixed PSRAM allocation, avoiding the previous multi-megabyte free/reallocate cycle and its fragmentation/allocation failure path.
+- RAW archive capacity is 163,840 physical CAN A/B RX frames inside the fixed 2.5 MiB main block; the rolling RAW PRE ring remains 32,768 frames. Capture remains RX-only and never transmits CAN.
+- A rejected mode change now displays an explicit browser alert before refreshing authoritative device state instead of silently resetting the selector.
+
+# T2CAN Universal v3.9.1.3
+
+## Model YL driver-window Auto Down field correction — 2026-10-02
+- Replaced the unverified DBC bit-35 overlay with the field observed during a physical Model YL Auto Down second-detent capture: CAN B `0x3C2` MUX0 byte 6 bits `[3:2]` change from neutral value `1` (`0x15`) to Auto Down value `2` (`0x19`).
+- The transform replaces only that two-bit field and preserves every other stock bit. Physical Auto Down input in the same field now blocks the LAB request instead of being misclassified as idle.
+- Existing Model YL Party+VH, PARK, freshness, CAN epoch, LAB, timeout, duplicate-request, generation-barrier, and exactly-two-stock-synchronized-frame policies are unchanged.
+
+# T2CAN Universal v3.9.1.2
+
+## Model YL driver-window LAB Auto Down test — 2026-10-02
+- Fixed the LAB availability gate to recognize Model YL's actual `PARTY + VH` topology directly. The earlier `activeCanBIsChassis()` check could never succeed for YL because its CAN-B route is named VH, not CHASSIS.
+- Added a Model YL-only **LAB → Driver Window Test** action. A confirmed tap arms a RAM-only request; the web task never transmits CAN directly.
+- The CAN B task consumes fresh stock `0x3C2` MUX0 frames, clones the complete eight-byte payload, changes only `VCLEFT_btnWindowSwPackAutoDownLF` at DBC bit 35, and submits exactly two stock-synchronized overlays before returning to untouched stock traffic.
+- The action fails closed unless LAB is enabled, the active profile is Model YL Party+VH, a fresh real gear source reports PARK, the stock template is at most 250 ms old, CAN B is available in the current recovery epoch, no physical window-switch field is active, and no earlier request is pending. These gates are checked again for each transmitted frame; cached physical input also blocks arming.
+- Added LAB diagnostics for availability, pending state, stock/TX raw frames, request/completion/block counts, TX results, and explicit latest-request results. A CAN-task service tick clears stale/expired work without waiting for another frame or browser poll. LAB disable advances a feature-local cancellation generation under the common TX barrier, so an earlier prepared overlay cannot enqueue after cancellation completes.
+
+## CAN task heartbeat and CAN A overflow diagnostic build — 2026-10-02
+- Added timeout snapshots for both CAN tasks: FreeRTOS state, last execution stage and stage age, heartbeat count and maximum gap, loop count and last/maximum loop duration, and stack high-water mark.
+- Added CAN A receive-pressure counters: total frames processed, maximum frames per loop, 32-frame budget exhaustion count, separate RX0/RX1 overflow observations, and receive totals captured at the last overflow observation.
+- Exposed the new evidence through the existing **System Stats JSON** download and included it in **Reset Stats**. CAN routing, transmit policy, task priorities, RX budgets, heartbeat thresholds, and recovery decisions are unchanged.
+
+# T2CAN Universal v3.9.1
+
+## DMS bit43 AP gate — 2026-10-02
+- **Disable Driver Monitoring** now forces `0x3FD` MUX1 bit43 low only while a valid DAS state reports AP active (`3..6`). AP-inactive and AP-invalid states preserve the stock bit43 value.
+- The gate covers both DMS-only fallback transmissions and the final DMS overlay applied to R79 Mode 1/2, retry, Post-MUX2, and ULC clone frames. R79 ownership and transmission policy are unchanged; only the optional DMS bit43 mutation is AP-gated.
+- TSL9 Hands-On, ISA suppression, warning-only input assistance, and owned CENTER cleanup behavior are unchanged.
+
+# T2CAN Universal v3.9.0
+
+## NAG KILL integration work — 2026-10-02
+- Replaced the independent AP Right Scroll feature with TSL9-warning-only input assistance. The default left volume wheel and selectable right speed wheel reproduce the V8.2 `+1 → 0 → -1 → 0` waveform at 100 ms steps, repeat at a randomized 2.0–3.0 seconds, defer to physical input, and never run during ordinary driving.
+- Added an owned retry/cleanup state. A nonzero generated command cannot be discarded on warning clear, AP exit, CAN recovery, send failure, or configuration change: CENTER waits for a fresh route-local MUX1 template and 300 ms of physical-input quiet, retries failed sends at 250 ms, and blocks configuration commit until quiesce completes.
+- Added a saved TSL9 ISA-chime suppression toggle and composed it with Hands-On transformation so the rolling counter and checksum are rebuilt exactly once for the selected `0x399` or `0x39B` CAN ID.
+- Promoted DMS bit43 control from LAB into NAG KILL. It applies to TSL9 and Torque modes A/B/C/H, while R79 remains the sole priority owner: DMS is the final overlay on Mode 1, retry, Post-MUX2, Mode 2 immediate/delayed, and ULC MUX1 clones. DMS-only fallback is zero-wait/no-retry and is admitted only when R79 neither claims the stock generation nor has pending work.
+- Added a mutually exclusive Legacy Model 3/Y TSL9 route selector. Fresh/reset configuration defaults to Body CAN A `0x39B`; Chassis CAN B `0x399` is selectable, and Chassis `0x399` AP/R79 observation remains active in either selection.
+- Added **Reset NVS · Keep S3XY & BLE**. It clears the explicit application/profile/Wi-Fi/diagnostic/schema namespace allowlist while preserving S3XY registry/mappings and BLE bonds. A durable guard is written before the first clear, so an interrupted reset resumes selective cleanup at boot instead of entering the first-Universal full-partition erase path.
+- Bumped the NAG schema to 19, migrated an explicit prior `features/dmsNag43` selection into the production NAG key, added API/dashboard diagnostics, and retained full factory reset plus the existing settings-only reset as separate choices.
+
+# T2CAN Universal v3.8.4
+
+## Legacy Model 3/Y TSL9 Body 0x39B test route — 2026-10-02
+- Model Y Legacy and Model 3 Legacy/HW3 with Body + Chassis now receive, transform, and transmit the gateway-translated DAS status on Body CAN A ID `0x39B`.
+- The TSL9 checksum now includes the actual CAN ID, producing the required `0x39B` checksum while preserving the existing `0x399` result.
+- Model YL remains on Party CAN A `0x399`. Model Y Juniper and Model 3 Highland remain on Chassis CAN B `0x399`. Party + Chassis support policy is unchanged.
+- Chassis `0x399` remains available to the existing AP/R79 state handler on Legacy profiles but no longer triggers a TSL9 transmission there. The dashboard reports `Body CAN A · 0x39B` only for the two Legacy profiles.
+
+## Diagnostics System Stats JSON download — 2026-10-01
+- Added a full-width **System Stats JSON** action under **Settings → Diagnostics → CAN B Recovery**, above the existing two-column recovery and trace controls.
+- The action downloads the existing `/api/system/stats` response as `T2CAN_SYSTEM_STATS.json` through the dashboard's standard download progress flow.
+- No diagnostic values, reset/recovery behavior, CAN routing, or CAN transmission behavior changed.
+
+# T2CAN Universal v3.8.3
+
+## Embedded dashboard build budget — 2026-10-01
+- Raised the strict embedded-dashboard gzip ceiling from **71,350 bytes** to **100,000 bytes** so routine dashboard updates no longer require byte-level optimization at every change.
+- Kept the ceiling exclusive: **99,999 bytes is accepted and 100,000 bytes is rejected**.
+- Made both binary-size regression checks consume the build tool's canonical limit instead of maintaining separate 71,350-byte and 84,000-byte values.
+
+## R79 Home state and Mode 1 default bugfix — 2026-10-01
+- Fixed the Home and LAB R79 state label treating every active transport state as Autopilot. The label now follows the runtime reason: `AUTOPILOT` shows **AP engaged**, `SUMMON` shows **Summon**, an active default state in gear P shows **Park standby**, and other active default states show **Ready**.
+- Kept the established R79 transport policy unchanged. Fresh/default configuration remains **Mode 1**, bit18 **STOCK**, MUX1 **2 ms WAIT**, and Post-MUX2 **150 ms**.
+- Made the dashboard's pre-API Mode 1 wait selection match the firmware default, preventing a user action before the first status refresh from submitting the former 0 ms HTML fallback.
+
+## Selectable TSL9 Hands-On downgrade window — 2026-09-30
+- Added a saved **Entire AP session** toggle under the TSL9 settings. OFF preserves the existing first-12-seconds behavior; ON keeps the Hands-On downgrade active for the full continuous AP state 3–6 session.
+- The window choice is independent from **TSL9 Sequence**: V8.2 Original still changes only 4→1, while Extended still changes 2/3/4→1. AP exit and unsupported/inactive states continue to pass stock 0x399 through unchanged.
+- The choice is stored as `tsl9win`, exposed as `tsl9Window` in the config/status APIs, and applied on both the Model YL MCP2515 route and supported Standard Chassis TWAI route. Existing installations default to the original 12-second window.
+- Tightened generated-dashboard HTML attribute minification without rewriting script/style bodies or self-closing tag endings, keeping the embedded dashboard inside its existing gzip ceiling.
+
+## Standard Body + Chassis AP Right Scroll CAN A test build — 2026-09-30
+- Model Y Juniper, Model Y Legacy, Model 3 Highland, and Model 3 Legacy now receive stock 0x3C2 MUX1 and send generated AP Right Scroll frames on Body CAN A when configured Body + Chassis. Their status API displays BODY.
+- Model YL and Standard Party + Chassis retain their existing CAN B routes. TSL9 0x399 routing and the Party + Chassis TSL9 option policy are unchanged.
+- This expands the previous Legacy Y-only Body route. The 2026 Juniper's actual 0x3C2 Body traffic and vehicle acceptance still require a raw both-bus capture; this is a test build.
+
+## Party + Chassis TSL9 option removal — 2026-09-30
+- Standard Model 3/Y Party + Chassis profiles now expose Torque NAG only. TSL9 is hidden from the NAG method selector, rejected by the method API, and blocked by the existing runtime profile gate.
+- A saved TSL9 choice on this topology resolves to Torque with NAG disabled during configuration loading. YL Party + VH and Standard Body + Chassis retain TSL9 support.
+- The prior Legacy Model Y Body CAN AP Right Scroll test change remains included.
+
+## Legacy Model Y AP Right Scroll Body CAN test build — 2026-09-30
+- For Legacy Model Y with Body + Chassis topology, AP Right Scroll now reads stock 0x3C2 MUX1 from Body CAN A and sends its generated scroll frame on Body CAN A. Model YL and other profiles keep their existing CAN B route; TSL9 0x399 stays on Chassis CAN B.
+- The dashboard and status API show BODY for this route. The feature's saved enable state remains independent from the Nag Killer switch and still defaults OFF.
+- This is a source and OTA test build. The available 2024 capture has no AP-active 0x399 samples and cannot establish whether the generated Body frame is accepted by the vehicle. Body 0x3C2 MUX1 timing in the decoded capture is sparse, so the four-step waveform timing also needs an on-vehicle capture.
+
+## Mobile dashboard stability, Nag layout, and defaults
+- Locked the dashboard's web viewport against pinch/double-tap page zoom on iPhone and Android while preserving normal vertical scrolling and native system accessibility magnification.
+- Fixed the transient white right-side strip, bottom white line, and header/status shift seen when opening a longer page. The old page-slide transform temporarily made a 390 px viewport 402 px wide and exposed the browser's native horizontal/vertical scroll indicators. Main-menu slide/fade motion is restored inside an app-level horizontal clip, root scrolling remains instant, native scrollbars stay hidden, and the root background covers the dynamic viewport.
+- Moved **AP Right Scroll** directly below **Pause at 0 km/h** in Nag Killer. **Advanced Parameters** now keeps its gray description on a separate line, and AP Right Scroll numeric fields use the dashboard card styling with right-aligned values.
+- Fresh/reset/invalid configuration now defaults **R79 bit18** to **STOCK** and **TSL9 Sequence** to **Extended**. Existing valid saved choices remain unchanged.
+- TSL9 hides the torque-only Mode A/B/C/H, Mode H Tuning, and Advanced Parameters content. Its Home signal now displays the decoded 0x399 Hands-On value under the exact label **Hands-On state**; Torque mode retains **Stock torque Nm**.
+
+## R79 Mode 1 selectable MUX1 wait and Post-MUX2 timing
+- Restored the Mode 1 initial-enqueue A/B choice as **FAST ECHO · 0 ms** and **2 ms WAIT**. Existing and fresh installations default to **2 ms WAIT**, preserving the v3.8.2 behavior unless the user changes it.
+- Added a separately saved Mode 1 **POST-MUX2 DELAY** setting. It defaults to 150 ms and accepts strict decimal values from 0–340 ms; empty, signed, non-numeric, and out-of-range inputs are rejected. Mode 2 keeps its independent reinjection toggle and 0–2000 ms delay.
+- Mode 1 now budgets each initial enqueue and queue-flush retry against the absolute quiet-window deadline, so the 340 ms edge setting cannot start or extend a transmit attempt past the existing hard safety boundary.
+- Mode 1 payload policy, manual D/R suppression, authorization, queue-flush recovery, bounded retry, bit18 selection, bit19=0, bit47=1, and DMS/NAG LAB overlay are unchanged. The wait selector changes only the initial MUX1 enqueue attempt.
+- Added API/status fields and NVS keys for both Mode 1 timing choices, reset pending R79 timing state when settings change, and exposed the controls only while Mode 1 is selected.
+- Tightened embedded-dashboard generation by removing standalone JavaScript comments and whitespace between adjacent HTML tags from the generated payload only; the editable dashboard source remains readable.
+
+## Mobile custom-select native-picker guard
+- Fixed the mobile handoff where closing the custom dashboard select sheet synchronously focused its backing native `<select>` and could immediately open the phone's native picker.
+- Closing by option, Cancel, backdrop, or Escape now blurs the active custom-sheet control and never focuses or programmatically clicks the native select.
+- Select activation uses one Pointer Events press path plus a click default-action guard. Browsers without Pointer Events use `touchstart` plus the same click guard, removing the previous simultaneous pointer/mouse/touch listener stack.
+- Native selects remain the saved value and `change` event source, so the existing UI design, API/NVS handlers, toggles, buttons, keyboard selection, and OTA file picker are unchanged.
+
+## Settings navigation — AP Right Scroll
+- Moved **AP Right Scroll** out of the top-level Settings > Features list and into **Settings > Nag Killer**.
+- The existing AP Right Scroll controls, API routes, persistence, TSL9-aware sequence behavior, and CAN runtime are unchanged.
+- The AP Right Scroll back button now returns to Nag Killer instead of the Settings root.
+
+## Universal Body+Chassis NAG method recovery
+- Fixed Standard Model 3/Y **Body + Chassis** profiles booting with the persisted/default **Torque** NAG method even though that topology has no Party-CAN torque route.
+- An unavailable persisted method is now resolved against active-profile capabilities. Body+Chassis falls back to **TSL9 · 0x399** on Chassis CAN B.
+- A method fallback caused by topology migration is fail-safe: NAG is set **OFF** instead of automatically arming the newly selected method. An already-valid saved TSL9 selection keeps its saved enable state.
+- NAG Reset follows the same topology-aware policy, and the update path normalizes stale method state before applying an explicit user enable/disable request.
+- The dashboard mirrors the effective capability: Body+Chassis shows TSL9 as the required method, leaves the NAG enable toggle usable, exposes TSL9 Sequence, and keeps torque-only controls disabled/hidden.
+
+## LAB Driving State layout
+- Fixed the LAB Driving State header where **Active · AP engaged** could overlap a long **Gear UNKNOWN** label on Android/mobile widths.
+- Unknown gear now renders as **N/A**. The gear column is width-bounded and the driving-state value is clipped responsively so the two fields cannot paint over each other.
+
+## iPhone home-screen icon
+- Added the approved TU artwork as a local 180×180 opaque PNG at `/apple-touch-icon.png`, embedded in flash (26,699 bytes).
+- Safari home-screen shortcuts use the icon and the title **Tesla Unlock**. No internet connection or additional filesystem upload is needed.
+- Existing dashboard navigation, Android support, and CAN behavior are unchanged. No service worker, offline dashboard, or standalone-mode change is included.
+- Rebuild assets with `python3 tools/build_dashboard_icon.py` and `python3 tools/build_dashboard.py` (install `tools/requirements-dashboard.txt` to reproduce release compression).
+- After updating firmware, connect to its Wi-Fi and open `http://192.168.4.1` in Safari. Choose Share → Add to Home Screen. Delete and re-add an old shortcut if it retains the previous icon.
+
+## AP Right Scroll restoration and V8.2 TSL9 waveform
+- Restored the independent **Settings > AP Right Scroll** menu. Its runtime gate is again feature enabled + supported CAN-B route + **AP active** + transmitter ready; it does not require Mode H or Nag Killer to be enabled.
+- Outside active TSL9 NAG, the original stock-following UP → DOWN behavior and the narrower visual-warning states **3–5** remain unchanged.
+- While TSL9 NAG is active, the same saved feature switches to a separate V8.2 right-speed sequence: **+1 → 0 → -1 → 0**, with 100 ms between accepted stock-derived transmissions. The two zero stages also reproduce the V8.2 Byte 6 bit 4 center flag.
+- TSL9 warning assistance uses Hands-On states **3–6 and 9–10**. Both paths remain CAN-B-only, yield to physical right-scroll input, and reset on AP exit, CAN recovery, administrative hold, feature disable, or send failure.
+
+## TSL9 V8.2 sequence and Body + Chassis support
+- Added a saved **TSL9 Sequence** selector that appears when the Nag Killer method is TSL9. **V8.2 Original** reproduces the reference behavior exactly: AP states 3–6, the first 12 seconds of the AP session, Hands-On state 4→1 only, rolling-counter increment, and checksum rebuild. **Extended** retains the current 2/3/4→1 behavior.
+- Exposed Nag Killer on every valid Standard Body + Chassis profile. The TSL9 choices use Chassis CAN B; the unsupported steering-torque choice is disabled and its CAN-A injection path remains blocked. Party + Chassis and Model YL retain their existing routes.
+- Shortened the Home unknown-AP title to **AP Unknown** and the LAB R79 no-template state to **Waiting**, preventing the two values from colliding with adjacent mobile-card content.
+- Removed unused hidden Home R79 fields and superseded Home card CSS while keeping the visible state, reason, TX totals, and last-TX age. The embedded dashboard remains within the 71,250-byte optimized gzip contract.
+
+## Separate R79 Mode settings menu
+- Moved the R79 Mode 1 / Mode 2 selector, bit18 policy, and optional Mode 2 MUX2 reinjection timing from Summon Monitor into a dedicated **Settings > R79 Mode** panel.
+- Summon Monitor is now a read-only session, gear, route, source, and queue monitor. Its panel no longer owns or refreshes the R79 configuration controls.
+- Split panel polling so Summon Monitor requests Summon status only, while R79 Mode requests R79 status only. The transmit policies, persistence keys, API routes, and manual D/R suppression behavior are unchanged.
+
+## Hidden Home Live details removal
+- Removed the permanently hidden Home Live details card, its eight DOM values, toggle handler, renderer, and writes from the NAG, TSL9, Auto Blinker, Summon, and S3XY refresh paths.
+- Home polling no longer sends `live=1`. Removed the corresponding `homeLiveSnapshotToJson()` builder and optional `live` response while preserving the documented `home-lite` path for cached legacy dashboards.
+- Rebuilt the dashboard to **71,219 bytes gzip**, down from **71,887 bytes**. The OTA application image is **1,450,320 bytes**, down by another **1,280 bytes**, while global RAM remains **71,440 bytes**.
+
+## Asset and no-op UI cleanup
+- Subset the embedded Geist and Geist Mono WOFF2 fonts to printable ASCII plus the symbols used by the current dashboard. The two font payloads total **34,956 bytes**, down from **52,396 bytes**, without changing the font families or CSS routes.
+- Removed 135 calls to the intentionally empty dashboard `toast()` function and removed the empty function itself. Visible control state, progress, confirmation sheets, and reconnect screens remain the dashboard's feedback paths.
+- Removed 67 CSS rules whose class names have no production markup or JavaScript reference. The readable JavaScript source remains unminified for maintainability.
+- Rebuilt the dashboard to **71,887 bytes gzip**, down from **74,320 bytes**. The final OTA application image is **1,451,600 bytes**, down by **20,000 bytes**, while global RAM remains **71,440 bytes**.
+
+## Conservative binary optimization
+- Disabled C++ exceptions for the complete Arduino target with `build_opt.h`. The firmware does not use exception handling, and no feature, font, Wi-Fi, BLE, CAN, or dashboard code was removed.
+- Rebuilt the embedded dashboard with deterministic Zopfli gzip compression. Its standard gzip payload is **74,320 bytes**, down from **77,084 bytes**, and is still served by the existing firmware path without runtime decompression changes.
+- The final OTA application image is **1,471,600 bytes**, down from **1,542,560 bytes** in the supplied build. `-fno-use-cxa-atexit` was deliberately excluded from the production build because its additional saving was small and it changes static-object teardown semantics.
+
+## TSL9 NAG and selectable R79 Mode 2
+- Added a saved Nag Killer method selector. **Torque · existing** keeps the current implementation; **TSL9 · 0x399 Hands-On** uses the V8.2-style AP-session window, changes Hands-On states 2/3/4 to 1, advances the rolling counter, and rebuilds the checksum. The two methods never transmit together.
+- Model YL runs TSL9 on Party CAN A (MCP2515). Standard Party + Chassis profiles run it on Chassis CAN B (TWAI); profiles where Nag Killer is already unsupported remain unchanged.
+- Added saved R79 **Mode 1** and **Mode 2** choices. Mode 2 performs one zero-wait clone immediately after each stock 0x3FD MUX1, preserves bit18, clears bit19, sets bit47, and does not use version detection, queue flushing, or scheduled retries.
+- Mode 2 can optionally schedule one MUX1-template reinjection after a stock MUX2. The delay is user-selectable from 0 to 2000 ms and defaults to 150 ms; the option is off by default. The existing manual D/R suppression policy applies to immediate and delayed Mode 2 attempts.
+
+## Final v3.8 firmware package
+- Built the approved dashboard and vehicle code as a fresh ESP32-S3 OTA application image, `T2CAN-Universal-v3.8-LP_YL-OTA.bin`.
+- The final build retains the v3.8 identity, Mode H Rev.4 fresh-install NAG default, persistent 4 FRAMES / IMMEDIATE CAN A RX choice, and the current dashboard source. The offline AP/model simulator remains preview-only.
+- Refreshed the source archive and checksums alongside the OTA file. No vehicle flash or road validation is implied by this build.
+
+## Wireless reset card and floating navigation clearance
+- Increased the Reset Bluetooth Data row's vertical and horizontal padding so its wrapped description has space inside the rounded card.
+- Increased bottom scroll padding for all detail panels and the pairing wizard. The floating navigation begins 86 px above the viewport bottom, while panel content now has 120 px of bottom padding plus the phone safe area.
+- Regenerated the offline preview, embedded dashboard, and OTA application image.
+
+## Wireless overview row balance
+- Removed the one-off padding on Bluetooth Master. All four Wireless overview rows now share the same minimum height, vertical padding, and 18 px horizontal inset.
+- The row separators follow that inset rather than spanning the full rounded card. Bluetooth Master and S3XY Auto Connect descriptions are short enough to keep the two-line title/description layout consistent at normal phone widths.
+- Rebuilt the embedded dashboard, offline simulator preview, and OTA application image.
+
+## Wireless overview and choice-button polish
+- Shortened the Bluetooth Master description to "Applies instantly. Saved pairings remain." and added top space inside the first rounded Wireless card row.
+- Removed the background and border from unselected Appearance and Dashboard Polling Rate choices; only the selected choice has a filled pill.
+- The offline simulator now returns a Wi-Fi SSID and the BLE initialized state, so its Wireless overview no longer shows an undefined SSID or a false idle state.
+
+## Settings choice buttons and profile separator
+- Settings removes the separator above Auto Blinker when the vehicle profile hides Nag Killer.
+- Appearance and Dashboard Polling Rate now show three inline choice buttons below their descriptions. The current saved choice is highlighted on load; selecting a button applies and stores the value through the existing handlers.
+- The production dashboard, embedded header, offline Home simulator preview, and OTA application binary were rebuilt from the same source.
+
+## Offline Home preview controls
+- Added a preview-only panel outside the dashboard for AP OFF / AUTOSTEER / NOA and all five supported vehicle models. Standard models also expose Body + Chassis versus Party + Chassis, and Model 3 Highland Body + Chassis exposes Stalk versus Stalkless.
+- AP changes update the mock Home data immediately; model and wiring changes reload the preview so the production profile gates and CAN labels are reapplied from boot. Corrected the preview Home snapshot envelope to match the production dashboard API.
+- The production dashboard source, embedded HTML header, and OTA firmware remain unchanged by this preview-only addition.
+
+## Dashboard appearance preference
+- Added **Settings > System > Appearance** with **FOLLOW PHONE**, **LIGHT**, and **DARK** choices. FOLLOW PHONE remains the default and updates live when the phone's appearance changes.
+- The choice is stored in the viewing browser's local storage and applied before dashboard CSS loads, including after controller reboot or firmware update on the same browser. Manual LIGHT or DARK ignores phone appearance changes until FOLLOW PHONE is selected again.
+- The chosen theme now drives page colors, AP-state color palettes, the setup and reconnect screens, native form color scheme, and the browser theme color.
+
+## Dashboard selection and firmware file controls
+- Replaced the operating-system popup for all 17 dashboard setting selectors with a rounded selection sheet matching the v3.8 cards. The existing select values, change handlers, disabled states, and saved settings remain the source of truth.
+- Replaced the browser's default OTA file input presentation with a matching Choose .bin file button and an updating filename label. The existing `.bin` filter and upload/flash request are unchanged.
+
+## Dark button text contrast
+- Removed the new skin's broad button text-color override, which was taking precedence over the white-on-dark styling of profile setup and other legacy button components.
+- Disabled buttons now retain their own text color and use a lighter opacity so the label stays readable on dark backgrounds.
+
+## Dashboard style cleanup and Nag Killer rebuild
+- Removed 18 superseded style layers from the dashboard source. The offline preview and embedded firmware now use the same three style blocks, so preview-only legacy styling can no longer mask missing production styles.
+- Rebuilt the Nag Killer detail page around the supplied demo structure: enabled and pause controls, Mode A/B/C and Mode H choices, saved Rev.1/3/4 profile choices, behavior summary, live monitor, and dedicated tuning and advanced parameter links.
+- Added a shared detail-page component layer for row typography, forms, monitor values, and directional transitions. Existing firmware API calls and saved setting behavior remain connected to their original controls.
+
+## Supplied LAB HTML match
+- Removed the legacy 7 px left margin from the Settings vehicle model name so its first character aligns with the profile label and firmware version above and below it.
+- Rebuilt the LAB overview against the supplied `T2CAN Dashboard Demo.html`. The driving card now uses the reference's 30 px status/gear text, three 76 px separate rounded lane cells, 6 px cell gaps, compact `ALC STATE` label, paired `0x399`/`0x239 age` footer, and matching Research Tools row typography.
+- Overrode the older LAB CSS selectors, including the ID-specific `#alcStateBig` rule that kept centering and enlarging text after the previous visual update. Removed the extra side-cell lane detail lines and the Research Tools helper line from the overview.
+- Changed the DMS and CAN A overview rows to the reference's value-and-chevron layout. Their saved toggle and receive-method selector remain functional in dedicated LAB detail pages.
+- Embedded the supplied Latin Geist and Geist Mono font faces as local WOFF2 resources. The dashboard and the new standalone preview use the same faces without an internet connection.
+
+## Hard Init AP display continuity
+- Home now keeps the last confirmed AP presentation while CAN Hard Init is running and through a bounded 10-second recovery grace period. A newly accepted `0x399` frame replaces the cached presentation immediately.
+- The cache is presentation-only. Hard Init still invalidates the functional AP/NOA state and closes NAG, Auto Blinker, R79, and other CAN-transmit gates exactly as before.
+- Added separate Home snapshot fields for the display state, leaving the existing live `dasStateValid` / `dasState` fields and control logic unchanged.
+- Locked the LAB overview to the approved mockup: left-aligned driving state, right-aligned gear, three separate rounded LEFT / ALC STATE / RIGHT cells, paired freshness values, and the inset Research Tools list.
+
+## Approved-demo layout parity correction
+- Removed the 50 px iPhone mock status-bar offset from production page and detail-panel spacing. Main content now begins 8 px below the real 48 px fixed header.
+- Rebuilt the Home R79 summary as the approved horizontal card with state copy on the left and TX counters on the right. Removed legacy column-direction leakage and restored content-height CAN cards, value-first metrics, demo spacing, and single-color header status dots.
+- Rebuilt the LAB overview with three separated direction/state cells, paired `0x399` and `0x239` freshness values, inset research-tool list separators, the compact DMS row, and the demo-style CAN A RX selector row.
+- Matched the approved navigation width/gaps and applied the same inset list construction to Settings cards without changing firmware endpoints or feature gates.
+
+## 2027 dashboard production release
+- Promoted the approved 2027 dashboard to the v3.8 production UI while retaining the existing firmware APIs and vehicle-profile capability gates.
+- The fixed header now shows only **TESLA UNLOCK**, Home CAN frame ages occupy their own second line, CAN A/B sit above the unified R79 card, unsupported NAG/Auto Blinker controls remain hidden, and the obsolete Home Live Details card is no longer displayed.
+- Removed transient dashboard toast messages. Controls now communicate through their visible state, saved selection, progress area, confirmation sheet, or reconnect screen.
+- Retained directional detail-panel transitions, reduced the Home feature-label-to-toggle gap, and removed premature capability labels from the first vehicle-selection card.
+
+## NAG Killer production default
+- Fresh NVS, invalid persisted mode/variant fallback, NAG reset, Settings reset, and Factory Reset now select **Mode H · Rev.4**.
+- A valid mode and Mode H revision already saved by an existing installation remain unchanged across OTA, including a deliberately selected Rev.1 or Rev.3 profile.
+- Rev.4 tuning remains the established production profile: opposite carrier, TIERED Hands-On policy, Visual Warning Rescue, and HARD PAUSE while stopped.
+
+# T2CAN Universal v3.7.3
+
+## 2027 full-bleed dashboard
+- Replaced the four main dashboard pages with the supplied 2027 full-bleed visual system: live STANDBY / AUTOSTEER / NOA field colors, compact fixed header, floating four-tab navigation, larger state typography, tinted cards, and the new Home, Devices, Settings, and LAB layouts.
+- Preserved all 77 existing dashboard API endpoints, DOM control IDs, polling groups, warning dialogs, feature panels, profile setup, OTA, and diagnostic flows. Settings and LAB navigation remain real buttons wired to the existing page controller.
+- Kept the persistent LAB CAN A receive selector available across every profile with the labels **4 FRAMES** and **IMMEDIATE**.
+- Added browser regression coverage for AP-state presentation, all four navigation tabs, device-card rendering, and the CAN A receive update request. Superseded style layers are omitted from the embedded build to keep the dashboard below its flash budget.
+
+## CAN A RX LAB comparison variant
+- LAB now selects **CURRENT · 4 FRAMES** or **3.6c7 · IMMEDIATE** for the MCP2515 CAN A read loop. The latter reads one frame and runs the existing observers, decoders, and NAG logic before reading the next frame.
+- The selection is saved in `features/canARxMode` and restored after reboot. Missing or invalid storage defaults to the current four-frame method. Disabling LAB makes the effective method four-frame while retaining the saved selection for the next LAB session.
+- Both methods keep the existing 32-frame task yield limit. This switch is a diagnostic comparison; it does not claim to fix NAG on HW3 Model Y without vehicle testing.
+
+## Auto Blinker TX policy promoted to Settings
+- Promoted the former LAB-only **Single TX / 350 ms Burst** selector to **Settings > Auto Blinker** and made it the shared production policy for Auto Blinker and direct S3XY left/right requests.
+- Persisted the selection in Preferences/NVS as `features/blinkTx` (`0` = Single TX, `1` = 350 ms Burst). A missing or invalid value defaults to **Single TX on Model YL** and **350 ms Burst on every other supported Model 3/Y profile**.
+- The update API now writes and verifies NVS before changing runtime state. A persistence error leaves the active policy unchanged, and switching to Single TX atomically cancels an active burst.
+- On Model 3 Highland stalkless configurations, Single TX now overlays one accepted live `0x3C2` mux1 frame with the requested ON state; the following stock frame supplies the natural release. Physical steering-wheel input retains priority.
+- Moved operational TX mode/source/result/request/blocked counters into the official Auto Blinker status and removed the former LAB routes, panel, polling, and LAB-disable reset behavior.
+
+## Focused source cleanup
+- Removed unconsumed R79 0x7FF observation, dead bit mirrors/latency probes/TX-success attribution, stale dashboard writes, obsolete forward declarations, unused constants, and production helpers referenced only by tests.
+- Consolidated stock-synchronized stalk frame preparation and common result bookkeeping while retaining separate CAN A and CAN B physical send paths.
+- Consolidated duplicate CAN trace raw formatting, vehicle capability JSON fields, and shared Mode H Rev.3/Rev.4 JSON fields without changing public key order.
+- Added host regression coverage for exact left/right stalk bytes, persistence fallback/transition behavior, official API/UI placement, and the reviewed dead-code inventory.
+
 # T2CAN Universal v3.7.2
 
 ## Auto Blinker / S3XY profile-default TX policy

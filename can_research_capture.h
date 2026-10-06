@@ -45,7 +45,7 @@ static constexpr uint32_t RESEARCH_CAPTURE_ULC_CONFIRM_PRE_MS = 3000;
 static constexpr uint32_t RESEARCH_CAPTURE_ULC_CONFIRM_POST_MS = 7000;
 static constexpr uint32_t RESEARCH_CAPTURE_AUTO_LANE_FRESH_MS = 1000;
 static constexpr uint32_t RESEARCH_CAPTURE_AUTO_PERSIST_MS = 300;
-static constexpr uint32_t RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY = 360448;
+static constexpr uint32_t RESEARCH_CAPTURE_RAW_ARCHIVE_CAPACITY = 163840;
 static constexpr uint32_t RESEARCH_CAPTURE_RAW_PRE_CAPACITY = 32768;
 static constexpr uint8_t  RESEARCH_CAPTURE_RAW_MAX_SEGMENTS = 8;
 
@@ -115,15 +115,26 @@ static constexpr size_t RESEARCH_CAPTURE_RAW_AUX_BYTES = sizeof(ResearchCaptureR
 static constexpr size_t RESEARCH_CAPTURE_LATEST_BYTES = sizeof(ResearchCaptureLatest) * RESEARCH_CAPTURE_STATE_COUNT;
 static constexpr size_t RESEARCH_CAPTURE_KNOWN_BYTES = sizeof(uint16_t) * RESEARCH_CAPTURE_STATE_COUNT;
 
-// v3.3 optimization: allocate the large archive/pre-history blocks for the
-// selected capture mode instead of permanently reserving the RAW maximum.
-// Snapshot capacity and RAW capacity are unchanged.
+// SNAPSHOT and RAW TRANSITION share one fixed allocation. Keeping the two
+// backing blocks stable avoids a multi-megabyte free/reallocate cycle on a
+// running controller, where PSRAM fragmentation could reject RAW mode and
+// silently leave the dashboard in SNAPSHOT. RAW uses only the capacity it
+// needs inside these fixed blocks.
+static constexpr size_t RESEARCH_CAPTURE_FIXED_MAIN_BYTES = RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES;
+static constexpr size_t RESEARCH_CAPTURE_FIXED_AUX_BYTES = RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES;
+static_assert(RESEARCH_CAPTURE_RAW_MAIN_BYTES <= RESEARCH_CAPTURE_FIXED_MAIN_BYTES,
+              "RAW archive exceeds fixed capture main block");
+static_assert(RESEARCH_CAPTURE_RAW_AUX_BYTES <= RESEARCH_CAPTURE_FIXED_AUX_BYTES,
+              "RAW PRE ring exceeds fixed capture aux block");
+
 static inline size_t researchCaptureMainBytesForMode(uint8_t mode) {
-  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC || mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM) ? RESEARCH_CAPTURE_RAW_MAIN_BYTES : RESEARCH_CAPTURE_SNAPSHOT_MAIN_BYTES;
+  (void)mode;
+  return RESEARCH_CAPTURE_FIXED_MAIN_BYTES;
 }
 
 static inline size_t researchCaptureAuxBytesForMode(uint8_t mode) {
-  return (mode == RESEARCH_CAPTURE_MODE_RAW_TRANSITION || mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC || mode == RESEARCH_CAPTURE_MODE_ULC_CONFIRM) ? RESEARCH_CAPTURE_RAW_AUX_BYTES : RESEARCH_CAPTURE_SNAPSHOT_AUX_BYTES;
+  (void)mode;
+  return RESEARCH_CAPTURE_FIXED_AUX_BYTES;
 }
 
 struct __attribute__((packed)) ResearchCapturePreSlot {
@@ -350,12 +361,7 @@ static void researchCaptureLoadConfig() {
   }
   if (!researchCapturePreWindowSupported(preMs)) preMs = RESEARCH_CAPTURE_PRE_DEFAULT_MS;
   if (!researchCapturePostWindowSupported(postMs)) postMs = RESEARCH_CAPTURE_POST_DEFAULT_MS;
-  if (mode != RESEARCH_CAPTURE_MODE_SNAPSHOT && mode != RESEARCH_CAPTURE_MODE_RAW_TRANSITION &&
-      mode != RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC && mode != RESEARCH_CAPTURE_MODE_ULC_CONFIRM)
-    mode = RESEARCH_CAPTURE_MODE_SNAPSHOT;
-  // RAW AUTO ALC decodes YL-specific CAN A (Party) 0x239/0x399 semantics.
-  // If a stored YL mode follows a later profile change, fail closed at runtime.
-  if (mode == RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC && !activeProfileIsYl())
+  if (mode != RESEARCH_CAPTURE_MODE_SNAPSHOT && mode != RESEARCH_CAPTURE_MODE_RAW_TRANSITION)
     mode = RESEARCH_CAPTURE_MODE_SNAPSHOT;
   researchCapturePreWindowMs = preMs;
   researchCapturePostWindowMs = postMs;
@@ -407,8 +413,7 @@ static void researchCaptureReleaseModeBuffers();
 static bool researchCaptureEnsureBuffer();
 
 static bool researchCaptureSetMode(uint8_t mode) {
-  if (mode != RESEARCH_CAPTURE_MODE_SNAPSHOT && mode != RESEARCH_CAPTURE_MODE_RAW_TRANSITION &&
-      mode != RESEARCH_CAPTURE_MODE_RAW_AUTO_ALC && mode != RESEARCH_CAPTURE_MODE_ULC_CONFIRM) return false;
+  if (mode != RESEARCH_CAPTURE_MODE_SNAPSHOT && mode != RESEARCH_CAPTURE_MODE_RAW_TRANSITION) return false;
   uint8_t oldMode;
   portENTER_CRITICAL(&researchCaptureMux);
   if (researchCaptureState == RESEARCH_CAPTURE_CAPTURING || researchCaptureConfigUpdating || researchCaptureExporting) {
@@ -424,10 +429,8 @@ static bool researchCaptureSetMode(uint8_t mode) {
   researchCaptureMode = mode;
   portEXIT_CRITICAL(&researchCaptureMux);
 
-  // Resize the mode-specific buffers first. NVS is updated only after the new
-  // allocation succeeds, so an allocation failure cannot persist a mode that
-  // would fail again on the next boot.
-  researchCaptureReleaseModeBuffers();
+  // Both supported modes share the same fixed buffers, so switching mode must
+  // not free and reallocate multi-megabyte PSRAM blocks on a running device.
   const bool bufferOk = researchCaptureEnsureBuffer();
   bool saved = false;
   if (bufferOk) {
@@ -442,7 +445,6 @@ static bool researchCaptureSetMode(uint8_t mode) {
     portENTER_CRITICAL(&researchCaptureMux);
     researchCaptureMode = oldMode;
     portEXIT_CRITICAL(&researchCaptureMux);
-    researchCaptureReleaseModeBuffers();
     (void)researchCaptureEnsureBuffer();
   }
 
