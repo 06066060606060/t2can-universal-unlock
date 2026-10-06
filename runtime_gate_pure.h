@@ -99,14 +99,24 @@ enum McpTxResultReason : uint8_t {
   MCP_TX_SEND_ERROR = 6
 };
 
-static inline McpTxResultReason mcpTxResultReasonPure(
+static inline McpTxResultReason mcpTxResultReasonMaskedPure(
     bool msgValid, bool mutexAcquired, bool mcpReady, uint32_t currentEpoch,
-    uint8_t freshMask, uint32_t expectedEpoch, bool sendOk) {
+    uint8_t freshMask, uint32_t expectedEpoch, uint8_t requiredFreshMask, bool sendOk) {
   if (!msgValid) return MCP_TX_INVALID_MSG;
   if (!mutexAcquired) return MCP_TX_MUTEX_BUSY;
   if (!mcpReady) return MCP_TX_MCP_NOT_READY;
   if (currentEpoch != expectedEpoch) return MCP_TX_EPOCH_MISMATCH;
-  if (freshMask != 0x03u) return MCP_TX_FRESH_MASK;
+  if (requiredFreshMask == 0 ||
+      (uint8_t)(freshMask & requiredFreshMask) != requiredFreshMask) return MCP_TX_FRESH_MASK;
   if (!sendOk) return MCP_TX_SEND_ERROR;
   return MCP_TX_OK;
+}
+
+// Legacy two-bus admission helper retained for host/runtime compatibility.
+static inline McpTxResultReason mcpTxResultReasonPure(
+    bool msgValid, bool mutexAcquired, bool mcpReady, uint32_t currentEpoch,
+    uint8_t freshMask, uint32_t expectedEpoch, bool sendOk) {
+  return mcpTxResultReasonMaskedPure(
+      msgValid, mutexAcquired, mcpReady, currentEpoch, freshMask,
+      expectedEpoch, 0x03u, sendOk);
 }

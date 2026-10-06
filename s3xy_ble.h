@@ -1450,7 +1450,7 @@ static bool s3xyMapperInit() {
   if (!s3xyBluetoothMasterIsEnabled()) return false;
   // Keep compatibility with Arduino-ESP32 BLEDevice versions where init()
   // returns void. Master OFF is implemented as a boot-time no-init state.
-  BLEDevice::init("T2CAN_S3XY_MULTI");
+  BLEDevice::init("TMR_S3XY_MULTI");
 #if S3XY_DIAGNOSTICS_ENABLED
   // Compile-time stack name keeps this diagnostic compatible with Arduino-ESP32
   // releases that predate BLEDevice::getBLEStackString().
@@ -2498,9 +2498,9 @@ static void s3xyResetAllBluetoothData() {
 #endif
   portEXIT_CRITICAL(&s3xyMux);
 
-  T2CAN_SERIAL_PRINTF("S3XY: Bluetooth data reset complete; removed bonds=%u; rebooting\n", (unsigned)removedBonds);
+  TMR_SERIAL_PRINTF("S3XY: Bluetooth data reset complete; removed bonds=%u; rebooting\n", (unsigned)removedBonds);
   vTaskDelay(pdMS_TO_TICKS(500));
-  restartT2CanSafely();
+  restartTmrCanSafely();
 }
 
 static bool s3xyQueueCommand(uint8_t type, int8_t slot = -1, const char *address = nullptr) {

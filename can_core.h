@@ -1,3 +1,11 @@
+
+
+#ifndef CAN_EFF_FLAG
+#define CAN_EFF_FLAG 0x80000000UL
+#endif
+#ifndef CAN_RTR_FLAG
+#define CAN_RTR_FLAG 0x40000000UL
+#endif
 #pragma once
 
 // BOOT CAPTURE / CAN CORE / NAG
@@ -143,7 +151,20 @@ static constexpr uint32_t MCP_SPI_HZ = 10000000;
 
 static constexpr uint8_t MCP_RX_BUDGET = 32;
 
-static MCP2515 Can_A(MCP2515_CS, MCP_SPI_HZ, &SPI);
+// TMR physical CAN map:
+//   Can_A = J2 BODY
+//   Can_B = J3 CHASSIS
+//   Can_C = J4 PARTY
+static MCP2515 Can_A(MCP2515_BODY_CS, MCP_SPI_HZ, &SPI);
+static MCP2515 Can_B(MCP2515_CHASSIS_CS, MCP_SPI_HZ, &SPI);
+static MCP2515 Can_C(MCP2515_PARTY_CS, MCP_SPI_HZ, &SPI);
+static volatile bool mcpPartyReady = false;
+static volatile uint8_t mcpPartyState = 0; // 0=OK, 1=WARN, 2=BUS-OFF
+static volatile uint32_t mcpPartyTxOk = 0;
+static volatile uint32_t mcpPartyTxFail = 0;
+static volatile uint32_t mcpPartyRxCount = 0;
+static volatile uint32_t mcpBodyRxCount = 0;
+static unsigned long lastMcpPartyRecoverMs = 0;
 static volatile uint8_t  mcpState = 0;      // 0=OK, 1=WARN, 2=BUS-OFF
 static volatile uint32_t mcpTxOk = 0;
 static volatile uint32_t mcpTxFail = 0;
@@ -183,6 +204,127 @@ static void mcpRxOverflowReset() {
   mcpRxOverflowLastFlags = 0;
   portEXIT_CRITICAL(&mcpRxOverflowMux);
 }
+
+
+static volatile bool canTxAdministrativeHold = false;
+
+// ═══════════════════════════════════════════════════════════════
+// TMR CHASSIS COMPATIBILITY SHIM
+//
+// The application historically used ESP32 CHASSIS types/functions for logical
+// CAN B. On TMR logical CAN B is the physical J3 CHASSIS MCP2515 (Can_B).
+//
+// BODY/VH is handled separately through Can_A; it is never silently redirected
+// through the CHASSIS transport.
+// ═══════════════════════════════════════════════════════════════
+static inline void tmrCanFrameToChassis(const struct can_frame &in, struct can_frame &out) {
+  memset(&out, 0, sizeof(out));
+  out.can_id = (uint32_t)(in.can_id & 0x7FFu);
+  out.can_dlc = min((uint8_t)8, in.can_dlc);
+  memcpy(out.data, in.data, out.can_dlc);
+}
+
+static inline void tmrChassisToCanFrame(const struct can_frame &in, struct can_frame &out) {
+  memset(&out, 0, sizeof(out));
+  out.can_id = (uint32_t)(in.can_id & 0x7FFu);
+  out.can_dlc = min((uint8_t)8, in.can_dlc);
+  memcpy(out.data, in.data, out.can_dlc);
+}
+
+static inline MCP2515 *tmrLogicalVhMcp() {
+  // TMR has one physical BODY bus and VH is an alias of BODY for every profile.
+  // CHASSIS remains a separate physical MCP2515 on J3 and is handled by the
+  // dedicated CHASSIS RX/recovery task.
+  return &Can_A;
+}
+
+static esp_err_t mcpChassisInit() {
+  // SPI is started once for all three controllers by setup().
+  const MCP2515::ERROR r = Can_B.reset();
+  delay(1);
+  const MCP2515::ERROR b = (r == MCP2515::ERROR_OK)
+      ? Can_B.setBitrate(CAN_500KBPS, MCP_CLOCK) : r;
+  const MCP2515::ERROR m = (b == MCP2515::ERROR_OK)
+      ? Can_B.setNormalMode() : b;
+  mcpChassisReady = r == MCP2515::ERROR_OK &&
+              b == MCP2515::ERROR_OK &&
+              m == MCP2515::ERROR_OK;
+  return mcpChassisReady ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t mcpChassisStart(void) {
+  mcpChassisReady = true;
+  return ESP_OK;
+}
+
+static esp_err_t mcpChassisStop(void) {
+  mcpChassisReady = false;
+  return ESP_OK;
+}
+
+static esp_err_t mcpChassisDeinit(void) {
+  mcpChassisReady = false;
+  return ESP_OK;
+}
+
+static esp_err_t mcpChassisReceive(struct can_frame *message, TickType_t ticks_to_wait) {
+  if (!message || !mcpChassisReady) return ESP_ERR_INVALID_STATE;
+  struct can_frame f = {};
+  MCP2515::ERROR e = Can_B.readMessage(&f);
+  if (e == MCP2515::ERROR_OK) {
+    tmrCanFrameToChassis(f, *message);
+    return ESP_OK;
+  }
+  if (ticks_to_wait) vTaskDelay(ticks_to_wait);
+  return ESP_ERR_TIMEOUT;
+}
+
+static esp_err_t mcpChassisTransmit(const struct can_frame *message, TickType_t) {
+  if (!message) return ESP_ERR_INVALID_ARG;
+  if (!mcpChassisReady || canTxAdministrativeHold) return ESP_ERR_INVALID_STATE;
+  struct can_frame f = {};
+  tmrChassisToCanFrame(*message, f);
+  return Can_B.sendMessage(&f) == MCP2515::ERROR_OK ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t mcpChassisReadAlerts(uint32_t *alerts, TickType_t) {
+  if (!alerts) return ESP_ERR_INVALID_ARG;
+  *alerts = 0;
+  if (!mcpChassisReady) return ESP_ERR_INVALID_STATE;
+  if (Can_B.getErrorFlags() & MCP2515::EFLG_TXBO) *alerts |= MCP_CHASSIS_ALERT_BUS_OFF;
+  return ESP_OK;
+}
+
+static esp_err_t mcpChassisReconfigureAlerts(uint32_t, QueueHandle_t) {
+  return ESP_OK;
+}
+
+static esp_err_t mcpChassisGetStatus(McpChassisStatus *status_info) {
+  if (!status_info) return ESP_ERR_INVALID_ARG;
+  memset(status_info, 0, sizeof(*status_info));
+  const uint8_t eflg = mcpChassisReady ? Can_B.getErrorFlags() : 0;
+  status_info->state = !mcpChassisReady ? MCP_CHASSIS_STATE_STOPPED :
+      ((eflg & MCP2515::EFLG_TXBO) ? MCP_CHASSIS_STATE_BUS_OFF : MCP_CHASSIS_STATE_RUNNING);
+  return ESP_OK;
+}
+
+static esp_err_t mcpChassisRecover(void) {
+  const MCP2515::ERROR r = Can_B.reset();
+  delay(1);
+  const MCP2515::ERROR b = (r == MCP2515::ERROR_OK)
+      ? Can_B.setBitrate(CAN_500KBPS, MCP_CLOCK) : r;
+  const MCP2515::ERROR m = (b == MCP2515::ERROR_OK)
+      ? Can_B.setNormalMode() : b;
+  mcpChassisReady = r == MCP2515::ERROR_OK &&
+              b == MCP2515::ERROR_OK &&
+              m == MCP2515::ERROR_OK;
+  return mcpChassisReady ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t mcpChassisClearTxQueue(void) {
+  return ESP_OK; // MCP2515 has no software TX queue in this architecture.
+}
+
 
 // All feature TX reaches the hardware through these two functions. The caller
 // passes the recovery epoch captured before its authorization decision. The
@@ -235,14 +377,14 @@ static volatile uint32_t canBTxTraceSeq = 0;
 static volatile uint32_t canBTxTraceFrozenMs = 0;
 static volatile uint32_t canBTxTraceFrozenBusOffOrdinal = 0;
 
-static void canBTraceRecordTx(const twai_message_t *msg, esp_err_t result,
+static void canBTraceRecordTx(const struct can_frame *msg, esp_err_t result,
                               uint8_t traceSource = CAN_TX_TRACE_SOURCE_DEFAULT) {
   if (!msg) return;
   CanBTxTraceEntry e = {};
   e.seq = __atomic_add_fetch(&canBTxTraceSeq, 1U, __ATOMIC_RELAXED);
   e.capturedMs = (uint32_t)millis();
-  e.id = (uint16_t)(msg->identifier & 0x7FFU);
-  e.dlc = (uint8_t)min((uint8_t)8, (uint8_t)msg->data_length_code);
+  e.id = (uint16_t)(msg->can_id & 0x7FFU);
+  e.dlc = (uint8_t)min((uint8_t)8, (uint8_t)msg->can_dlc);
   e.source = traceSource;
   e.result = (int32_t)result;
   if (e.dlc) memcpy(e.data, msg->data, e.dlc);
@@ -334,7 +476,7 @@ static void canATraceReset() {
   canAMcpBusOffCount = 0;
 }
 
-static volatile bool canTxAdministrativeHold = false;
+
 // Sticky until reboot: configuration handlers cannot release maintenance hold.
 static bool canMaintenanceRequested = false;
 static bool canMaintenanceSupervisorParked = false;
@@ -362,8 +504,8 @@ static void setCanTxAdministrativeHold(bool hold) {
   }
 }
 
-static esp_err_t canTxTwaiTransmitWithMaskTagged(
-    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
+static esp_err_t canTxChassisTransmitWithMaskTagged(
+    const struct can_frame *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
     uint8_t traceSource) {
   if (!msg) return ESP_ERR_INVALID_ARG;
   if (canTxAdministrativeHold) {
@@ -375,9 +517,9 @@ static esp_err_t canTxTwaiTransmitWithMaskTagged(
     return ESP_ERR_TIMEOUT;
   }
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
+  if (!canTxAdministrativeHold && mcpChassisReady &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask))
-    err = twai_transmit(msg, 0);
+    err = mcpChassisTransmit(msg, 0);
   xSemaphoreGive(canTxBarrierMutex);
   canBTraceRecordTx(msg, err, traceSource);
   return err;
@@ -385,7 +527,7 @@ static esp_err_t canTxTwaiTransmitWithMaskTagged(
 
 // Feature-local cancellation guard. Advancing a generation takes the same
 // barrier as enqueue, so after cancellation returns no decision prepared under
-// the previous generation can reach TWAI.
+// the previous generation can reach CHASSIS.
 static uint32_t canTxCancellationGenerationSnapshot(
     const volatile uint32_t *generation) {
   return generation
@@ -406,8 +548,8 @@ static void canTxCancellationGenerationAdvance(
   }
 }
 
-static esp_err_t canTxTwaiTransmitWithMaskTaggedGuarded(
-    const twai_message_t *msg, uint32_t expectedEpoch,
+static esp_err_t canTxChassisTransmitWithMaskTaggedGuarded(
+    const struct can_frame *msg, uint32_t expectedEpoch,
     uint8_t requiredFreshMask, uint8_t traceSource,
     const volatile uint32_t *generation, uint32_t expectedGeneration) {
   if (!msg || !generation) return ESP_ERR_INVALID_ARG;
@@ -420,47 +562,47 @@ static esp_err_t canTxTwaiTransmitWithMaskTaggedGuarded(
     return ESP_ERR_TIMEOUT;
   }
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
+  if (!canTxAdministrativeHold && mcpChassisReady &&
       canTxCancellationGenerationSnapshot(generation) == expectedGeneration &&
       canTxBarrierAllowsMaskedPure(
           canTxBarrierState, expectedEpoch, requiredFreshMask))
-    err = twai_transmit(msg, 0);
+    err = mcpChassisTransmit(msg, 0);
   xSemaphoreGive(canTxBarrierMutex);
   canBTraceRecordTx(msg, err, traceSource);
   return err;
 }
 
-static esp_err_t canTxTwaiTransmitWithMask(
-    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
-  return canTxTwaiTransmitWithMaskTagged(
+static esp_err_t canTxChassisTransmitWithMask(
+    const struct can_frame *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
+  return canTxChassisTransmitWithMaskTagged(
       msg, expectedEpoch, requiredFreshMask, CAN_TX_TRACE_SOURCE_DEFAULT);
 }
 
-static esp_err_t canTxTwaiTransmitTagged(
-    const twai_message_t *msg, uint32_t expectedEpoch, uint8_t traceSource) {
-  return canTxTwaiTransmitWithMaskTagged(
+static esp_err_t canTxChassisTransmitTagged(
+    const struct can_frame *msg, uint32_t expectedEpoch, uint8_t traceSource) {
+  return canTxChassisTransmitWithMaskTagged(
       msg, expectedEpoch, CAN_TX_FRESH_BOTH, traceSource);
 }
 
-static esp_err_t canTxTwaiTransmit(
-    const twai_message_t *msg, uint32_t expectedEpoch) {
-  return canTxTwaiTransmitWithMask(msg, expectedEpoch, CAN_TX_FRESH_BOTH);
+static esp_err_t canTxChassisTransmit(
+    const struct can_frame *msg, uint32_t expectedEpoch) {
+  return canTxChassisTransmitWithMask(msg, expectedEpoch, CAN_TX_FRESH_BOTH);
 }
 
 // Final feature admission and payload composition share the enqueue barrier.
-static esp_err_t canTxTwaiTransmitValidated(
-    twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
-    bool (*validate)(twai_message_t *, void *), void *context) {
+static esp_err_t canTxChassisTransmitValidated(
+    struct can_frame *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
+    bool (*validate)(struct can_frame *, void *), void *context) {
   if (!msg || !validate) return ESP_ERR_INVALID_ARG;
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
     canBTraceRecordTx(msg, ESP_ERR_TIMEOUT, CAN_TX_TRACE_SOURCE_DEFAULT);
     return ESP_ERR_TIMEOUT;
   }
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
+  if (!canTxAdministrativeHold && mcpChassisReady &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask) &&
       validate(msg, context))
-    err = twai_transmit(msg, 0);
+    err = mcpChassisTransmit(msg, 0);
   xSemaphoreGive(canTxBarrierMutex);
   canBTraceRecordTx(msg, err, CAN_TX_TRACE_SOURCE_DEFAULT);
   return err;
@@ -485,18 +627,18 @@ static bool canTxMcpSendTagged(const struct can_frame *msg,
     return false;
   }
 
-  McpTxResultReason reason = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH : mcpTxResultReasonPure(
+  McpTxResultReason reason = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH : mcpTxResultReasonMaskedPure(
       true, true, mcpReady, canTxBarrierState.epoch, canTxBarrierState.freshMask,
-      expectedEpoch, true);
+      expectedEpoch, CAN_TX_FRESH_BODY, true);
   const bool allowed = reason == MCP_TX_OK;
   MCP2515::ERROR traceResult = MCP2515::ERROR_FAIL;
 
   if (allowed) {
     errOut = Can_A.sendMessage(msg);
     traceResult = errOut;
-    reason = mcpTxResultReasonPure(
+    reason = mcpTxResultReasonMaskedPure(
         true, true, true, canTxBarrierState.epoch, canTxBarrierState.freshMask,
-        expectedEpoch, errOut == MCP2515::ERROR_OK);
+        expectedEpoch, CAN_TX_FRESH_BODY, errOut == MCP2515::ERROR_OK);
   }
   if (reasonOut) *reasonOut = reason;
   xSemaphoreGive(canTxBarrierMutex);
@@ -508,6 +650,46 @@ static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
                          MCP2515::ERROR &errOut, McpTxResultReason *reasonOut) {
   return canTxMcpSendTagged(msg, expectedEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
                             errOut, reasonOut);
+}
+
+
+static bool canTxPartyMcpSendTagged(const struct can_frame *msg,
+                                    uint32_t expectedEpoch, uint8_t traceSource,
+                                    MCP2515::ERROR &errOut,
+                                    McpTxResultReason *reasonOut) {
+  if (reasonOut) *reasonOut = MCP_TX_INVALID_MSG;
+  if (!msg) return false;
+  if (canTxAdministrativeHold) {
+    if (reasonOut) *reasonOut = MCP_TX_EPOCH_MISMATCH;
+    return false;
+  }
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+    if (reasonOut) *reasonOut = MCP_TX_MUTEX_BUSY;
+    return false;
+  }
+
+  McpTxResultReason reason = mcpTxResultReasonMaskedPure(
+      true, true, mcpPartyReady, canTxBarrierState.epoch,
+      canTxBarrierState.freshMask, expectedEpoch, CAN_TX_FRESH_PARTY, true);
+  const bool allowed = reason == MCP_TX_OK;
+  if (allowed) {
+    errOut = Can_C.sendMessage(msg);
+    reason = mcpTxResultReasonMaskedPure(
+        true, true, true, canTxBarrierState.epoch,
+        canTxBarrierState.freshMask, expectedEpoch, CAN_TX_FRESH_PARTY,
+        errOut == MCP2515::ERROR_OK);
+    if (errOut == MCP2515::ERROR_OK) mcpPartyTxOk++;
+    else mcpPartyTxFail++;
+  }
+  if (reasonOut) *reasonOut = reason;
+  xSemaphoreGive(canTxBarrierMutex);
+  return allowed;
+}
+
+static bool canTxPartyMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
+                              MCP2515::ERROR &errOut, McpTxResultReason *reasonOut) {
+  return canTxPartyMcpSendTagged(msg, expectedEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
+                                 errOut, reasonOut);
 }
 
 static bool canTxMcpSendTaggedGuarded(
@@ -533,18 +715,18 @@ static bool canTxMcpSendTaggedGuarded(
   const bool generationValid =
       canTxCancellationGenerationSnapshot(generation) == expectedGeneration;
   if (generationValid) {
-    reason = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH : mcpTxResultReasonPure(
-        true, true, mcpReady && twaiReady, canTxBarrierState.epoch,
-        canTxBarrierState.freshMask, expectedEpoch, true);
+    reason = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH : mcpTxResultReasonMaskedPure(
+        true, true, mcpReady, canTxBarrierState.epoch,
+        canTxBarrierState.freshMask, expectedEpoch, CAN_TX_FRESH_BODY, true);
   }
   const bool allowed = generationValid && reason == MCP_TX_OK;
   MCP2515::ERROR traceResult = MCP2515::ERROR_FAIL;
   if (allowed) {
     errOut = Can_A.sendMessage(msg);
     traceResult = errOut;
-    reason = mcpTxResultReasonPure(
+    reason = mcpTxResultReasonMaskedPure(
         true, true, true, canTxBarrierState.epoch,
-        canTxBarrierState.freshMask, expectedEpoch,
+        canTxBarrierState.freshMask, expectedEpoch, CAN_TX_FRESH_BODY,
         errOut == MCP2515::ERROR_OK);
   }
   if (reasonOut) *reasonOut = reason;
@@ -571,10 +753,10 @@ enum CanSupervisorCommand : uint8_t {
 
 enum CanRecoveryDiagnosticReason : uint8_t {
   CAN_REC_NONE = 0,
-  CAN_REC_TWAI_BUS_OFF = 1,
-  CAN_REC_TWAI_RECOVERY_FAIL = 2,
-  CAN_REC_TWAI_STOPPED = 3,
-  CAN_REC_TWAI_RESTART_FAIL = 4,
+  CAN_REC_CHASSIS_BUS_OFF = 1,
+  CAN_REC_CHASSIS_RECOVERY_FAIL = 2,
+  CAN_REC_CHASSIS_STOPPED = 3,
+  CAN_REC_CHASSIS_RESTART_FAIL = 4,
   CAN_REC_ONE_BUS_STALE = 5,
   CAN_REC_WAKE_ACQUIRE_TIMEOUT = 6,
   CAN_REC_COLD_ACQUIRE_TIMEOUT = 7,
@@ -585,10 +767,10 @@ enum CanRecoveryDiagnosticReason : uint8_t {
 
 static inline const char *canRecoveryDiagnosticReasonName(uint8_t reason) {
   switch (reason) {
-    case CAN_REC_TWAI_BUS_OFF: return "TWAI_BUS_OFF";
-    case CAN_REC_TWAI_RECOVERY_FAIL: return "TWAI_RECOVERY_FAIL";
-    case CAN_REC_TWAI_STOPPED: return "TWAI_STOPPED";
-    case CAN_REC_TWAI_RESTART_FAIL: return "TWAI_RESTART_FAIL";
+    case CAN_REC_CHASSIS_BUS_OFF: return "CHASSIS_BUS_OFF";
+    case CAN_REC_CHASSIS_RECOVERY_FAIL: return "CHASSIS_RECOVERY_FAIL";
+    case CAN_REC_CHASSIS_STOPPED: return "CHASSIS_STOPPED";
+    case CAN_REC_CHASSIS_RESTART_FAIL: return "CHASSIS_RESTART_FAIL";
     case CAN_REC_ONE_BUS_STALE: return "ONE_BUS_STALE";
     case CAN_REC_WAKE_ACQUIRE_TIMEOUT: return "WAKE_ACQUIRE_TIMEOUT";
     case CAN_REC_COLD_ACQUIRE_TIMEOUT: return "COLD_ACQUIRE_TIMEOUT";
@@ -599,7 +781,7 @@ static inline const char *canRecoveryDiagnosticReasonName(uint8_t reason) {
   }
 }
 
-struct CanTwaiRecoverySnapshot {
+struct CanChassisRecoverySnapshot {
   bool valid;
   uint8_t state;
   uint32_t capturedMs;
@@ -620,14 +802,14 @@ static volatile uint8_t canSupervisorCommand = CAN_SUP_NONE;
 static volatile bool canSubsystemBusy = false;
 static volatile bool canTasksStopping = false;
 static volatile bool canTaskMcpQuiesced = false;
-static volatile bool canTaskTwaiQuiesced = false;
-static TaskHandle_t canTaskMcpHandle = nullptr;
-static TaskHandle_t canTaskTwaiHandle = nullptr;
+static volatile bool canTaskChassisQuiesced = false;
+static TaskHandle_t canTaskBodyHandle = nullptr;
+static TaskHandle_t canTaskChassisHandle = nullptr;
 static TaskHandle_t canSupervisorHandle = nullptr;
 static TaskHandle_t webTaskHandle = nullptr;
 
 static volatile uint32_t canTaskMcpHeartbeatMs = 0;
-static volatile uint32_t canTaskTwaiHeartbeatMs = 0;
+static volatile uint32_t canTaskChassisHeartbeatMs = 0;
 enum CanTaskHeartbeatTimeoutCause : uint8_t {
   CAN_TASK_HEARTBEAT_NONE = 0,
   CAN_TASK_HEARTBEAT_A = 1,
@@ -649,7 +831,7 @@ static volatile uint32_t canTaskHeartbeatTimeoutCountA = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountB = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountBoth = 0;
 static volatile CanTaskLiveDiagnosticsPure canTaskMcpDiagnostics = {};
-static volatile CanTaskLiveDiagnosticsPure canTaskTwaiDiagnostics = {};
+static volatile CanTaskLiveDiagnosticsPure canTaskChassisDiagnostics = {};
 static CanTaskTimeoutSnapshotPure canTaskHeartbeatLastSnapshotA = {};
 static CanTaskTimeoutSnapshotPure canTaskHeartbeatLastSnapshotB = {};
 static volatile CanARxDiagnosticsPure canARxDiagnostics = {};
@@ -676,17 +858,17 @@ static volatile uint8_t  canLastHardDiagReason = CAN_REC_NONE;
 static volatile uint32_t canRecoverySleepCount = 0;
 static volatile uint32_t canRecoveryWakeCount = 0;
 
-static volatile uint32_t canTwaiBusOffCount = 0;
-static volatile uint32_t canTwaiStoppedCount = 0;
-static volatile uint32_t canTwaiLocalRecoveryStartCount = 0;
-static volatile uint32_t canTwaiRecoveryStartFailCount = 0;
-static volatile uint32_t canTwaiRestartOkCount = 0;
-static volatile uint32_t canTwaiRestartFailCount = 0;
-static volatile uint8_t  canTwaiLastEventReason = CAN_REC_NONE;
-static volatile uint32_t canTwaiLastEventMs = 0;
+static volatile uint32_t canChassisBusOffCount = 0;
+static volatile uint32_t canChassisStoppedCount = 0;
+static volatile uint32_t canChassisLocalRecoveryStartCount = 0;
+static volatile uint32_t canChassisRecoveryStartFailCount = 0;
+static volatile uint32_t canChassisRestartOkCount = 0;
+static volatile uint32_t canChassisRestartFailCount = 0;
+static volatile uint8_t  canChassisLastEventReason = CAN_REC_NONE;
+static volatile uint32_t canChassisLastEventMs = 0;
 static volatile uint32_t canBLastRxGapMs = 0;
 static volatile uint32_t canBMaxRxGapMs = 0;
-static CanTwaiRecoverySnapshot canTwaiLastBusOffSnapshot = {};
+static CanChassisRecoverySnapshot canChassisLastBusOffSnapshot = {};
 
 static bool mcpSpiStarted = false;
 static bool recoveryEverBothActive = false;
@@ -712,7 +894,7 @@ static constexpr uint32_t RECOVERY_COLD_RETRY_INTERVAL_MS = 15000;
 static constexpr uint8_t  RECOVERY_COLD_MAX_RETRIES = 3;
 static constexpr uint32_t RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS = 3000;
 static constexpr uint32_t RECOVERY_TASK_STOP_SETTLE_MS = 50;
-static constexpr uint32_t RECOVERY_TWAI_WAIT_MS = 1800;
+static constexpr uint32_t RECOVERY_MCP_CHASSIS_WAIT_MS = 1800;
 
 static void requestCanSubsystemRestart(uint8_t reason, uint8_t diagReason);
 
@@ -825,6 +1007,9 @@ static void nagRxSelectorsRefreshFromConfig() {
 }
 
 static bool nagTsl9Body39BSelected() {
+  // TMR always uses CHASSIS/J3 0x399; never enable the legacy BODY 0x39B
+  // compatibility path on the fixed three-bus topology.
+  if (activeVehicleTopology == VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS) return false;
   uint8_t route;
   portENTER_CRITICAL(&nagCfgMux);
   route = tsl9LegacyRouteSanitizePure(nagCfg.tsl9LegacyRoute);
@@ -834,8 +1019,7 @@ static bool nagTsl9Body39BSelected() {
 }
 
 static bool nagTsl9Chassis399Selected() {
-  return !activeProfileIsYl() && activeCanBIsChassis() &&
-      activeProfileNagTsl9Supported() && !nagTsl9Body39BSelected();
+  return activeCanBIsChassis() && activeProfileNagTsl9Supported();
 }
 
 struct NagContext {
@@ -869,7 +1053,7 @@ static volatile uint8_t  nagRealHo = 0;
 static volatile int16_t  nagRealTorqueCenti = 0;
 static volatile uint8_t  nagLastInjectedHo = 0;
 static volatile int16_t  nagLastInjectedCenti = 0;
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
 static unsigned long nagLastTxFailLog = 0;
 #endif
 
@@ -1280,6 +1464,13 @@ static void nagCfgClampAll(NagConfig& c) {
 static bool nagCfgApplyActiveProfilePolicy(NagConfig& c, bool disableIfFallback) {
   const bool torqueSupported = activeProfileNagTorqueSupported();
   const bool tsl9Supported = activeProfileNagTsl9Supported();
+  // TMR has a fixed three-bus topology. NAG torque is always sourced from
+  // PARTY/J4 as 0x370, while DAS/AP state is always sourced from CHASSIS/J3
+  // as 0x399. Do not let legacy persisted selector IDs redirect these paths.
+  if (activeVehicleTopology == VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS) {
+    c.targetId = 0x370u;
+    c.apStateId = 0x399u;
+  }
   const uint8_t previous = nagMethodSanitizePure(c.method);
   const uint8_t resolved = nagMethodResolveForCapabilitiesPure(
       previous, torqueSupported, tsl9Supported);
@@ -1298,11 +1489,11 @@ static inline bool nagModePersistedIdSupported(uint8_t mode) {
 }
 
 static void nagCfgLoad() {
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
   Serial.println("NVS: Loading nag config...");
 #endif
   if (!prefs.begin("nag", true)) {
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
     Serial.println("NVS: No existing nag config, using defaults");
 #endif
     nagCfgDefaultsModeH(nagCfg);
@@ -1447,7 +1638,7 @@ static void nagCfgLoad() {
   }
 
   nagRxSelectorsRefreshFromConfig();
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
   Serial.println("NVS: Nag config loaded OK");
 #endif
 }
@@ -1476,7 +1667,7 @@ static void nagCfgSave() {
   nagCfgClampAll(snapshot);
   nagCfgApplyActiveProfilePolicy(snapshot, false);
   if (!prefs.begin("nag", false)) {
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
     Serial.println("NVS: Nag save failed - could not open");
 #endif
     return;
@@ -1719,14 +1910,13 @@ static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo) {
   }
 }
 
-// Model Y L uses DAS_status 0x399 on Party CAN A. Legacy Model 3/Y uses the
-// gateway-translated DAS_status 0x39B on Body CAN A.
+// Legacy 39B is the only TSL9 status path that remains on the MCP/body-side
+// compatibility handler. TMR standardizes DAS_status 0x399 on CHASSIS/J3.
+// In particular, YL no longer consumes 0x399 from PARTY/J4.
 static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
-  const bool yl399Route = activeProfileIsYl();
   const bool legacyBody39BRoute = nagTsl9Body39BSelected();
-  if ((!yl399Route && !legacyBody39BRoute) ||
-      !activeProfileNagTsl9Supported()) return false;
-  const uint16_t expectedId = legacyBody39BRoute ? 0x39Bu : 0x399u;
+  if (!legacyBody39BRoute || !activeProfileNagTsl9Supported()) return false;
+  const uint16_t expectedId = 0x39Bu;
   if ((rxf.can_id & 0xC0000000UL) != 0 ||
       (rxf.can_id & 0x7FFu) != expectedId || rxf.can_dlc < 8u) return false;
 
@@ -1762,7 +1952,7 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   const uint32_t txEpoch = canTxEpochSnapshot();
   MCP2515::ERROR err = MCP2515::ERROR_FAIL;
   McpTxResultReason txReason = MCP_TX_INVALID_MSG;
-  const bool attempted = canTxMcpSend(&out, txEpoch, err, &txReason);
+  const bool attempted = canTxPartyMcpSend(&out, txEpoch, err, &txReason);
   const bool ok = attempted && err == MCP2515::ERROR_OK;
   if (ok) {
     mcpTxOk++;
@@ -1775,14 +1965,14 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   return ok;
 }
 
-// Standard profiles receive DAS_status 0x399 on Chassis CAN B. This transport
-// is available with either Body+Chassis or Party+Chassis wiring.
-static bool nagProcessTsl9Twai399(const twai_message_t &src) {
-  if (!nagTsl9Chassis399Selected() ||
-      !activeProfileNagTsl9Supported() ||
-      !activeCanBIsChassis()) return false;
-  if (src.extd || src.rtr || src.identifier != 0x399u ||
-      src.data_length_code < 8u) return false;
+// TMR receives DAS_status 0x399 exclusively on CHASSIS/J3 for all profiles.
+// The frame is also used to update the NAG AP/hands-on gate before any 0x370
+// torque frame arrives on PARTY/J4. If TSL9 mode is active, the modified 0x399
+// is transmitted back onto CHASSIS/J3.
+static bool nagProcessTsl9Chassis399(const struct can_frame &src) {
+  if (!activeProfileNagTsl9Supported() || !activeCanBIsChassis()) return false;
+  if ((src.can_id & CAN_EFF_FLAG) || (src.can_id & CAN_RTR_FLAG) || (src.can_id & CAN_EFF_MASK) != 0x399u ||
+      src.can_dlc < 8u) return false;
 
   bool enabled;
   uint8_t method;
@@ -1798,8 +1988,7 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   isaChimeSuppress = nagCfg.tsl9IsaChimeSuppress;
   portEXIT_CRITICAL(&nagCfgMux);
 
-  twai_message_t out = src;
-  out.flags = 0;
+  struct can_frame out = src;
   const uint32_t nowMs = (uint32_t)millis();
   Tsl9DasTransformResultPure result;
   portENTER_CRITICAL(&nagTsl9Mux);
@@ -1807,7 +1996,7 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   result = tsl9ApplyDasTransformForCanIdPure(
       nagTsl9State, enabled && method == NAG_METHOD_TSL9_PURE,
       sequence, downgradeWindow, isaChimeSuppress, 0x399u,
-      out.data, out.data_length_code, nowMs);
+      out.data, out.can_dlc, nowMs);
   if (result.modified) nagTsl9Modified++;
   if (result.handsOnModified) nagTsl9HandsOnModified++;
   if (result.isaModified) nagTsl9IsaModified++;
@@ -1815,7 +2004,7 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   if (!result.modified) return false;
 
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady) err = twai_transmit(&out, 0);
+  if (!canTxAdministrativeHold && mcpChassisReady) err = mcpChassisTransmit(&out, 0);
   canBTraceRecordTx(&out, err);
   const bool ok = err == ESP_OK;
   nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu));
@@ -1832,25 +2021,21 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   const uint8_t dlc = rxf.can_dlc;
   if (dlc < 1) return;
 
-  (void)nagProcessTsl9Mcp(rxf);
-
   const bool ylProfile = activeProfileIsYl();
-  // Model Y L reads DAS/Summon status on CAN A / Party. Standard 3/Y
-  // receives the corresponding status from Chassis CAN B regardless of whether
-  // CAN A is configured as Body or Party, so only YL runs these handlers here.
+  // 0x399 is never consumed from PARTY/J4 on TMR. Legacy 39B handling remains
+  // on the dedicated BODY compatibility path; 0x370 is the NAG torque frame.
+  // Model-specific legacy Party helpers below are retained only where they do
+  // not alter the TMR 0x370/0x399 routing.
   if (ylProfile) {
     switch (id) {
       case 280: if (dlc >= 7) handle280(rxf.data); break;
       case 390: if (dlc >= 8) handle390(rxf.data); break;
-      case 921:
-        if (dlc >= 6) handle921(rxf.data, dlc);
-        break;
       default: break;
     }
   }
 
-  // The steering-torque method requires CAN A to be Party. TSL9 on standard
-  // Body+Chassis is handled independently on Chassis CAN B above.
+  // TMR torque NAG is sourced from PARTY/J4. The AP/hands-on gate is supplied
+  // independently by CHASSIS/J3 0x399 above.
   if (!activeProfileNagTorqueSupported()) return;
 
   uint16_t targetId, apStateId, steeringId;
@@ -1861,10 +2046,8 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   if (id != NAG_SPEED_ID && id != targetId && id != apStateId && id != steeringId) return;
 
   if (id == NAG_SPEED_ID) nagUpdateVehicleSpeed(rxf.data, dlc);
-  // YL's proven Party layout exposes the legacy 0x399 context used by these
-  // diagnostics. Standard Party+Chassis authorizes NAG from Chassis CAN B
-  // 0x399 instead; do not misparse a Party frame with the same numeric ID.
-  if (ylProfile && id == apStateId) nagUpdateApState(rxf.data, dlc);
+  // TMR never consumes 0x399 from PARTY/J4. The AP/hands-on state is updated
+  // only from CHASSIS/J3 by the CAN-B 0x399 handler.
   if (id == steeringId) nagUpdateSteering(rxf.data, dlc);
 
   uint8_t methodNow;
@@ -2054,7 +2237,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
       unsigned long t0 = micros();
       MCP2515::ERROR err = MCP2515::ERROR_OK;
       McpTxResultReason txReason = MCP_TX_INVALID_MSG;
-      const bool attempted = canTxMcpSend(&txf, txEpoch, err, &txReason);
+      const bool attempted = canTxPartyMcpSend(&txf, txEpoch, err, &txReason);
       if (!attempted) {
         nagDiagRecordTxBlock(txReason, nowMs);
         return;
@@ -2093,7 +2276,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
         nagTxFail++;
         portEXIT_CRITICAL(&nagDiagMux);
         nagDiagRecordTxBlock(MCP_TX_SEND_ERROR, nowMs);
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
         const unsigned long now = millis();
         if (now - nagLastTxFailLog >= 2000) {
           nagLastTxFailLog = now;

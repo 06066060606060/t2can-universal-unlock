@@ -14,7 +14,7 @@ static constexpr uint8_t DRIVER_WINDOW_AUTO_DOWN_LF_ACTIVE = 0x08u;
 static inline bool driverWindowLabProfileSupportedPure(
     uint8_t profileId, uint8_t topology) {
   return profileId == VEHICLE_MODEL_YL &&
-         topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
+         topology == VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS;
 }
 
 enum DriverWindowArmResultPure : uint8_t {

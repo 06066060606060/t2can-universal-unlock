@@ -1,4 +1,4 @@
-# T2CAN Universal v3.21.0
+# TMR Universal v3.21.0
 
 ## LAB R79 manual-driving injection — 2026-10-05
 - Adds `Allow R79 During Manual Driving` inside LAB `R79 AP Control`, saved across reboots and defaulting OFF. The option is independent of the existing AP policy master.
@@ -7,7 +7,7 @@
 - Stores the new option in the previously unused `r79/apctl` bit2. Existing saved values load with the option OFF; failed mutex, NVS-open or NVS-write operations leave live behavior unchanged.
 - Keeps completed v3.20.0 unchanged. Local validation and OTA evidence are recorded in `VALIDATION.md`; no physical controller or vehicle behavior is implied.
 
-# T2CAN Universal v3.20.0
+# TMR Universal v3.20.0
 
 ## Retired 0x3F8 speed experiments — 2026-10-05
 - Removes the failed LAB `Vision Speed Control` (`UI_visionSpeedType`, bits20–21) and `Adaptive Set Speed` (`UI_adaptiveSetSpeedEnable`, bit39) experiments from the dashboard, API, runtime and compositor. Those stock fields are no longer overridden by these experiments.
@@ -16,7 +16,7 @@
 - Preserves existing ALC/ULC, R79, Lane Graph and final transport-admission policies. Completed source and OTA packages remain unchanged; only the new package removes these experiments.
 - Marks the two earlier experiments as retired after reported vehicle ineffectiveness. Host success in their historical validation entries was never proof of vehicle acceptance.
 
-# T2CAN Universal v3.19.0
+# TMR Universal v3.19.0
 
 ## LAB Vision Speed Control — 0x3FD — 2026-10-05
 - Adds an independent saved default-OFF experiment requesting `UI_enableVisionSpeedControl=0` in stock `0x3FD` MUX1 bit49.
@@ -25,7 +25,7 @@
 - Signal-coordinate reference: `dzid26/ESP32-DualCAN` commit `2b4d7404ccbb984d57150e9f12421c30e1327bec`, `dbc/Model3_CH.dbc:6252` and `dbc/Model3_VEH.dbc:12667` (`m1 : 49|1@1+`). These community definitions do not establish support on every Tesla software version or a sign-only behavior.
 - Completed v3.18.0 is preserved. Validation and local OTA evidence follow in VALIDATION.md.
 
-# T2CAN Universal v3.18.0
+# TMR Universal v3.18.0
 
 ## LAB Adaptive Set Speed — 2026-10-05
 - Adds a saved default-OFF LAB experiment requesting `UI_adaptiveSetSpeedEnable=0` in live CAN B `0x3F8` bit39 across all supported vehicle profiles and valid topologies.
@@ -33,7 +33,7 @@
 - Actual vehicle acceptance, sign-related slowing and phantom-braking reduction are unverified. This is an experimental request, not a verified sign-only bypass.
 - Preserves completed v3.17.0. Local validation and OTA evidence are recorded in VALIDATION.md.
 
-# T2CAN Universal v3.17.0
+# TMR Universal v3.17.0
 
 ## LAB Vision Speed Control — 2026-10-05
 - Adds a saved default-OFF LAB experiment to request UI_visionSpeedType=0 in live CAN B 0x3F8 UI_driverAssistControl frames across all valid Universal vehicle profiles and topologies.
@@ -41,7 +41,7 @@
 - The DBC identifies raw 0 as DISABLED; a sign-only interpretation and actual vehicle acceptance are not established. This option does not promise to remove phantom braking.
 - Preserves completed v3.16.0. Local validation and OTA evidence are recorded in VALIDATION.md.
 
-# T2CAN Universal v3.16.0
+# TMR Universal v3.16.0
 
 ## LAB Lane Graph injection bus — 2026-10-05
 - Adds a saved Injection Bus selector for non-YL Lane Graph: Chassis (default) or Body. Body is available only with a valid Body + Chassis topology; Party + Chassis cannot select Body. YL keeps its VH route and hides the selector.
@@ -51,7 +51,7 @@
 - Displays selected-bus receive state and age, including waiting for stock. Route changes invalidate pending display work; existing R79 behavior and manual D/R policy remain unchanged.
 - v3.15.0 is preserved. Local validation and OTA evidence are recorded in VALIDATION.md; actual Body-bus visualization remains unverified.
 
-# T2CAN Universal v3.15.0
+# TMR Universal v3.15.0
 
 ## Independent map region and LAB Lane Graph — 2026-10-04
 - Separates Country and Map Region selections in the existing Settings panel. Country retains STOCK/US/KOREA/NEW ZEALAND; Map Region offers STOCK/US/KOREA. Existing saved presets migrate to equivalent country/map combinations. Japan is omitted because its map-region encoding is unverified.
@@ -59,7 +59,7 @@
 - Preserves the R79 manual D/R blocking policy. No manual-drive bypass is added.
 - v3.14.0 is preserved. Host, browser and target-build evidence is recorded in VALIDATION.md; no physical vehicle or visualization outcome is implied.
 
-# T2CAN Universal v3.14.0
+# TMR Universal v3.14.0
 
 ## Legacy V12/V13 HW3 R79 option — 2026-10-04
 - Adds a saved default-OFF V12/V13 HW3 toggle to Settings → R79 Mode, visible only for Model Y Legacy and Model 3 Legacy with either supported CAN topology.
@@ -67,7 +67,7 @@
 - Setting publication follows successful NVS persistence and invalidates pending R79 work at the TX admission barrier. Unsupported profiles cannot activate the override.
 - v3.13.0 is preserved. Local test/build evidence is recorded in VALIDATION.md; no device or vehicle outcome is implied.
 
-# T2CAN Universal v3.13.0
+# TMR Universal v3.13.0
 
 ## NAG settings and Country promotion — 2026-10-04
 - Adds saved torque-only Ignore AP State, default OFF, for A/B/C/H. TSL9, scroll, and DMS keep their original AP conditions. Other torque eligibility, speed, transport and maintenance gates remain in force. When ON, torque processing may continue after AP disengagement.
@@ -76,7 +76,7 @@
 - Country / Map Region moves to Settings and operates independently of LAB. Country choices, stored values, R79 authorization, frame validity and CAN routing remain unchanged.
 - v3.12.0 is preserved. Local validation and OTA evidence are recorded in VALIDATION.md; no device or vehicle validation is implied.
 
-# T2CAN Universal v3.12.0
+# TMR Universal v3.12.0
 
 ## New Zealand country preset — 2026-10-04
 - Adds saved LAB Country / Map Region preset NEW ZEALAND (mode 3), preserving existing STOCK/US/KOREA numeric identities and defaults.
@@ -85,7 +85,7 @@
 - NZ/554 reference: https://www.ncei.noaa.gov/archive/archive-management-system/OAS/bin/prd/jquery/country/details/163 ; field locations follow research/can-logs/Model3CAN.dbc.
 - No FSD enablement, R79 exemption or on-vehicle outcome is established by this preset. Existing v3.11.1 remains unchanged.
 
-# T2CAN Universal v3.11.1
+# TMR Universal v3.11.1
 
 ## OTA/reboot CAN shutdown and reconnect backdrop — 2026-10-04
 - OTA now requires a confirmed maintenance shutdown before starting flash writes. The sticky TX hold, supervisor handshake and CAN-task quiescence prevent controller recovery or settings changes from reopening communication.
@@ -94,7 +94,7 @@
 - Reconnect/OTA overlays override AP/NOA page backgrounds, matching html/body safe-area and browser theme color in light and dark themes.
 - Existing v3.11.0 remains unchanged. No device or vehicle validation is implied.
 
-# T2CAN Universal v3.11.0
+# TMR Universal v3.11.0
 
 ## LAB R79 AP Control — 2026-10-04
 - Adds a saved opt-in master (default OFF). OFF retains the existing R79 authorization policy, payload transforms, mode selection, and configured enqueue wait.
@@ -104,20 +104,20 @@
 - This controls new R79 enqueue admission. Frames already accepted into the hardware/driver queue are not selectively retractable; no global TX queue flush is added for AP transitions.
 - Preserves completed v3.10.2. No device or vehicle validation is implied.
 
-# T2CAN Universal v3.10.2
+# TMR Universal v3.10.2
 
 ## Periodic Interval alignment — 2026-10-04
 - Balance the existing field card with its label on the left and editable value on the right, vertically centered on one row.
 - Preserve input bounds, saving, and CAN behavior.
 
-# T2CAN Universal v3.10.1
+# TMR Universal v3.10.1
 
 ## Periodic Interval dashboard input styling — 2026-10-04
 - Replaced the unstyled browser-native TSL9 **Periodic Interval** number control with the same full-width field-card component used by Auto Blinker timing inputs.
 - Preserved the existing control ID, 1–600 second bounds, default, and save behavior; CAN scheduling and runtime policy are unchanged.
 - Advanced the firmware and package identity to `v3.10.1`; released `v3.10.0` remains immutable.
 
-# T2CAN Universal v3.10.0
+# TMR Universal v3.10.0
 
 ## Universal LAB Country / Map Region — 2026-10-03
 - Based on v3.9.3, with the separate v3.9.2 country experiment ported into LAB.
@@ -125,7 +125,7 @@
 - Applies country transforms only to received route-local stock frames, preserving unrelated fields and the existing R79 authorization and cancellation barriers.
 - Vehicle acceptance remains unverified; host and target-build evidence is recorded separately.
 
-# T2CAN Universal v3.9.3
+# TMR Universal v3.9.3
 
 ## R79 and NAG right-scroll controls — 2026-10-03
 - Added a saved Mode 1 Post-MUX2 reinjection toggle while preserving the existing Mode 1 wait and delay controls. Disabling it cancels pending periodic work through the transport generation barrier.
@@ -134,14 +134,14 @@
 - Unified Torque and TSL9 right-scroll output under the timer-owned route scheduler so 100 ms steps, physical-input priority, CENTER cleanup, configuration quiesce, and CAN recovery cannot overlap across producers.
 - Advanced the firmware and package identity to `v3.9.3`; `v3.9.2` remains an immutable prior release.
 
-# T2CAN Universal v3.9.2
+# TMR Universal v3.9.2
 
 ## AP profile naming and failed experiment removal — 2026-10-02
 - Renamed the existing Settings feature to **AP Pedal / Regen Profile** while retaining its established API and NVS keys.
 - Removed the failed LAB driving-aggressiveness experiment completely, including its `0x398` detection, `0x3FD` overlays, CAN trace source, API, NVS reads/writes, dashboard controls, helper, and dedicated tests.
 - Existing **AP Pedal / Regen Profile**, TLSSC, and other `0x3FD` behavior remain independent and supported.
 
-# T2CAN Universal v3.9.1.4
+# TMR Universal v3.9.1.4
 
 ## Stable two-mode CAN Research Capture — 2026-10-02
 - Reduced the CAN Research Capture selector to **SNAPSHOT** and **RAW TRANSITION**. The former AUTO ALC and ULC / CONFIRM-FREE choices are no longer accepted by the mode API or shown in LAB.
@@ -149,14 +149,14 @@
 - RAW archive capacity is 163,840 physical CAN A/B RX frames inside the fixed 2.5 MiB main block; the rolling RAW PRE ring remains 32,768 frames. Capture remains RX-only and never transmits CAN.
 - A rejected mode change now displays an explicit browser alert before refreshing authoritative device state instead of silently resetting the selector.
 
-# T2CAN Universal v3.9.1.3
+# TMR Universal v3.9.1.3
 
 ## Model YL driver-window Auto Down field correction — 2026-10-02
 - Replaced the unverified DBC bit-35 overlay with the field observed during a physical Model YL Auto Down second-detent capture: CAN B `0x3C2` MUX0 byte 6 bits `[3:2]` change from neutral value `1` (`0x15`) to Auto Down value `2` (`0x19`).
 - The transform replaces only that two-bit field and preserves every other stock bit. Physical Auto Down input in the same field now blocks the LAB request instead of being misclassified as idle.
 - Existing Model YL Party+VH, PARK, freshness, CAN epoch, LAB, timeout, duplicate-request, generation-barrier, and exactly-two-stock-synchronized-frame policies are unchanged.
 
-# T2CAN Universal v3.9.1.2
+# TMR Universal v3.9.1.2
 
 ## Model YL driver-window LAB Auto Down test — 2026-10-02
 - Fixed the LAB availability gate to recognize Model YL's actual `PARTY + VH` topology directly. The earlier `activeCanBIsChassis()` check could never succeed for YL because its CAN-B route is named VH, not CHASSIS.
@@ -170,14 +170,14 @@
 - Added CAN A receive-pressure counters: total frames processed, maximum frames per loop, 32-frame budget exhaustion count, separate RX0/RX1 overflow observations, and receive totals captured at the last overflow observation.
 - Exposed the new evidence through the existing **System Stats JSON** download and included it in **Reset Stats**. CAN routing, transmit policy, task priorities, RX budgets, heartbeat thresholds, and recovery decisions are unchanged.
 
-# T2CAN Universal v3.9.1
+# TMR Universal v3.9.1
 
 ## DMS bit43 AP gate — 2026-10-02
 - **Disable Driver Monitoring** now forces `0x3FD` MUX1 bit43 low only while a valid DAS state reports AP active (`3..6`). AP-inactive and AP-invalid states preserve the stock bit43 value.
 - The gate covers both DMS-only fallback transmissions and the final DMS overlay applied to R79 Mode 1/2, retry, Post-MUX2, and ULC clone frames. R79 ownership and transmission policy are unchanged; only the optional DMS bit43 mutation is AP-gated.
 - TSL9 Hands-On, ISA suppression, warning-only input assistance, and owned CENTER cleanup behavior are unchanged.
 
-# T2CAN Universal v3.9.0
+# TMR Universal v3.9.0
 
 ## NAG KILL integration work — 2026-10-02
 - Replaced the independent AP Right Scroll feature with TSL9-warning-only input assistance. The default left volume wheel and selectable right speed wheel reproduce the V8.2 `+1 → 0 → -1 → 0` waveform at 100 ms steps, repeat at a randomized 2.0–3.0 seconds, defer to physical input, and never run during ordinary driving.
@@ -188,7 +188,7 @@
 - Added **Reset NVS · Keep S3XY & BLE**. It clears the explicit application/profile/Wi-Fi/diagnostic/schema namespace allowlist while preserving S3XY registry/mappings and BLE bonds. A durable guard is written before the first clear, so an interrupted reset resumes selective cleanup at boot instead of entering the first-Universal full-partition erase path.
 - Bumped the NAG schema to 19, migrated an explicit prior `features/dmsNag43` selection into the production NAG key, added API/dashboard diagnostics, and retained full factory reset plus the existing settings-only reset as separate choices.
 
-# T2CAN Universal v3.8.4
+# TMR Universal v3.8.4
 
 ## Legacy Model 3/Y TSL9 Body 0x39B test route — 2026-10-02
 - Model Y Legacy and Model 3 Legacy/HW3 with Body + Chassis now receive, transform, and transmit the gateway-translated DAS status on Body CAN A ID `0x39B`.
@@ -198,10 +198,10 @@
 
 ## Diagnostics System Stats JSON download — 2026-10-01
 - Added a full-width **System Stats JSON** action under **Settings → Diagnostics → CAN B Recovery**, above the existing two-column recovery and trace controls.
-- The action downloads the existing `/api/system/stats` response as `T2CAN_SYSTEM_STATS.json` through the dashboard's standard download progress flow.
+- The action downloads the existing `/api/system/stats` response as `TMR_SYSTEM_STATS.json` through the dashboard's standard download progress flow.
 - No diagnostic values, reset/recovery behavior, CAN routing, or CAN transmission behavior changed.
 
-# T2CAN Universal v3.8.3
+# TMR Universal v3.8.3
 
 ## Embedded dashboard build budget — 2026-10-01
 - Raised the strict embedded-dashboard gzip ceiling from **71,350 bytes** to **100,000 bytes** so routine dashboard updates no longer require byte-level optimization at every change.
@@ -216,7 +216,7 @@
 ## Selectable TSL9 Hands-On downgrade window — 2026-09-30
 - Added a saved **Entire AP session** toggle under the TSL9 settings. OFF preserves the existing first-12-seconds behavior; ON keeps the Hands-On downgrade active for the full continuous AP state 3–6 session.
 - The window choice is independent from **TSL9 Sequence**: V8.2 Original still changes only 4→1, while Extended still changes 2/3/4→1. AP exit and unsupported/inactive states continue to pass stock 0x399 through unchanged.
-- The choice is stored as `tsl9win`, exposed as `tsl9Window` in the config/status APIs, and applied on both the Model YL MCP2515 route and supported Standard Chassis TWAI route. Existing installations default to the original 12-second window.
+- The choice is stored as `tsl9win`, exposed as `tsl9Window` in the config/status APIs, and applied on both the Model YL MCP2515 route and supported Standard Chassis CHASSIS route. Existing installations default to the original 12-second window.
 - Tightened generated-dashboard HTML attribute minification without rewriting script/style bodies or self-closing tag endings, keeping the embedded dashboard inside its existing gzip ceiling.
 
 ## Standard Body + Chassis AP Right Scroll CAN A test build — 2026-09-30
@@ -313,12 +313,12 @@
 
 ## TSL9 NAG and selectable R79 Mode 2
 - Added a saved Nag Killer method selector. **Torque · existing** keeps the current implementation; **TSL9 · 0x399 Hands-On** uses the V8.2-style AP-session window, changes Hands-On states 2/3/4 to 1, advances the rolling counter, and rebuilds the checksum. The two methods never transmit together.
-- Model YL runs TSL9 on Party CAN A (MCP2515). Standard Party + Chassis profiles run it on Chassis CAN B (TWAI); profiles where Nag Killer is already unsupported remain unchanged.
+- Model YL runs TSL9 on Party CAN A (MCP2515). Standard Party + Chassis profiles run it on Chassis CAN B (CHASSIS); profiles where Nag Killer is already unsupported remain unchanged.
 - Added saved R79 **Mode 1** and **Mode 2** choices. Mode 2 performs one zero-wait clone immediately after each stock 0x3FD MUX1, preserves bit18, clears bit19, sets bit47, and does not use version detection, queue flushing, or scheduled retries.
 - Mode 2 can optionally schedule one MUX1-template reinjection after a stock MUX2. The delay is user-selectable from 0 to 2000 ms and defaults to 150 ms; the option is off by default. The existing manual D/R suppression policy applies to immediate and delayed Mode 2 attempts.
 
 ## Final v3.8 firmware package
-- Built the approved dashboard and vehicle code as a fresh ESP32-S3 OTA application image, `T2CAN-Universal-v3.8-LP_YL-OTA.bin`.
+- Built the approved dashboard and vehicle code as a fresh ESP32-S3 OTA application image, `TMR-Universal-v3.8-LP_YL-OTA.bin`.
 - The final build retains the v3.8 identity, Mode H Rev.4 fresh-install NAG default, persistent 4 FRAMES / IMMEDIATE CAN A RX choice, and the current dashboard source. The offline AP/model simulator remains preview-only.
 - Refreshed the source archive and checksums alongside the OTA file. No vehicle flash or road validation is implied by this build.
 
@@ -367,7 +367,7 @@
 
 ## Supplied LAB HTML match
 - Removed the legacy 7 px left margin from the Settings vehicle model name so its first character aligns with the profile label and firmware version above and below it.
-- Rebuilt the LAB overview against the supplied `T2CAN Dashboard Demo.html`. The driving card now uses the reference's 30 px status/gear text, three 76 px separate rounded lane cells, 6 px cell gaps, compact `ALC STATE` label, paired `0x399`/`0x239 age` footer, and matching Research Tools row typography.
+- Rebuilt the LAB overview against the supplied `TMR Dashboard Demo.html`. The driving card now uses the reference's 30 px status/gear text, three 76 px separate rounded lane cells, 6 px cell gaps, compact `ALC STATE` label, paired `0x399`/`0x239 age` footer, and matching Research Tools row typography.
 - Overrode the older LAB CSS selectors, including the ID-specific `#alcStateBig` rule that kept centering and enlarging text after the previous visual update. Removed the extra side-cell lane detail lines and the Research Tools helper line from the overview.
 - Changed the DMS and CAN A overview rows to the reference's value-and-chevron layout. Their saved toggle and receive-method selector remain functional in dedicated LAB detail pages.
 - Embedded the supplied Latin Geist and Geist Mono font faces as local WOFF2 resources. The dashboard and the new standalone preview use the same faces without an internet connection.
@@ -395,7 +395,7 @@
 - A valid mode and Mode H revision already saved by an existing installation remain unchanged across OTA, including a deliberately selected Rev.1 or Rev.3 profile.
 - Rev.4 tuning remains the established production profile: opposite carrier, TIERED Hands-On policy, Visual Warning Rescue, and HARD PAUSE while stopped.
 
-# T2CAN Universal v3.7.3
+# TMR Universal v3.7.3
 
 ## 2027 full-bleed dashboard
 - Replaced the four main dashboard pages with the supplied 2027 full-bleed visual system: live STANDBY / AUTOSTEER / NOA field colors, compact fixed header, floating four-tab navigation, larger state typography, tinted cards, and the new Home, Devices, Settings, and LAB layouts.
@@ -421,7 +421,7 @@
 - Consolidated duplicate CAN trace raw formatting, vehicle capability JSON fields, and shared Mode H Rev.3/Rev.4 JSON fields without changing public key order.
 - Added host regression coverage for exact left/right stalk bytes, persistence fallback/transition behavior, official API/UI placement, and the reviewed dead-code inventory.
 
-# T2CAN Universal v3.7.2
+# TMR Universal v3.7.2
 
 ## Auto Blinker / S3XY profile-default TX policy
 - Changed the production blinker TX default by vehicle profile: **Model YL remains SINGLE TX**, while **every other supported Model 3/Y profile defaults to LEGACY 350 ms BURST**.
@@ -436,7 +436,7 @@
 - Added stock/last-effective bit43 telemetry to the R79 LAB card and lightweight LAB snapshot, plus RX 0/1/change counters in the API. Dashboard wording now reports **SAVED** state instead of RAM-only state.
 - The control remains experimental: the firmware manipulates the documented bit position, but real-vehicle validation is still required to establish whether bit43 suppression produces identical NAG behavior across vehicle generations/HW/software branches.
 
-# T2CAN Universal v3.7.1
+# TMR Universal v3.7.1
 
 ## P0 — 0x399 AP / Hands-On decode correction
 - Corrected `DAS_autopilotHandsOnState` to DBC bit 42..45 (`data[5] >> 2`) instead of copying the AP state from `data[0]`.
@@ -481,7 +481,7 @@
 - Added the production controls to Settings, retained a read-only LAB R79 status card, and preserved the embedded dashboard's strict **84,000-byte gzip** limit.
 - Updated the firmware identity to **v3.7**.
 
-# T2CAN Universal v3.6f3
+# TMR Universal v3.6f3
 
 ## Feature-promotion / BUS OFF persistence patch
 - Changed both Auto Blinker and direct S3XY blinker requests to the shared **single-TX** policy by default. LAB now offers a volatile **SINGLE TX / LEGACY 350 ms BURST** comparison; the selection always returns to SINGLE TX after reboot or LAB disable.
@@ -510,7 +510,7 @@
 ## R79 MUX0 Collision LAB
 - Added a fourth, mutually exclusive **MUX0 COLLISION LAB** transport. Every real stock `0x3FD` MUX0 snapshots the previously accepted stock MUX1 template and schedules one modified R79 request after a RAM-only **40–52 ms** delay (default **40 ms**).
 - Later stock MUX1/MUX2 frames do not cancel or move the reservation. Stock MUX1 is observed normally for the next cycle, while this strategy does not also run D9 Fast Echo, ROAMING mirror, V2.6 mirror, periodic, PRE, POST, or delayed retry paths.
-- Independent reservations use a 256-entry FIFO matching the configured TWAI RX queue. At most one due reservation is serviced per CAN task loop, preventing a delayed RX batch from self-filling and repeatedly purging the local 16-entry TX queue.
+- Independent reservations use a 256-entry FIFO matching the configured CHASSIS RX queue. At most one due reservation is serviced per CAN task loop, preventing a delayed RX batch from self-filling and repeatedly purging the local 16-entry TX queue.
 - The due request retains the existing R79 authorization gates and payload policy. If its zero-wait CAN-B enqueue reports `ESP_ERR_TIMEOUT` (no local queue slot available), the firmware clears that local queue and retries `0x3FD` exactly once. This does not affect frames already on-wire or another ECU's queue and cannot override physical CAN arbitration.
 - Added dashboard selection/delay control plus arm, attempt, result, queue-purge, pre-clear queued-frame estimate and best-effort timing diagnostics. The experimental strategy and delay are never written to NVS; reboot always returns transport selection to **D9 CURRENT** and delay to **40 ms**.
 - Added pure scheduler/rollover/queue-policy tests, integration contracts, and a dedicated `MUX0_COLLISION` timing-capture slot.
@@ -524,19 +524,19 @@
 - Added pending/count diagnostics and dashboard controls. Mode H's visible revision selector is now numerically ordered **Rev.1 -> Rev.3 -> Rev.4**; legacy persisted Rev.2 values remain runtime-readable but Rev.2 is not presented as a selectable profile.
 - Added independent NVS keys `h4vres` / `h4vdly` and advanced the Nag configuration schema to **16**.
 
-# T2CAN Universal v3.6f1
+# TMR Universal v3.6f1
 
 ## AP Right Scroll / ROAMING MUX1 Burst
 - Added a Model YL LAB feature that, while AP is active, injects a right-scroll **UP** (`0x01`) followed by **DOWN** (`0x3F`) on consecutive real CAN-B/VH `0x3C2` MUX1 frames. The interval is configurable from **1–600 seconds**, saved in NVS, and defaults OFF at 30 seconds.
 - The AP Right Scroll path clones each live stock frame, changes only Byte3 bits `[5:0]`, yields to any physical right-scroll input, and cancels on AP/LAB/feature disable, CAN recovery, or administrative hold.
 - Added RAM-only **ROAMING MUX1 Burst** selection: `1x`, `2x`, or `3x`. Shot 1 is the existing source-derived mirror; shot 2/3 reuse the same corrected template, request at most one zero-wait enqueue per CAN loop, and wait for the CAN-B TX pipeline to become idle.
 - Any newer real stock `0x3FD` cancels pending burst shots before normal stock handling. Strategy changes, silence, safety/administrative gate closure, and CAN recovery also cancel pending shots. Extra burst shots never use delayed retry.
-- Extra burst shots use the CAN recovery epoch/freshness barrier and require both the TX-IDLE latch and live TWAI queue status to confirm an idle pipeline, preventing stale alerts or recovery/admin transitions from admitting a shot.
+- Extra burst shots use the CAN recovery epoch/freshness barrier and require both the TX-IDLE latch and live CHASSIS queue status to confirm an idle pipeline, preventing stale alerts or recovery/admin transitions from admitting a shot.
 - AP disengagement and administrative-hold entry synchronously clear pending AP Right Scroll state; administrative hold also clears any pending ROAMING burst.
 - Extended R79 Timing Capture with `ROAMING_BURST_2`, `ROAMING_BURST_3`, and `ROAMING_BURST_CANCEL_STOCK`, and snapshots the RAM-only burst selection in CSV metadata.
 - Added LAB controls and diagnostics for both features while retaining the embedded dashboard's **<84,000-byte gzip** budget.
 
-# T2CAN Universal v3.6e2
+# TMR Universal v3.6e2
 
 ## Mode H Rev.4 / dashboard state / direct S3XY blinker
 - Replaced the selectable **Mode H Rev.1 Plus** slot with **Rev.4 · Opposite Carrier** while preserving persisted variant ID `1`. Rev.1, Rev.2, and Rev.3 remain available.
@@ -554,7 +554,7 @@
 ## Preserved baseline
 - Built directly on the supplied **v3.6e1 RATIO-FIX** source. R79 ratio/timing transport behavior is intentionally untouched by the Rev.4, Mode-H UI, and S3XY policy changes.
 
-# T2CAN Universal v3.6d9a6
+# TMR Universal v3.6d9a6
 
 - Dashboard: disabled controls now receive a consistent dimmed/desaturated visual state at both control and row level.
 - S3XY Button: added Left Blinker and Right Blinker one-shot actions using the existing validated stalk/stalkless turn-signal transport.
@@ -564,16 +564,16 @@
 ## Selectable R79 transport A/B — D9 / Roaming / v2.6
 - Added persistent **R79 Transport** selection in LAB with three mutually exclusive strategies. Existing installations default to **D9 CURRENT** and keep all d9a4 behavior unless explicitly changed.
 - **D9 CURRENT** preserves the existing d9a4 Fast Reactive / QW / PRE-MUX1 / POST-MUX2 / periodic / retry behavior and all current R79 experiment controls.
-- **ROAMING MIRROR** ports the R79 transport behavior from the supplied `t2can-roaming` source: every accepted real stock `0x3FD` mux1 is copied, bit19 is cleared, bit47 is set, bit18 and all other bits remain stock, and the mirror uses the source firmware's bounded `twai_transmit(..., 5 ms)` queue wait. There is no R79 periodic/background scheduler or delayed retry in this strategy.
+- **ROAMING MIRROR** ports the R79 transport behavior from the supplied `tmr-roaming` source: every accepted real stock `0x3FD` mux1 is copied, bit19 is cleared, bit47 is set, bit18 and all other bits remain stock, and the mirror uses the source firmware's bounded `mcpChassisTransmit(..., 5 ms)` queue wait. There is no R79 periodic/background scheduler or delayed retry in this strategy.
 - **V2.6 LEGACY** ports the R79 transport behavior from the supplied `Summon-Unlock` v2.6 source: every accepted stock mux1 is mirrored with bit19=0 / bit47=1 using a bounded 2 ms queue wait, plus the latest real mux1 template is re-sent every **500 ms while the Summoning gate is active**. There is no d9 QW/PRE/POST/487 scheduler or d9 retry path in this strategy.
-- Legacy strategies deliberately preserve the **current d9 common safety/administrative gate** (manual D/R suppression, TWAI-ready and administrative-hold checks) so the A/B isolates R79 transport timing rather than importing unrelated whole-firmware gate policy. They are therefore source-faithful transport ports, not full firmware gate clones.
+- Legacy strategies deliberately preserve the **current d9 common safety/administrative gate** (manual D/R suppression, CHASSIS-ready and administrative-hold checks) so the A/B isolates R79 transport timing rather than importing unrelated whole-firmware gate policy. They are therefore source-faithful transport ports, not full firmware gate clones.
 - Legacy strategy payloads deliberately preserve stock **bit18**. The d9 bit18 experiment and all d9 scheduler/PRE/POST controls are disabled in the dashboard while a legacy transport is selected.
 - Strategy switches cancel/reset pending d9 schedulers, retries and TX-success attribution probes before the new transport becomes active. The selected strategy is NVS-persistent.
 - R79 Timing Capture records the selected transport in the CSV header and adds dedicated slots: `ROAMING_MIRROR`, `V26_MIRROR`, and `V26_PERIODIC`.
 - Added separate Roaming mirror, v2.6 mirror and v2.6 periodic counters to the R79 API while keeping existing aggregate immediate/periodic counters.
 - Existing POST-MUX2 input focus/dirty protection and the 84,000-byte dashboard gzip budget are preserved.
 
-# T2CAN Universal v3.6d9a4
+# TMR Universal v3.6d9a4
 
 ## Independent POST-MUX2 timing experiment
 - Added persistent **POST-MUX2 TX** with independent ON/OFF control. It uses the latest valid real stock mux1 template and is armed by each real stock MUX2.
@@ -583,27 +583,27 @@
 - The POST-MUX2 numeric field uses focus + dirty protection: background dashboard polling does not overwrite the value while the user is typing, and the setting is committed only on the input change event.
 - POST-MUX2 defaults **OFF**. Existing MUX0/MUX1/MUX2 Quiet Window anchor behavior, 150 ms Quiet Window hard guard, Fast Reactive Echo, PRE-MUX1, payload policy, and retry semantics are otherwise unchanged.
 
-# T2CAN Universal v3.6d9a3
+# TMR Universal v3.6d9a3
 
 - Added R79 Timing Capture: up to 10 minutes / 16,384 compact events with VIDEO SYNC markers, stock 0x3FD RX, actual R79 TX attempts, slot tags, guard skips, queue snapshot, and streamed CSV download.
 - Added selectable Quiet Window Event Anchor: MUX0 / MUX1 / MUX2. Default remains MUX2 for backward-compatible behavior.
 - Quiet Window now preserves the selected anchor cycle across later muxes in the same stock 0→1→2 cluster while those frames still refresh the last-stock safety guard.
 - R79 Timing Capture is diagnostic-only and does not transmit CAN frames.
 
-# T2CAN Universal v3.6d9a2
+# TMR Universal v3.6d9a2
 
 ## R79 post-mux1 enqueue-wait A/B
 - Added one persistent LAB selector: **`R79 Post-Mux1 TX Mode`**.
-  - `FAST ECHO · 0 ms` keeps the current d9a1 zero-wait `twai_transmit(&out, 0)` behavior.
-  - `V2.6 STYLE · 2 ms WAIT` uses `twai_transmit(&out, pdMS_TO_TICKS(2))` for the initial stock-mux1-triggered R79 enqueue.
+  - `FAST ECHO · 0 ms` keeps the current d9a1 zero-wait `mcpChassisTransmit(&out, 0)` behavior.
+  - `V2.6 STYLE · 2 ms WAIT` uses `mcpChassisTransmit(&out, pdMS_TO_TICKS(2))` for the initial stock-mux1-triggered R79 enqueue.
 - This A/B changes **only the initial post-mux1 queue-admission wait**. The stock mux1 trigger, R79 bit18/19/47 payload policy, fail-open/manual-D/R authorization, TX_SUCCESS probe, emergency queue flush, and existing bounded retry path are unchanged.
 - The 2 ms mode intentionally does **not** import V2.6's repeated/unbounded retry behavior. If the selected initial request fails, d9a1 recovery semantics continue unchanged.
 - Added NVS persistence (`r79lab/postTx`) with existing d9a1 behavior (`FAST ECHO · 0 ms`) as the migration/default value.
-- Added per-mode diagnostics for attempts / OK / FAIL and TWAI-dequeue→TX-request latency while preserving all existing aggregate Fast Echo counters and TX_SUCCESS telemetry. The RX→request metric is measured before any optional 2 ms queue wait.
+- Added per-mode diagnostics for attempts / OK / FAIL and CHASSIS-dequeue→TX-request latency while preserving all existing aggregate Fast Echo counters and TX_SUCCESS telemetry. The RX→request metric is measured before any optional 2 ms queue wait.
 - Periodic/PRE-MUX1/Quiet/Phased/Guarded-487 schedulers, Mode H, CAN routing, and unrelated vehicle behavior are unchanged.
 
 ---
-# T2CAN Universal v3.6d9a1
+# TMR Universal v3.6d9a1
 
 ## Compile hotfix — restore CAN traffic UI snapshot helper
 - Fixed an Arduino compile regression in `web_api.h`: d9 still referenced `CanTrafficUiSnapshot`, `canTrafficUiSnapshot()`, and `CAN_TRAFFIC_UI_FRESH_MS`, but their shared definition block had been accidentally dropped during the d9 API/R79 edit.
@@ -612,7 +612,7 @@
 - Added a regression test that requires the traffic snapshot constant/type/helper to be defined before the first API use.
 
 ---
-# T2CAN Universal v3.6d9
+# TMR Universal v3.6d9
 
 ## R79 PRE-MUX1 / guarded 487 phase-walk / Quiet Window margin follow-up
 - Preserved the existing d8 Periodic controls and schedulers, then added a third selectable scheduler: **`GUARDED 487 PHASE-WALK`**. It retains an exact **487 ms** due cadence; unsafe slots are skipped without re-anchoring, so the phase keeps walking. The latest stock mux1 and latest stock `0x3FD` are safety references only.
@@ -628,7 +628,7 @@
 - Preserved d7/d8 heartbeat A/B/BOTH diagnostics, iPhone viewport/scroll stabilization, d5 Mode H STOCK CARRIER/HARD PAUSE, Rev.3 defaults, CAN-A prefetch, CSV download cleanup and dark-mode fixes.
 
 ---
-# T2CAN Universal v3.6d6
+# TMR Universal v3.6d6
 
 ## Preserved d6 platform changes
 - Migrated the legacy 487 ms value once to a 200 ms stock-phase delay while retaining Periodic mode selection.
@@ -636,7 +636,7 @@
 - Added iOS/WebKit viewport stabilization with `overflow-anchor: none`, `100svh`, and separate window/fixed-panel scroll restoration that yields to recent touch, pointer, or wheel input.
 
 ---
-# T2CAN Universal v3.6d5
+# TMR Universal v3.6d5
 
 ## Mode H stationary transport A/B experiment
 - Added a persistent **Mode H Stop Behavior** control in LAB with two choices:
@@ -649,7 +649,7 @@
 - R79, CAN routing, Mode H Rev.3 tuning values, 487 ms R79 periodic default interval, d3 diagnostics/download fixes, Auto Blinker, PedalMap, 0x293/0x3F8, TLSSC, S3XY and capture behavior are otherwise unchanged.
 
 ---
-# T2CAN Universal v3.6d4
+# TMR Universal v3.6d4
 
 - Changed the R79 Periodic Refresh default interval from **500 ms to 487 ms**. Periodic mode itself remains default **OFF**; saved user values are preserved.
 - Changed the fresh/default Mode H profile to **Rev.3** while preserving an existing saved Mode H profile selection.
@@ -667,41 +667,41 @@
 
 ---
 
-# T2CAN Universal v3.6d3
+# TMR Universal v3.6d3
 
 ## R79 Diagnostics / Dashboard / CAN Runtime Follow-up
 - Kept the v3.6d2 **Fast Reactive Echo** and existing fail-open R79 authorization behavior. The default independent Periodic Refresh mode remains OFF; no new manual-driving gate or R79 payload policy is introduced.
 - Changed the R79 Periodic Refresh interval control from a fixed preset selector to a **direct integer millisecond input**. Valid values are **20–5000 ms** in 1 ms steps and remain NVS-persistent. The UI explicitly warns that very short independent periods can destabilize CAN B.
-- Added conservative R79 completion telemetry based on TWAI `TX_SUCCESS` alerts. Samples are armed only when the application TX pipeline was already observed idle and are discarded as ambiguous if another CAN-B enqueue occurs first. Reported completion timing is explicitly a **software-observed upper bound**, not a hardware wire timestamp.
+- Added conservative R79 completion telemetry based on CHASSIS `TX_SUCCESS` alerts. Samples are armed only when the application TX pipeline was already observed idle and are discarded as ambiguous if another CAN-B enqueue occurs first. Reported completion timing is explicitly a **software-observed upper bound**, not a hardware wire timestamp.
 - Fixed generic CSV downloads (including CAN A/B TX trace, BLE, and Driver Monitoring) so download state is managed by `fetch()`/Blob completion and cleared in `finally`. This removes the dashboard deadlock where `downloadInProgress` stopped polling before the old completion path could clear itself.
 - Improved CAN A MCP2515 burst handling by prefetching up to four RX frames from the two hardware receive buffers before running heavier observers/decoders, while retaining the existing 32-frame bounded yield budget and task priority.
-- Replaced the unstable per-dashboard-poll `Errors/min` extrapolation with a deterministic **session average per minute** derived from cumulative TWAI counters and firmware uptime.
+- Replaced the unstable per-dashboard-poll `Errors/min` extrapolation with a deterministic **session average per minute** derived from cumulative CHASSIS counters and firmware uptime.
 - Fixed dark-mode selector corruption on iOS/WebKit. The dark theme no longer uses a `background:` shorthand that resets `background-repeat`; custom select arrows now explicitly remain single, no-repeat, correctly positioned images.
 - Expanded R79 reset handling so d2/d3 fast-path and TX_SUCCESS timing counters reset with the rest of the R79 diagnostics epoch.
 
 ---
 
-# T2CAN Universal v3.6d2
+# TMR Universal v3.6d2
 
 ## R79 Fast Reactive Echo Experiment
-- Reworked the stock-triggered `0x3FD mux1` immediate R79 reassertion into a **receive-synchronized fast path** on CAN B / TWAI. The current stock frame is handled immediately after the TWAI driver dequeues it and before normal CAN-B RX-gap accounting, boot capture, research capture, driver-monitor capture, and decoder work.
+- Reworked the stock-triggered `0x3FD mux1` immediate R79 reassertion into a **receive-synchronized fast path** on CAN B / CHASSIS. The current stock frame is handled immediately after the CHASSIS driver dequeues it and before normal CAN-B RX-gap accounting, boot capture, research capture, driver-monitor capture, and decoder work.
 - The fast path preserves the existing v3.6 **fail-open authorization policy**. Positively confirmed manual Drive/Reverse still suppresses R79; AP, confirmed Summon, Park/Neutral, and unknown/stale gear/DAS state remain default-on exactly as in d1. No new conservative/fail-closed gear gate was added.
-- The first reactive TX request uses `twai_transmit(..., 0)` so it never waits up to the legacy 2 ms enqueue timeout before issuing the request. The fixed production overlay remains bit19=`0`, bit47=`1`, with LAB bit18 behavior unchanged.
-- The d1 Summon transport hardening remains as **failure recovery only** after the fast request: READY/ACTIVE timeout handling may clear the pending TWAI TX queue, retry immediately, then use the bounded `+5 / +15 / +30 ms` sequence if needed. NORMAL/PARK_STANDBY still cannot use destructive queue flush.
+- The first reactive TX request uses `mcpChassisTransmit(..., 0)` so it never waits up to the legacy 2 ms enqueue timeout before issuing the request. The fixed production overlay remains bit19=`0`, bit47=`1`, with LAB bit18 behavior unchanged.
+- The d1 Summon transport hardening remains as **failure recovery only** after the fast request: READY/ACTIVE timeout handling may clear the pending CHASSIS TX queue, retry immediately, then use the bounded `+5 / +15 / +30 ms` sequence if needed. NORMAL/PARK_STANDBY still cannot use destructive queue flush.
 - Removed the duplicate immediate TX from the later `r79LabObserve3fdMux1()` accounting path, so each stock mux1 frame has only one normal reactive request. The observer now records the stock template/statistics after the fast request.
-- Added microsecond telemetry using `esp_timer_get_time()`: fast attempts / OK / FAIL / blocked, plus last/min/average/max and latency buckets. The metric is explicitly **TWAI dequeue → TX request**, not physical wire RX→TX latency because the classic TWAI API does not expose a hardware RX timestamp.
+- Added microsecond telemetry using `esp_timer_get_time()`: fast attempts / OK / FAIL / blocked, plus last/min/average/max and latency buckets. The metric is explicitly **CHASSIS dequeue → TX request**, not physical wire RX→TX latency because the classic CHASSIS API does not expose a hardware RX timestamp.
 - To isolate this experiment from the independent periodic scheduler, the **first d2 boot migrates Periodic Refresh to OFF once**, including upgrades carrying a previous d1 NVS setting. Users may re-enable ALWAYS or SUMMON ONLY afterward from LAB. The 500 ms interval selection itself is retained.
 - No intended change to NAG/Mode H, PedalMap, Auto Blinker, `0x293`, `0x3F8`, TLSSC, S3XY BLE, capture formats, Summon state detection, d1 queue-admission thresholds, or the d1 manual-suppression recovery behavior.
 
 ---
 
-# T2CAN Universal v3.6d1
+# TMR Universal v3.6d1
 
 ## R79 Summon Transport Hardening
 - Added explicit CAN-B transport priority states: **NORMAL**, **PARK_STANDBY**, **SUMMON_READY**, and **SUMMON_ACTIVE**. PARK_STANDBY requires a fresh decoded real PARK observation and never uses the 0x118-stale compatibility PARK fallback.
-- **SUMMON_READY** begins as soon as fresh ACA-active or non-zero SPR startup evidence appears; **SUMMON_ACTIVE** begins on the existing confirmed ACA+SPR Summon session. R79 is the highest-priority T2CAN CAN-B transmission from READY onward.
-- Added non-R79 queue admission control: fresh PARK softly reserves the last 2 slots of the 16-entry TWAI TX queue (`queue >= 14` sheds lower-priority traffic), while READY/ACTIVE retain the stronger `queue >= 6` shedding threshold.
-- Reintroduced destructive TWAI TX-queue flush **only** for an R79 `ESP_ERR_TIMEOUT` while READY/ACTIVE. NORMAL and PARK_STANDBY can never flush. A successful clear immediately retries the newest stock-derived R79 template.
+- **SUMMON_READY** begins as soon as fresh ACA-active or non-zero SPR startup evidence appears; **SUMMON_ACTIVE** begins on the existing confirmed ACA+SPR Summon session. R79 is the highest-priority TMR CAN-B transmission from READY onward.
+- Added non-R79 queue admission control: fresh PARK softly reserves the last 2 slots of the 16-entry CHASSIS TX queue (`queue >= 14` sheds lower-priority traffic), while READY/ACTIVE retain the stronger `queue >= 6` shedding threshold.
+- Reintroduced destructive CHASSIS TX-queue flush **only** for an R79 `ESP_ERR_TIMEOUT` while READY/ACTIVE. NORMAL and PARK_STANDBY can never flush. A successful clear immediately retries the newest stock-derived R79 template.
 - Added bounded Summon-priority R79 recovery retries at **+5 ms / +15 ms / +30 ms**. Retries always rebuild from the latest captured stock 0x3FD mux1 template, stop on any successful R79 TX, cancel if R79 authorization is lost or Summon priority ends, and cannot loop indefinitely.
 - Changed periodic R79 cadence so the normal interval advances from the **last successful periodic TX** rather than the request attempt. Failed READY/ACTIVE requests enter the bounded recovery sequence instead of consuming the full 500 ms success cadence. After retry exhaustion, a bounded full-period hold prevents a high-rate failure loop.
 - Preserved the v3.6 authorization policy: default R79 ACTIVE, bit19=0, bit47=1, manual confirmed D/R suspension, stock mux1 immediate reassertion, Periodic Refresh ALWAYS / SUMMON ONLY / OFF, default 500 ms.
@@ -710,7 +710,7 @@
 
 ---
 
-# T2CAN Universal v3.6 c7a1
+# TMR Universal v3.6 c7a1
 
 ## JSON writer compile hotfix
 - Fixed five malformed `JsonWriterArduino::u32()` calls in `r79LabStatsToJson()` that still contained legacy Arduino `String` concatenation expressions after the c7 serializer refactor.
@@ -720,7 +720,7 @@
 
 ---
 
-# T2CAN Universal v3.6 c7
+# TMR Universal v3.6 c7
 
 ## Binary size optimization — shared JSON/API serializer
 - Reworked high-cost dashboard/API JSON builders around a shared out-of-line `JsonWriterArduino` emitter instead of independently compiling repeated Arduino `String` numeric/boolean/string concatenation sequences in every endpoint.
@@ -733,12 +733,12 @@
 
 ---
 
-# T2CAN Universal v3.6 c6
+# TMR Universal v3.6 c6
 
 ## Binary size optimization
 - Reworked user-code numeric formatting/parsing around **integer fixed-point** values. NAG torque, injected torque, steering angle, Mode H LAB telemetry, driver-monitor EPAS torque, research geometry, and capture utilization no longer require float/double formatting in the project runtime/API path.
 - Replaced the Mode H LAB `strtod()` parser with a no-float decimal/scientific parser that preserves the normal web/API input forms and nearest-centi-Nm rounding. Removed the confirmed write-only `lastModeCTorqueNm` field and fixed `steeringScale` / `steeringOffset` storage.
-- Added `T2CAN_SERIAL_DIAGNOSTICS` as a compile-time switch, **OFF by default** for production. Serial logging can be restored with `-DT2CAN_SERIAL_DIAGNOSTICS=1` without changing functional CAN behavior. Diagnostic-only boot reset decoding, heartbeat accounting, NAG TX-failure rate limiting, and AP-IP lookup are also excluded from the default build.
+- Added `TMR_SERIAL_DIAGNOSTICS` as a compile-time switch, **OFF by default** for production. Serial logging can be restored with `-DTMR_SERIAL_DIAGNOSTICS=1` without changing functional CAN behavior. Diagnostic-only boot reset decoding, heartbeat accounting, NAG TX-failure rate limiting, and AP-IP lookup are also excluded from the default build.
 - Tightened the existing `S3XY_DIAGNOSTICS_ENABLED=0` build path so diagnostic-only temporary `String` construction and GATT-enumeration work are excluded rather than merely passing their finished strings into a no-op logger.
 - Kept `dashboard_source.html` readable and unchanged while adding a deterministic production embed step that minifies CSS / safe outer whitespace before gzip. Embedded dashboard gzip is reduced from **81,039 B to 77,904 B** (**-3,135 B / -3.87%**) in the generated `index_html.h`.
 - No intentional change to CAN routing, NAG/Mode H policy, R79, Summon, TLSSC, S3XY actions, capture behavior, dashboard API keys, or LAB feature behavior.
@@ -746,7 +746,7 @@
 
 ---
 
-# T2CAN Universal v3.6 c5
+# TMR Universal v3.6 c5
 
 ## TLSSC 0x25D DLC=6 hotfix
 - Corrected the YL/Party `0x25D APP_trafficControl` experiment to use the observed **DLC=6** frame instead of incorrectly requiring DLC>=8.
@@ -756,7 +756,7 @@
 
 ---
 
-# T2CAN Universal v3.6 c4
+# TMR Universal v3.6 c4
 
 ## TLSSC Green-Light causal experiments
 - Added **LAB → TLSSC Green-Light Experiment** for controlled 0x25D `APP_trafficControl` research on profiles where CAN A is physically/logically **PARTY**. The experiment is **RAM-only**, defaults OFF on every boot, and is forced OFF when LAB or TLSSC is turned OFF.
@@ -768,7 +768,7 @@
 
 ---
 
-# T2CAN Universal v3.6 c3
+# TMR Universal v3.6 c3
 
 ## Conservative cleanup
 - Removed confirmed unused production helpers and constants with zero active runtime references, including stale vehicle-profile short-name data, an unused Summon bus-name formatter, unused Mode H v1 compatibility helpers, legacy Driver Monitoring bus aliases, and unused ULC/0x293 symbolic constants.
@@ -779,7 +779,7 @@
 
 ---
 
-# T2CAN Universal v3.6 c2
+# TMR Universal v3.6 c2
 
 ## Mode H Rev.3 — Human Interaction + Natural Grip
 - Added **Mode H Rev.3**, based on the existing **Rev.1 Plus** event engine. Rev.1 Plus peak/timing behavior remains the event foundation while Rev.3 adds a low stock-relative Natural Grip carrier during `WAIT`.
@@ -805,7 +805,7 @@
 
 ---
 
-# T2CAN Universal v3.6 c1
+# TMR Universal v3.6 c1
 
 ## ULC / Confirm-Free targeted RAW capture
 - Added **ULC / CONFIRM-FREE** as a dedicated CAN Research Capture mode for the YL/Standard cross-platform state-machine investigation. The mode is strictly **RX-only** and watches only `0x247`, `0x3F8`, `0x3E9`, `0x24A`, `0x3FD`, and `0x293`.
@@ -817,7 +817,7 @@
 
 ---
 
-# T2CAN Universal v3.6 beta 23
+# TMR Universal v3.6 beta 23
 
 ## Quick Controls profile-visibility regression fix
 - Fixed a mobile CSS cascade regression that could re-expose a Quick Controls tile after JavaScript correctly marked it `hiddenByProfile`. The stale 2×2 mobile skin still forced `.quickMini { display:block!important; }`, which outranked the global `.hiddenByProfile { display:none!important; }` contract because the mobile selector was more specific.
@@ -828,7 +828,7 @@
 
 ---
 
-# T2CAN Universal v3.6 beta 22
+# TMR Universal v3.6 beta 22
 
 ## Independent 0x293 TX target
 - Added an NVS-persistent **0x293 TX Target** selector under LAB → Confirm-Free / Auto Lane Change research. `0x3F8` Confirm-Free and `0x293 UI_chassisControl` can now be routed independently.
@@ -840,7 +840,7 @@
 
 ---
 
-# T2CAN Universal v3.6 beta 21
+# TMR Universal v3.6 beta 21
 
 ## Driver Monitoring Capture — all vehicle profiles
 - Expanded **LAB → Driver Monitoring Capture** from Model Y L only to every supported vehicle profile. The recorder remains strictly **RX-only** and adds no CAN TX/injection path.
@@ -857,7 +857,7 @@
 
 ---
 
-# T2CAN Universal v3.6 beta 20
+# TMR Universal v3.6 beta 20
 
 ## Mode H — three selectable profiles
 - Reintroduced Mode H as three NVS-persistent profiles selectable directly in **Settings → Nag Killer**. Switching a profile resets only the active Mode H session and starts the newly selected engine; Mode A/B/C are unaffected.
@@ -885,7 +885,7 @@
 
 ---
 
-# T2CAN Universal v3.6 beta 19
+# TMR Universal v3.6 beta 19
 
 ## Quick Controls alignment
 - Fixed the mobile Quick Controls switch alignment regression. The final compact mobile toggle rule now centers each switch horizontally inside its tile with `margin: 4px auto 0`, preserving the one-row YL and Standard layouts.
@@ -910,7 +910,7 @@
 
 ---
 
-# T2CAN Universal v3.6 beta 18
+# TMR Universal v3.6 beta 18
 
 ## Mode H Rev.2 response A/B + live monitor
 - Added **Rev.2 Response Preset** in LAB: `Current · b17` preserves the v3.6b17 Natural Grip torque/cadence values; `Stronger` increases ordinary interaction density and warning-recovery torque without changing Mode H Rev.1.
@@ -925,7 +925,7 @@
 
 ---
 
-# T2CAN Universal v3.6 beta 17
+# TMR Universal v3.6 beta 17
 
 - Added an NVS-persistent **Confirm-Free Injection Timing** control for `UI_ulcStalkConfirm` (`0x3F8` byte0 bit1). **AP ACTIVE ONLY** remains the default and preserves v3.6b16 behavior; **PRE-AP + AP ACTIVE** deliberately bypasses only the AP-state gate so bit1 can be cleared on any live selected-bus `0x3F8` before AP engagement and remain cleared while AP is active.
 - The PRE-AP experiment keeps the existing same-bus stock-template contract: no synthetic `0x3F8` is generated, no cross-bus template is used, and every unrelated bit is preserved. The selected bus must still provide a live stock `0x3F8` frame before an overlay can be transmitted.
@@ -933,7 +933,7 @@
 - Existing v3.6b16 Mode H Rev.1/Rev.2 selection, S3XY mapping preservation/API validation, and mobile profile-visibility cleanup are retained unchanged.
 - Regenerated the embedded gzip dashboard and added pure/static regression coverage for AP-only vs PRE-AP Confirm-Free timing, persistence, API/UI exposure, and fail-closed invalid timing values.
 
-# T2CAN Universal v3.6 beta 16
+# TMR Universal v3.6 beta 16
 
 - Split Mode H into two NVS-persistent revisions selectable from NAG Settings. **Rev.1 · Human Interaction** restores the v3.6b13 WAIT → RAMP_IN → INTERACT → RAMP_OUT → REFRACTORY stochastic engine from the preserved source, while **Rev.2 · Natural Grip** retains the v3.6b15 behavior. Existing installations default/migrate to Rev.2 so an update does not silently change the active waveform.
 - Restored revision-aware Mode H LAB tuning. Rev.1 exposes primary peak range, WAIT range, REFRACTORY range, and HO=1 override percentage; Rev.2 keeps the current Natural Grip hold/tap/warning tuning. Revision changes reset the active Mode H session before the newly selected engine starts.
@@ -942,20 +942,20 @@
 - Consolidated the mobile profile-visibility contract by removing layout-level `display:flex!important` overrides from Quick Controls and bottom navigation. The single global `.hiddenByProfile` rule is authoritative, while adaptive 2/3/4-column bottom-nav layout remains intact.
 - Regenerated the embedded gzip dashboard and added regression coverage for both Mode H revisions, revision persistence/dispatch, S3XY mapping preservation/API validation, and the mobile visibility cascade.
 
-# T2CAN Universal v3.6 beta 15
+# TMR Universal v3.6 beta 15
 
 - Fixed non-YL mobile Quick Controls profile visibility so unsupported controls remain hidden and the supported controls stay on a single row.
 - Fixed the mobile DEVICES navigation visibility cascade: when S3XY Bluetooth is disabled, the DEVICES tab now follows the existing profile/runtime hidden state instead of being forced visible by the mobile nav CSS.
 - Added adaptive mobile bottom-navigation column counts when DEVICES and/or LAB are hidden.
 - Regenerated the embedded gzip dashboard from the corrected `dashboard_source.html`; CAN/BLE runtime behavior is otherwise unchanged from v3.6b14a1.
 
-# T2CAN Universal v3.6 beta 14a1
+# TMR Universal v3.6 beta 14a1
 
-- Hotfix for Arduino-ESP32 target compilation: Mode H v2 in `can_core.h` referenced `stateMux`, `dasAutoLaneChangeState`, and `dasAutoLaneChangeStateValid` before `vehicle_logic.h` declared them. The shared mutex and ALC snapshot now live in `t2can_core_state.h`, which is included before `can_core.h`, preserving the same runtime state while fixing declaration order.
+- Hotfix for Arduino-ESP32 target compilation: Mode H v2 in `can_core.h` referenced `stateMux`, `dasAutoLaneChangeState`, and `dasAutoLaneChangeStateValid` before `vehicle_logic.h` declared them. The shared mutex and ALC snapshot now live in `tmr_core_state.h`, which is included before `can_core.h`, preserving the same runtime state while fixing declaration order.
 - Added a compile-order regression contract so this dependency cannot silently regress in host/static validation.
 - No Mode H waveform, Confirm-Free routing, CAN timing, or feature behavior changes from v3.6b14.
 
-# T2CAN Universal v3.6 beta 14
+# TMR Universal v3.6 beta 14
 
 - Reworked `Confirm-Free Lane Change · EXPERIMENTAL` bus selection. **Model YL keeps its fixed, real-car-validated CAN-B/VH route with no A/B selector. Every non-YL dual-CAN profile can now select physical CAN A or CAN B in LAB**, with CAN B / Chassis as the default/fail-safe target. Model 3 Highland no longer force-routes 0x3F8 to Party.
 - Confirm-Free remains a same-bus stock-template overlay: the selected bus must first provide a live `0x3F8 UI_driverAssistControl`; only `UI_ulcStalkConfirm` byte0 bit1 is cleared, and the modified frame is transmitted back onto that same physical bus. If no selected-bus stock frame exists, no Confirm-Free TX is generated.
@@ -968,7 +968,7 @@
 - Backed up the complete prior Mode H implementation under `backup/mode_h_v1/`, while the full v3.6b13 source package remains the canonical rollback baseline. No unrelated driver-assist feature bits were added in this release.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this package is host/static/JavaScript/gzip validated in this environment.
 
-# T2CAN Universal v3.6 beta 13
+# TMR Universal v3.6 beta 13
 
 - Stabilized `Confirm-Free Lane Change · EXPERIMENTAL` routing for **Model 3 Highland + PARTY + CHASSIS**. The effective `0x3F8 UI_driverAssistControl` source/target is now forced to **CAN A · PARTY** for that exact profile/topology, using the live same-bus stock frame and clearing only `UI_ulcStalkConfirm` byte0 bit1.
 - Added continuous CAN-A/Party `0x3F8` observation for that Highland route even while Confirm-Free is OFF, so LAB can show Party RX count, rate, age, raw payload, and stock bit1 before enabling injection.
@@ -976,7 +976,7 @@
 - No new driver-assist feature bits were added. This patch is limited to Confirm-Free CAN routing/diagnostics stability.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this package is host/static/JavaScript/gzip validated in this environment.
 
-# T2CAN Universal v3.6 beta 12
+# TMR Universal v3.6 beta 12
 
 - Extended LAB **Mode H Tuning**. `HO=1 Override Rate` is now selectable from 0–100% (5% UI step): selected held-random blocks force HO=1, while all non-selected blocks preserve the stock 0x370 HO bits instead of forcing HO=0. Random decisions are held for 150–250 ms so HO does not reroll on every CAN frame. Default remains 100% for b11-compatible behavior.
 - Added LAB Mode H event-cadence controls for `WAIT Min/Max` and `REFRACTORY Min/Max`. These tune Human Interaction event spacing only; the stock-follow 0x370 CAN cadence, counter/checksum policy, AP gate, speed gate, and ramp/interact waveform structure remain unchanged. Existing 1.00–3.00 Nm torque-range tuning remains available.
@@ -989,7 +989,7 @@
 - Added per-bus Confirm-Free TX/fail/gate-blocked telemetry and last-TX bus reporting.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this package is host/static/JavaScript/gzip validated in this environment.
 
-# T2CAN Universal v3.6 beta 11
+# TMR Universal v3.6 beta 11
 
 - Added LAB `UI_ulcSpeedConfig · EXPERIMENTAL` under `0x3F8 Research`, using the attached T-CAN mapping `0x3F8 bits 50–51`. Selectable values are `STOCK`, `DISABLED (raw 0)`, `MILD (raw 1)`, `AVERAGE (raw 2)`, and `MAD MAX (raw 3)`.
 - Added LAB `UI_ulcOffHighway · EXPERIMENTAL` using `0x3F8 bit 15`, with `STOCK / OFF (0) / ON (1)` selection. This is separate from the existing production-BETA `UI_alcOffHighwayEnable` at bit 56.
@@ -1001,7 +1001,7 @@
 - R79, Summon, NAG, PedalMap/AP Drive Profile, Auto Blinker, TLSSC/TLSSC Restore, CAN recovery, Driver Monitoring Capture, and CAN Research Capture behavior are otherwise unchanged from v3.6b10.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this source package is validated with host/static/JavaScript/gzip regression checks only.
 
-# T2CAN Universal v3.6 beta 10
+# TMR Universal v3.6 beta 10
 
 - Expanded `Confirm-Free Lane Change · EXPERIMENTAL` from NOA-only to the existing AP-active DAS states 3/4/5/6 (AUTOSTEER / AUTOSTEER RESTRICTED / NOA / FSD). The NVS-backed user selection and 0x3F8 stock-copy bit1 clear behavior are otherwise unchanged.
 - Added LAB `Auto Lane Change Enable · EXPERIMENTAL` directly below Confirm-Free. It observes stock `0x293 UI_chassisControl` on CAN A and CAN B independently and displays `UI_autoLaneChangeEnable` raw bits 24–25 for each bus.
@@ -1010,7 +1010,7 @@
 - Driver Monitoring Capture remains YL-only and read-only. R79, Summon, NAG, PedalMap/AP Drive Profile, TLSSC/TLSSC Restore, CAN recovery thresholds/task cadence, and existing CAN Research Capture behavior are otherwise unchanged.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this source package is validated with host/static regression checks only.
 
-# T2CAN Universal v3.6 beta 9
+# TMR Universal v3.6 beta 9
 
 - Added `Driver Monitoring Capture · YL ONLY` under LAB as a strictly RX-only research tool. It never transmits CAN and is available only when the active vehicle profile is Model Y L.
 - Captures the YL routing observed in real-car logs: `0x389 DAS_status2` from VH/CAN B and `0x5D9 DAS_carLog` plus `0x247 DAS_autopilotDebug` from Party/CAN A.
@@ -1023,7 +1023,7 @@
 - Existing CAN Research Capture remains independent and unchanged. R79, Summon, NAG, Auto Blinker, Confirm-Free Lane Change, PedalMap/AP Drive Profile, TLSSC/TLSSC Restore, and CAN recovery policy are unchanged from the corrected v3.6b8 baseline.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this source package is validated with host/static regression checks only.
 
-# T2CAN Universal v3.6 beta 8
+# TMR Universal v3.6 beta 8
 - v3.6b8 correction: Confirm-Free Lane Change support now follows the CAN B 0x3F8 route on all supported dual-CAN topologies, including Standard Model 3/Y Body + Chassis; NOA-only gating and NVS persistence are unchanged.
 
 - Added a best-effort immediate PedalMap one-shot for every accepted LAB/S3XY acceleration-mode change. The newest real stock 0x334 template is copied, the requested PedalMap is applied, counter/checksum are regenerated, and one CAN A/Body or CAN B/VH TX is attempted immediately before the existing stock-follow overlay continues.
@@ -1038,7 +1038,7 @@
 - R79, Summon, NAG, TLSSC/TLSSC Restore, CAN recovery thresholds/task cadence, and CAN Research Capture behavior are unchanged from v3.6b7 except for 0x334 cached-template invalidation already tied to recovery.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this source package is validated with host/static regression checks only.
 
-# T2CAN Universal v3.6 beta 7
+# TMR Universal v3.6 beta 7
 
 - Expanded LAB `AP Drive Profile` from Model Y L-only to every supported 0x334 topology: Model Y L `PARTY + VH` and Standard Model 3/Y `BODY + CHASSIS`. Standard `PARTY + CHASSIS` remains blocked because the required Body 0x334 route is unavailable.
 - Kept the AP-state gate unchanged: the profile owns outgoing 0x334 only in AUTOSTEER nominal/restricted and NOA. FSD remains excluded.
@@ -1052,7 +1052,7 @@
 - CAN A/B diagnostics, R79, Summon, NAG, Auto Blinker, recovery policy, CAN Research Capture, TLSSC, and TLSSC Restore are unchanged from v3.6b6.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this source package is validated with host/static regression checks only.
 
-# T2CAN Universal v3.6 beta 6
+# TMR Universal v3.6 beta 6
 
 - Added CAN A / MCP2515 forensic diagnostics without changing CAN A admission, NAG, Auto Blinker, PedalMap, R79, Summon, TLSSC or recovery policy.
 - Added a 64-entry rolling CAN A application-TX trace. On a newly observed CAN A BUS-OFF condition (`EFLG_TXBO` or the existing `mcpTxFailConsecutive > 5` fallback), the recent TX window is frozen with MCP result/gate reason, EFLG, TX-fail sequence, CAN A RX age and RX-overflow count.
@@ -1063,7 +1063,7 @@
 - Kept S3XY diagnostics compile-out code, compatibility/NVS migrations, full diagnostic APIs, CAN task cadence, Research Capture cadence, task stack sizing, R79/Summon behavior and TLSSC Restore unchanged.
 - Arduino-ESP32 target compilation still requires the user-side board toolchain; this source package is validated with host/static regression checks only.
 
-# T2CAN Universal v3.6 beta 5
+# TMR Universal v3.6 beta 5
 
 - Zero-behavior cleanup release based on v3.6b4; CAN timing, R79/Summon policy, recovery, task sizing, NVS migration, PedalMap session behavior, AP Drive Profile behavior, and TLSSC Restore are unchanged.
 - Removed write-only diagnostic state/counters that had no readers or API/UI consumers, including retired ALC transition mirrors, unused stalkless/door counters, the unused 0x249 timestamp mirror, and an unused CAN Research raw first-frame mirror.
@@ -1073,7 +1073,7 @@
 - Removed the retired Mode D/E/F-only HOME rendering branch. Supported A/B/C/H behavior remains AP-state driven. Persisted unsupported NAG mode IDs are still normalized to Mode A by the existing runtime load path.
 - No CAN-loop throttling, Summon refresh timing, Research Capture timing, FreeRTOS stack sizing, or compatibility/NVS migration removal is included in this release.
 
-# T2CAN Universal v3.6 beta 4
+# TMR Universal v3.6 beta 4
 
 - Added LAB `PedalMap Control` for direct runtime selection of `STOCK / CHILL / SPORT / PERFORMANCE` using the existing model-aware 0x334 routing. A dedicated LAB `PERFORMANCE` button is also provided for one-tap session activation.
 - Reworked manual PedalMap control as a volatile drive-session override. CHILL/SPORT/PERFORMANCE targets are RAM-only, are never written as PedalMap values to NVS, and boot always starts with no manual PedalMap override armed.
@@ -1084,7 +1084,7 @@
 - Standard Model 3/Y Party+Chassis remains unsupported/hidden for PedalMap because Body 0x334 is unavailable on that topology. Existing Model Y L VH/CAN B and Standard Model 3/Y Body+Chassis routing is unchanged.
 - TLSSC Restore remains completely untouched.
 
-# T2CAN Universal v3.6 beta 3
+# TMR Universal v3.6 beta 3
 
 - Added a Model Y L-only LAB `AP Drive Profile` toggle. During AUTOSTEER nominal/restricted or NOA, VH/CAN B 0x334 is overlaid to CHILL/Comfort (`UI_pedalMap` raw 0) and the live-validated YL Reduced regen raw (`byte[2] = 0x0A`). AP exit returns immediately to pure STOCK 0x334 instead of forcing Standard.
 - Kept the AP Drive Profile disabled/hidden on Standard Model 3/Y until their regen field is independently validated.
@@ -1097,7 +1097,7 @@
 - Unified internal submenu motion with the directional page animation and deferred forced polling until the panel animation completes, reducing WebKit/iPhone transition stutter.
 - Preserved the v3.6b2 R79 default-on/manual-latch policy and existing vehicle CAN routing.
 
-# T2CAN Universal v3.6 beta 2
+# TMR Universal v3.6 beta 2
 
 - Fixed R79 manual-driving instability: Tesla DAS state 2 is now treated consistently as an AP-OFF/manual state alongside 0/1/8/9/14.
 - Added a latched manual D/R suppression state so transient DAS/gear uncertainty no longer makes R79 oscillate ACTIVE/SUSPENDED once manual driving is positively established.
@@ -1114,9 +1114,9 @@
 - NAG Modes remain A / B / C / H only. Mode D/E/F remain removed.
 - Existing vehicle-profile routing is unchanged for Model Y L and Standard Model 3/Y.
 
-# T2CAN Universal v3.6 beta 1
+# TMR Universal v3.6 beta 1
 
-- Hotfix: fixed the Arduino compile-order error where `t2can_forward.h` referenced `R79RuntimeStatus` before the type was declared.
+- Hotfix: fixed the Arduino compile-order error where `tmr_forward.h` referenced `R79RuntimeStatus` before the type was declared.
 - Removed experimental NAG Modes D, E, and F from the firmware runtime, presets, API selection path, diagnostics, and dashboard.
 - NAG mode selection is now A / B / C / H only. Existing public/persisted IDs remain A=0, B=1, C=3, H=7; legacy stored IDs 2/4/5/6 safely fall back to Mode A.
 - Removed D/E/F-only portable gating, cadence-learning, EPAS-faithful waveform, and cadence diagnostics while retaining Mode H exact-echo handling.
@@ -1125,15 +1125,15 @@
 - R79 TX is suspended only when manual Drive or Reverse is positively confirmed while AP and Summon/remote-control state are inactive.
 - Summon/remote-control evidence takes precedence over D/R so Smart Summon can drive forward or reverse without suppressing R79.
 - Park, Neutral, AP, Summon, unknown gear, and stale/invalid state keep R79 TX active.
-- Stock 0x3FD mux1 RX triggers immediate V2.6-like bounded direct TWAI reassertion.
+- Stock 0x3FD mux1 RX triggers immediate V2.6-like bounded direct CHASSIS reassertion.
 - Independent periodic R79 refresh remains separate from immediate TX; immediate reassertions never reset the periodic clock.
 - Removed R79-specific recovery-epoch, fresh-mask, barrier-mutex, pending/coalescing/retry, and positive-gate dependencies from the active R79 TX path.
-- Retained minimum transport safeguards: TWAI must be ready and administrative TX hold must be clear. CAN-B TX trace remains active.
+- Retained minimum transport safeguards: CHASSIS must be ready and administrative TX hold must be clear. CAN-B TX trace remains active.
 - Preserved existing model-specific Gear/ACA/AP/SPR source routing for both Model Y L and Standard Model 3/Y.
 - Updated HOME/LAB dashboard terminology from AP/R79 GATE to R79 TX states: ACTIVE, SUSPENDED, WAIT TEMPLATE, CAN OFFLINE, and ADMIN HOLD.
 - Dashboard exposes the current R79 reason/gear and manual-suspension counters while preserving the approved neutral-charcoal automatic dark theme.
 
-# T2CAN Universal v3.5a1
+# TMR Universal v3.5a1
 
 - R79/Summon transport rollback toward proven Summon-Unlock V2.6 behavior.
 - Real 0x3FD mux1 now triggers immediate direct R79 TX when authorized.
@@ -1143,7 +1143,7 @@
 - Preserved existing model-specific Gear/ACA source routing.
 - Added complete dark-mode overrides for the v3.5 mobile dashboard.
 
-# T2CAN Universal Changelog
+# TMR Universal Changelog
 
 ## v3.5
 

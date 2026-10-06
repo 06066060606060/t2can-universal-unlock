@@ -11,13 +11,16 @@
 // A new global epoch still cancels in-flight TX, while freshness for an
 // unaffected, physically-live bus may cross the local recovery boundary.
 static uint8_t canPhysicalFreshMaskNow(uint32_t now) {
-  uint8_t mask = SUMMON_BUS_NONE;
+  uint8_t mask = 0;
   const uint32_t lastA = lastCanAFrameMs;
   const uint32_t lastB = lastCanBFrameMs;
-  if (lastA != 0 && (uint32_t)(now - lastA) <= RECOVERY_BUS_FRESH_MS)
-    mask = (uint8_t)(mask | SUMMON_BUS_A);
+  const uint32_t lastC = lastCanCFrameMs;
+  if (lastC != 0 && (uint32_t)(now - lastC) <= RECOVERY_BUS_FRESH_MS)
+    mask = (uint8_t)(mask | CAN_TX_FRESH_PARTY);
   if (lastB != 0 && (uint32_t)(now - lastB) <= RECOVERY_BUS_FRESH_MS)
-    mask = (uint8_t)(mask | SUMMON_BUS_B);
+    mask = (uint8_t)(mask | CAN_TX_FRESH_CHASSIS);
+  if (lastA != 0 && (uint32_t)(now - lastA) <= RECOVERY_BUS_FRESH_MS)
+    mask = (uint8_t)(mask | CAN_TX_FRESH_BODY);
   return mask;
 }
 
@@ -221,8 +224,8 @@ static void invalidateCanTxStateForFullRecovery() {
   nagHumanRuntimeReset(true);
 }
 
-static void recordTwaiBusOffSnapshot(const twai_status_info_t &st, uint32_t now) {
-  CanTwaiRecoverySnapshot snap = {};
+static void recordChassisBusOffSnapshot(const McpChassisStatus &st, uint32_t now) {
+  CanChassisRecoverySnapshot snap = {};
   snap.valid = true;
   snap.state = (uint8_t)st.state;
   snap.capturedMs = now;
@@ -238,7 +241,7 @@ static void recordTwaiBusOffSnapshot(const twai_status_info_t &st, uint32_t now)
   snap.arbLostCount = st.arb_lost_count;
   snap.busErrorCount = st.bus_error_count;
   portENTER_CRITICAL(&canRecoveryMux);
-  canTwaiLastBusOffSnapshot = snap;
+  canChassisLastBusOffSnapshot = snap;
   portEXIT_CRITICAL(&canRecoveryMux);
 }
 
@@ -251,7 +254,7 @@ static void canBTraceFreezeBusOff(uint32_t now) {
   for (uint8_t i = count; i < CAN_B_TX_TRACE_CAPACITY; i++) canBTxTraceFrozen[i] = {};
   canBTxTraceFrozenCount = count;
   canBTxTraceFrozenMs = now;
-  canBTxTraceFrozenBusOffOrdinal = canTwaiBusOffCount + 1U;
+  canBTxTraceFrozenBusOffOrdinal = canChassisBusOffCount + 1U;
   portEXIT_CRITICAL(&canBTxTraceMux);
 }
 
@@ -287,48 +290,91 @@ static void canATraceFreezeBusOff(uint32_t now, uint8_t eflg, uint8_t txFailCons
 
 // Initialize the MCP2515 and publish readiness only after every stage succeeds.
 // All setup/recovery paths use the same checked sequence and MCP_CLOCK.
-static bool mcpInitChecked() {
-  mcpReady = false;
-  const MCP2515::ERROR resetErr = Can_A.reset();
-  delay(2); // conservative margin beyond MCP2515 128-cycle oscillator startup
+static bool tmrMcpInitController(MCP2515 &can, volatile bool &ready, volatile uint8_t &state,
+                                  const char *name) {
+  ready = false;
+  const MCP2515::ERROR resetErr = can.reset(); // SPI RESET command; never toggles GPIO9.
+  delay(2);
   const MCP2515::ERROR rateErr = (resetErr == MCP2515::ERROR_OK)
-                                   ? Can_A.setBitrate(CAN_500KBPS, MCP_CLOCK)
+                                   ? can.setBitrate(CAN_500KBPS, MCP_CLOCK)
                                    : resetErr;
   const MCP2515::ERROR modeErr = (rateErr == MCP2515::ERROR_OK)
-                                   ? Can_A.setNormalMode()
+                                   ? can.setNormalMode()
                                    : rateErr;
   const bool ok = resetErr == MCP2515::ERROR_OK &&
                   rateErr == MCP2515::ERROR_OK &&
                   modeErr == MCP2515::ERROR_OK;
-  mcpReady = ok;
+  ready = ok;
+  state = ok ? 0 : 2;
+  if (!ok) {
+    TMR_SERIAL_PRINTF("[%s] MCP2515 init failed: reset=%d bitrate=%d mode=%d\n",
+                        name, (int)resetErr, (int)rateErr, (int)modeErr);
+  }
+  return ok;
+}
+
+static bool mcpInitChecked() {
+  const bool ok = tmrMcpInitController(Can_A, mcpReady, mcpState, "CAN A / BODY");
   if (ok) {
     mcpTxFailConsecutive = 0;
     mcpState = 0;
-  } else {
-    mcpState = 2;
-    T2CAN_SERIAL_PRINTF("[CAN A] init failed: reset=%d bitrate=%d mode=%d\n",
-                  (int)resetErr, (int)rateErr, (int)modeErr);
   }
   return ok;
+}
+
+static bool mcpPartyInitChecked() {
+  return tmrMcpInitController(Can_C, mcpPartyReady, mcpPartyState, "CAN C / PARTY");
 }
 
 static bool mcpReinit() {
   return mcpInitChecked();
 }
 
-static void canTwaiHandleAlerts() {
-  uint32_t twaiAlerts = 0;
-  if (twai_read_alerts(&twaiAlerts, 0) != ESP_OK || twaiAlerts == 0) return;
-  if (twaiAlerts & TWAI_ALERT_BUS_OFF) {
+static bool mcpPartyReinit() {
+  return mcpPartyInitChecked();
+}
+
+static void canChassisHandleAlerts() {
+  uint32_t chassisAlerts = 0;
+  if (mcpChassisReadAlerts(&chassisAlerts, 0) != ESP_OK || chassisAlerts == 0) return;
+  if (chassisAlerts & MCP_CHASSIS_ALERT_BUS_OFF) {
     const uint32_t alertNow = (uint32_t)millis();
-    twai_status_info_t alertSt = {};
+    McpChassisStatus alertSt = {};
     canBTraceFreezeBusOff(alertNow);
-    if (twai_get_status_info(&alertSt) == ESP_OK) recordTwaiBusOffSnapshot(alertSt, alertNow);
+    if (mcpChassisGetStatus(&alertSt) == ESP_OK) recordChassisBusOffSnapshot(alertSt, alertNow);
+  }
+}
+
+
+static void tmrProcessPartyFrame(const struct can_frame &rxf, uint32_t frameNow,
+                                 uint32_t rxEpoch) {
+  if ((rxf.can_id & 0xC0000000UL) != 0) return;
+  const uint16_t id = (uint16_t)(rxf.can_id & 0x7FFu);
+  canRxObserve(CAN_RX_BUS_PARTY, frameNow);
+  canTxMarkFresh(CAN_TX_FRESH_PARTY);
+  __atomic_add_fetch(&mcpPartyRxCount, 1U, __ATOMIC_RELAXED);
+  // mcpRxCount is the historical NAG warm-up counter; it now follows J4 PARTY.
+  __atomic_add_fetch(&mcpRxCount, 1U, __ATOMIC_RELAXED);
+  bootCaptureObservePartyFrame(id, rxf.can_dlc, rxf.data);
+  researchCaptureObserveParty(id, rxf.can_dlc, rxf.data);
+  driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_A, id, rxf.can_dlc, rxf.data);
+
+  if (id == 0x7FFu && rxf.can_dlc == 8u)
+    countryOverrideObserve7ffCanA(rxf, rxEpoch);
+  if (id == 0x238u && rxf.can_dlc == 8u)
+    countryOverrideObserve238CanA(rxf, rxEpoch);
+
+  nagProcessMcpFrame(rxf);
+  if (id == VISUAL_DEBUG_ID && rxf.can_dlc >= 8u) {
+    visualBehaviorType = (uint8_t)readBitsLE(rxf.data, 56, 2);
+    visualDebugRxCount++;
+    visualDebugLastMs = frameNow;
+    evaluateAutoBlinker();
   }
 }
 
 static void canTaskMcp(void* arg) {
-  T2CAN_SERIAL_PRINTLN("[CAN A] MCP2515 task started");
+  TMR_SERIAL_PRINTLN("[CAN A] MCP2515 task started");
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
   for (;;) {
     const uint32_t loopStartMs = (uint32_t)millis();
@@ -377,12 +423,13 @@ static void canTaskMcp(void* arg) {
       const uint32_t frameNow = (uint32_t)millis();
       lastCanAFrameMs = frameNow;
       mcpRxCount++;
-      canRxObserve(CAN_RX_BUS_PARTY, frameNow);
+      canRxObserve(CAN_RX_BUS_BODY, frameNow);
+      canTxMarkFresh(CAN_TX_FRESH_BODY);
+      __atomic_add_fetch(&mcpBodyRxCount, 1U, __ATOMIC_RELAXED);
       // All downstream Model YL decoders and TX decisions expect standard
       // 11-bit DATA frames. Aggregate telemetry still counts rejected frames.
       if ((rxf.can_id & 0xC0000000UL) != 0) continue;
       const uint16_t partyId = (uint16_t)(rxf.can_id & 0x7FF);
-      canTxMarkFresh(CAN_TX_FRESH_PARTY); // physical CAN A fresh in this recovery epoch
       bootCaptureObservePartyFrame(partyId, rxf.can_dlc, rxf.data);
       researchCaptureObserveParty(partyId, rxf.can_dlc, rxf.data);
       driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_A, partyId, rxf.can_dlc, rxf.data);
@@ -394,18 +441,7 @@ static void canTaskMcp(void* arg) {
         countryOverrideObserve238CanA(rxf, countryRxEpoch);
       if (partyId == 0x3FD && rxf.can_dlc == 8)
         laneGraphObserveBody(rxf, countryRxEpoch, lanePrefetchedRxMs[bi]);
-      if (activeCanAIsParty()) {
-        // Party CAN on CAN A: Nag Killer is topology-gated. Keep YL-only
-        // DAS/Summon/visual-debug behavior explicitly model-gated so selecting
-        // Party + Chassis on Standard 3/Y cannot accidentally enable YL paths.
-        nagProcessMcpFrame(rxf);
-        if (activeProfileIsYl() && partyId == VISUAL_DEBUG_ID && rxf.can_dlc >= 8) {
-          visualBehaviorType = (uint8_t)readBitsLE(rxf.data, 56, 2);
-          visualDebugRxCount++;
-          visualDebugLastMs = frameNow;
-          evaluateAutoBlinker();
-        }
-      } else if (activeCanAIsBody()) {
+      if (activeCanAIsBody()) {
         // Standard 3/Y Body CAN: physical turn controls and front-interior
         // door-open switch used by the optional lane-change cancel action.
         if (nagTsl9Body39BSelected())
@@ -416,12 +452,26 @@ static void canTaskMcp(void* arg) {
           handle249OnCanA(rxf.data, rxf.can_dlc);
         if (partyId == VCLEFT_SWITCH_ID && rxf.can_dlc >= 8 && activeTurnSignalVariant == TURN_SIGNAL_STALKLESS)
           handle3C2OnCanA(rxf);
+        if (activeProfileIsYl() && partyId == VCLEFT_SWITCH_ID && rxf.can_dlc >= 8) {
+          struct can_frame windowCompat = {};
+          tmrCanFrameToChassis(rxf, windowCompat);
+          handleDriverWindowLab3C2CanB(windowCompat);
+        }
         if (partyId == VCLEFT_SWITCH_ID && rxf.can_dlc >= 8 &&
             activeProfileTsl9InputOnBodyCanA()) {
           tsl9InputObserveCanA(rxf);
         }
         if (partyId == DOOR_SWITCH_ID && rxf.can_dlc >= 4)
           handle102LaneChangeCancel(rxf.data, rxf.can_dlc);
+
+        // TMR does not consume DAS_status 0x399 from BODY/J2. The NAG gate
+        // is sourced exclusively from CHASSIS/J3 in the CAN-B task below.
+        if (activeProfileIsYl() && partyId == 0x3FDu && rxf.can_dlc == 8 &&
+            readMuxID(rxf.data) == 1u) {
+          struct can_frame vhCompat = {};
+          tmrCanFrameToChassis(rxf, vhCompat);
+          (void)r79ProcessStockFrame(vhCompat, 1u, (uint32_t)millis());
+        }
       }
       }
       canTaskDiagnosticsEnterStagePure(canTaskMcpDiagnostics,
@@ -429,8 +479,36 @@ static void canTaskMcp(void* arg) {
                                        (uint32_t)millis());
     }
 
+    // ── J4 PARTY / MCP2515 ──
+    // Party is independent from J2 BODY but shares the same SPI peripheral.
+    // Keep the drain bounded so a saturated Party bus cannot starve Body.
+    {
+      uint8_t partyProcessed = 0;
+      struct can_frame partyFrame = {};
+      while (partyProcessed < MCP_RX_BUDGET &&
+             Can_C.readMessage(&partyFrame) == MCP2515::ERROR_OK) {
+        const uint32_t partyEpoch = canTxEpochSnapshot();
+        const uint32_t partyNow = (uint32_t)millis();
+        tmrProcessPartyFrame(partyFrame, partyNow, partyEpoch);
+        partyProcessed++;
+      }
+      const uint8_t eflgParty = Can_C.getErrorFlags();
+      if (eflgParty & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR))
+        Can_C.clearRXnOVR();
+      if (eflgParty & MCP2515::EFLG_TXBO) {
+        mcpPartyState = 2;
+        const unsigned long partyNowMs = millis();
+        if (partyNowMs - lastMcpPartyRecoverMs >= 3000UL) {
+          lastMcpPartyRecoverMs = partyNowMs;
+          if (mcpPartyReinit()) mcpPartyState = 0;
+        }
+      } else if (mcpPartyReady) {
+        mcpPartyState = 0;
+      }
+    }
+
     canARxDiagnosticsCompleteLoopPure(canARxDiagnostics, processed,
-                                      MCP_RX_BUDGET);
+                                       MCP_RX_BUDGET);
     canTaskDiagnosticsEnterStagePure(canTaskMcpDiagnostics,
                                      CAN_TASK_STAGE_SERVICE,
                                      (uint32_t)millis());
@@ -458,7 +536,7 @@ static void canTaskMcp(void* arg) {
             (eflg & MCP2515::EFLG_RX0OVR) != 0,
             (eflg & MCP2515::EFLG_RX1OVR) != 0);
         Can_A.clearRXnOVR();
-        T2CAN_SERIAL_PRINTLN("[CAN A] RX overflow flags cleared");
+        TMR_SERIAL_PRINTLN("[CAN A] RX overflow flags cleared");
       }
 
       // 2) REAL bus-off via EFLG_TXBO (not only TX failures).
@@ -471,7 +549,7 @@ static void canTaskMcp(void* arg) {
         mcpState = 2; // BUS-OFF
         if (now - lastMcpRecoverMs > 3000) {
           lastMcpRecoverMs = now;
-          T2CAN_SERIAL_PRINTF("[CAN A] MCP2515 bus-off (eflg=0x%02X txFailSeq=%u), reset...\n",
+          TMR_SERIAL_PRINTF("[CAN A] MCP2515 bus-off (eflg=0x%02X txFailSeq=%u), reset...\n",
                         eflg, consecutive);
           invalidateCanTxStateForCanARecovery();
           if (!mcpReinit()) requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_MCP_REINIT_FAIL);
@@ -492,61 +570,61 @@ static void canTaskMcp(void* arg) {
   }
 }
 
-static void canTaskTwai(void* arg) {
-  T2CAN_SERIAL_PRINTLN("[CAN B] TWAI task started");
-  unsigned long lastTwaiStatusMs = 0;
+static void canTaskChassis(void* arg) {
+  TMR_SERIAL_PRINTLN("[CAN B] CHASSIS task started");
+  unsigned long lastChassisStatusMs = 0;
   unsigned long lastNoCanWarn = 0;
   uint32_t lastQueueStatusMs = 0;
 
-  canTaskDiagnosticsResetPure(canTaskTwaiDiagnostics);
+  canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
   for (;;) {
     const uint32_t loopStartMs = (uint32_t)millis();
-    canTaskTwaiHeartbeatMs = loopStartMs;
-    canTaskDiagnosticsHeartbeatPure(canTaskTwaiDiagnostics, loopStartMs,
+    canTaskChassisHeartbeatMs = loopStartMs;
+    canTaskDiagnosticsHeartbeatPure(canTaskChassisDiagnostics, loopStartMs,
                                     (uint32_t)micros());
     if (canTasksStopping || canMaintenanceActive()) {
-      canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+      canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                        CAN_TASK_STAGE_QUIESCE,
                                        (uint32_t)millis());
-      canTaskTwaiQuiesced = true;
+      canTaskChassisQuiesced = true;
       while (canTasksStopping || canMaintenanceActive()) vTaskDelay(pdMS_TO_TICKS(5));
-      canTaskTwaiQuiesced = false;
+      canTaskChassisQuiesced = false;
       continue;
     }
     // Drain completion/error alerts before the potentially busy RX batch so
     // TX_SUCCESS observation latency stays bounded by one task loop.
-    canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+    canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                      CAN_TASK_STAGE_ALERTS,
                                      (uint32_t)millis());
-    canTwaiHandleAlerts();
-    twai_message_t f;
+    canChassisHandleAlerts();
+    struct can_frame f;
     uint8_t rxBudget = 0;
-    canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+    canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                      CAN_TASK_STAGE_RECEIVE,
                                      (uint32_t)millis());
     uint32_t countryRxEpoch = canTxEpochSnapshot();
-    esp_err_t rxResult = twai_receive(&f, pdMS_TO_TICKS(2));
+    esp_err_t rxResult = mcpChassisReceive(&f, pdMS_TO_TICKS(2));
     uint32_t laneRxMs = (uint32_t)millis();
-    while (rxBudget < TWAI_RX_DRAIN_BUDGET && rxResult == ESP_OK) {
+    while (rxBudget < MCP_CHASSIS_RX_DRAIN_BUDGET && rxResult == ESP_OK) {
       rxBudget++;
-      canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+      canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                        CAN_TASK_STAGE_PROCESS,
                                        (uint32_t)millis());
       // v3.6d2 R79 fast path: this is deliberately before millis(), RX-gap
       // accounting, capture, and normal decoding. Preserve the existing d1
       // fail-open/manual-latch authorization policy inside the fast function.
       bool mux1StockClaimed = false;
-      if (!f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
+      if (!activeProfileIsYl() && !((f.can_id & CAN_EFF_FLAG) != 0) && !((f.can_id & CAN_RTR_FLAG) != 0) && f.can_id == 0x3FD && f.can_dlc >= 8) {
         const uint8_t timingMux = readMuxID(f.data);
-        if (f.data_length_code == 8u && timingMux == 1u)
+        if (f.can_dlc == 8u && timingMux == 1u)
           visionControlCacheStock(VISION_CONTROL_CHASSIS_PURE, f.data, countryRxEpoch, laneRxMs);
         const uint32_t r79FrameNowMs = (uint32_t)millis();
         mux1StockClaimed = r79ProcessStockFrame(f, timingMux, r79FrameNowMs);
       }
       // Keep the supervisor heartbeat alive even under sustained CAN B traffic.
       const uint32_t frameNow = (uint32_t)millis();
-      canTaskTwaiHeartbeatMs = frameNow;
-      canTaskDiagnosticsPulsePure(canTaskTwaiDiagnostics, frameNow);
+      canTaskChassisHeartbeatMs = frameNow;
+      canTaskDiagnosticsPulsePure(canTaskChassisDiagnostics, frameNow);
       const uint32_t previousCanBFrameMs = lastCanBFrameMs;
       if (previousCanBFrameMs != 0) {
         const uint32_t rxGapMs = (uint32_t)(frameNow - previousCanBFrameMs);
@@ -556,12 +634,12 @@ static void canTaskTwai(void* arg) {
       lastCanBFrameMs = frameNow;
       canRxObserve(CAN_RX_BUS_VH, frameNow);
       // Only standard 11-bit DATA frames may reach Tesla decoders or TX paths.
-      if (!f.extd && !f.rtr) {
+      if (!((f.can_id & CAN_EFF_FLAG) != 0) && !((f.can_id & CAN_RTR_FLAG) != 0)) {
         canTxMarkFresh(CAN_TX_FRESH_VH);
-        bootCaptureObserveVhFrame(f.identifier, f.data_length_code);
-        researchCaptureObserveVh((uint16_t)f.identifier, f.data_length_code, f.data);
-        driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_B, (uint16_t)f.identifier, f.data_length_code, f.data);
-        switch (f.identifier) {
+        bootCaptureObserveVhFrame(f.can_id, f.can_dlc);
+        researchCaptureObserveVh((uint16_t)f.can_id, f.can_dlc, f.data);
+        driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_B, (uint16_t)f.can_id, f.can_dlc, f.data);
+        switch (f.can_id) {
         case UI_CHASSIS_CONTROL_ID:
           uiAutoLaneChangeObserveAndInjectCanB(f);
           break;
@@ -569,26 +647,24 @@ static void canTaskTwai(void* arg) {
           // Model Y L carries the pedal-map frame on VH / CAN B. Standard 3/Y
           // Body+Chassis uses the CAN-A Body copy instead and must ignore any
           // numeric 0x334 that happens to exist on Chassis CAN.
-          if (activeProfileIsYl() && activeProfilePedalMapSupported()) handlePedalMap334OnCanB(f);
+          if (!activeProfileIsYl() && activeProfilePedalMapSupported()) handlePedalMap334OnCanB(f);
           break;
-        case LEFTSTALK_ID:
-          if (activeProfileIsYl() && activeTurnSignalVariant == TURN_SIGNAL_STALK && f.data_length_code >= 3)
-            handle249OnCanB(f.data, f.data_length_code);
-          break;
+        // TMR: 0x249 stalk state is read exclusively from BODY/J2 (CAN A).
+        // Do not consume or transmit 0x249 on CHASSIS/J3.
         case VCLEFT_SWITCH_ID:
-          if (activeProfileIsYl() && f.data_length_code >= 8)
+          if (activeProfileIsYl() && f.can_dlc >= 8)
             handleDriverWindowLab3C2CanB(f);
           if (activeProfileTsl9InputSupported() &&
-              !activeProfileTsl9InputOnBodyCanA() && f.data_length_code >= 8) {
+              !activeProfileTsl9InputOnBodyCanA() && f.can_dlc >= 8) {
             tsl9InputObserveCanB(f);
           }
           break;
         case DOOR_SWITCH_ID:
-          if (activeProfileIsYl() && f.data_length_code >= 4)
-            handle102LaneChangeCancel(f.data, f.data_length_code);
+          if (activeProfileIsYl() && f.can_dlc >= 4)
+            handle102LaneChangeCancel(f.data, f.can_dlc);
           break;
         case VISUAL_DEBUG_ID:
-          if (activeCanBIsChassis() && f.data_length_code >= 8) {
+          if (activeCanBIsChassis() && f.can_dlc >= 8) {
             visualBehaviorType = (uint8_t)readBitsLE(f.data, 56, 2);
             visualDebugRxCount++;
             visualDebugLastMs = frameNow;
@@ -596,15 +672,18 @@ static void canTaskTwai(void* arg) {
           }
           break;
         case 280:
-          if (activeCanBIsChassis() && f.data_length_code >= 7) handle280(f.data);
+          if (activeCanBIsChassis() && f.can_dlc >= 7) handle280(f.data);
           break;
         case 390:
-          if (activeCanBIsChassis() && f.data_length_code >= 8) handle390(f.data);
+          if (activeCanBIsChassis() && f.can_dlc >= 8) handle390(f.data);
           break;
         case 921:
-          if (activeCanBIsChassis() && f.data_length_code >= 6) {
-            (void)nagProcessTsl9Twai399(f);
-            handle921(f.data, f.data_length_code);
+          if (activeCanBIsChassis() && f.can_dlc >= 8) {
+            // TMR NAG gate: DAS_status 0x399 is sourced from CHASSIS/J3.
+            // Always decode it before the PARTY/J4 0x370 torque path.
+            nagUpdateApState(f.data, f.can_dlc);
+            (void)nagProcessTsl9Chassis399(f);
+            handle921(f.data, f.can_dlc);
           }
           break;
         case 0x331:
@@ -612,7 +691,7 @@ static void canTaskTwai(void* arg) {
           break;
         // Model YL/public-DBC reference: UI_driverAssistMapData road context.
         case 0x238:
-          if (f.data_length_code >= 5) handleRoadContext238(f.data, f.data_length_code);
+          if (f.can_dlc >= 5) handleRoadContext238(f.data, f.can_dlc);
           countryOverrideObserve238CanB(f, countryRxEpoch);
           break;
         case 0x7FF:
@@ -622,16 +701,16 @@ static void canTaskTwai(void* arg) {
         // 1016 (SPR) is read on CAN B for both models.
         case DRIVER_ASSIST_ID:
           // Always retain stock telemetry before applying the production/research overlay.
-          handle1016(f.data, f.data_length_code);
+          handle1016(f.data, f.can_dlc);
           lab3f8FrameRxMs = laneRxMs;
           lab3f8FrameRxEpoch = countryRxEpoch;
           injectDriverAssistControl(f);
           break;
         case 1021:
-          if (f.data_length_code >= 8) {
+          if (f.can_dlc >= 8) {
             uint8_t mux = readMuxID(f.data);
             if (mux == 1) {
-              r79LabObserve3fdMux1(f.data, f.data_length_code);
+              r79LabObserve3fdMux1(f.data, f.can_dlc);
               const bool ulcCloneClaimed = injectUlcSnooze3fdMux1(f);
               laneGraphObserveStock(f, countryRxEpoch, mux1StockClaimed || ulcCloneClaimed, laneRxMs);
             } else if (mux == 0) injectTLSSC(f);
@@ -642,18 +721,18 @@ static void canTaskTwai(void* arg) {
           break;
         }
       }
-      canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+      canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                        CAN_TASK_STAGE_RECEIVE,
                                        (uint32_t)millis());
       countryRxEpoch = canTxEpochSnapshot();
-      rxResult = rxBudget < TWAI_RX_DRAIN_BUDGET ? twai_receive(&f, 0) : ESP_ERR_TIMEOUT;
+      rxResult = rxBudget < MCP_CHASSIS_RX_DRAIN_BUDGET ? mcpChassisReceive(&f, 0) : ESP_ERR_TIMEOUT;
       laneRxMs = (uint32_t)millis();
     }
 
     // Refresh Summon evidence before R79 retry/periodic servicing. The 5 s
     // V2.6 PARK fallback remains gate-compatible, but d1 queue priority uses
     // fresh real gear rather than gateParked.
-    canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+    canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                      CAN_TASK_STAGE_SERVICE,
                                      (uint32_t)millis());
     refreshSummonState();
@@ -666,78 +745,78 @@ static void canTaskTwai(void* arg) {
     researchCaptureTick(captureNow);
     driverMonitorCaptureTick(captureNow);
     const uint32_t queueNow = (uint32_t)millis();
-    if ((uint32_t)(queueNow - lastQueueStatusMs) >= TWAI_QUEUE_TELEMETRY_PERIOD_MS) {
+    if ((uint32_t)(queueNow - lastQueueStatusMs) >= MCP_CHASSIS_QUEUE_TELEMETRY_PERIOD_MS) {
       lastQueueStatusMs = queueNow;
-      twaiReadQueueStatus();
+      mcpChassisReadQueueStatus();
     }
     blinkATxTick();
 
     // Read alerts again after RX/tick work. BUS_OFF snapshot behavior is
     // preserved; d3 additionally consumes TX_IDLE/TX_SUCCESS for diagnostics.
-    canTwaiHandleAlerts();
+    canChassisHandleAlerts();
 
-    // TWAI status / recovery. Recovery ends in STOPPED, so explicitly
+    // CHASSIS status / recovery. Recovery ends in STOPPED, so explicitly
     // restart the driver instead of leaving CAN B silent after BUS_OFF.
-    canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+    canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                      CAN_TASK_STAGE_STATUS,
                                      (uint32_t)millis());
     unsigned long now = millis();
-    if (now - lastTwaiStatusMs >= 1000) {
-      lastTwaiStatusMs = now;
-      twai_status_info_t st = {};
-      if (twai_get_status_info(&st) == ESP_OK) {
-        if (st.state == TWAI_STATE_RUNNING) {
-          twaiReady = true;
-        } else if (st.state == TWAI_STATE_BUS_OFF) {
-          twaiReady = false;
-          canTwaiBusOffCount++;
-          canTwaiLastEventReason = CAN_REC_TWAI_BUS_OFF;
-          canTwaiLastEventMs = (uint32_t)now;
+    if (now - lastChassisStatusMs >= 1000) {
+      lastChassisStatusMs = now;
+      McpChassisStatus st = {};
+      if (mcpChassisGetStatus(&st) == ESP_OK) {
+        if (st.state == MCP_CHASSIS_STATE_RUNNING) {
+          mcpChassisReady = true;
+        } else if (st.state == MCP_CHASSIS_STATE_BUS_OFF) {
+          mcpChassisReady = false;
+          canChassisBusOffCount++;
+          canChassisLastEventReason = CAN_REC_CHASSIS_BUS_OFF;
+          canChassisLastEventMs = (uint32_t)now;
           uint32_t frozenOrdinal = 0;
           portENTER_CRITICAL(&canBTxTraceMux);
           frozenOrdinal = canBTxTraceFrozenBusOffOrdinal;
           portEXIT_CRITICAL(&canBTxTraceMux);
-          if (frozenOrdinal != canTwaiBusOffCount) {
+          if (frozenOrdinal != canChassisBusOffCount) {
             // Alert delivery is normally immediate. If it was missed, preserve
             // the old poll-based behavior as a fail-safe and freeze now.
             canBTraceFreezeBusOff((uint32_t)now);
-            recordTwaiBusOffSnapshot(st, (uint32_t)now);
+            recordChassisBusOffSnapshot(st, (uint32_t)now);
           }
           canBusOffPersistenceMarkDirty(CAN_BUS_OFF_BUS_B_PURE);
-          T2CAN_SERIAL_PRINTLN("[CAN B] TWAI bus-off -> recovery started");
+          TMR_SERIAL_PRINTLN("[CAN B] CHASSIS bus-off -> recovery started");
           invalidateCanTxStateForCanBRecovery();
-          const esp_err_t recoveryErr = twai_initiate_recovery();
+          const esp_err_t recoveryErr = mcpChassisRecover();
           if (recoveryErr == ESP_OK) {
-            canTwaiLocalRecoveryStartCount++;
+            canChassisLocalRecoveryStartCount++;
           } else {
-            canTwaiRecoveryStartFailCount++;
-            canTwaiLastEventReason = CAN_REC_TWAI_RECOVERY_FAIL;
-            canTwaiLastEventMs = (uint32_t)now;
-            T2CAN_SERIAL_PRINTF("[CAN B] TWAI recovery start failed: %s\n", esp_err_to_name(recoveryErr));
-            requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_TWAI_RECOVERY_FAIL);
+            canChassisRecoveryStartFailCount++;
+            canChassisLastEventReason = CAN_REC_CHASSIS_RECOVERY_FAIL;
+            canChassisLastEventMs = (uint32_t)now;
+            TMR_SERIAL_PRINTF("[CAN B] CHASSIS recovery start failed: %s\n", esp_err_to_name(recoveryErr));
+            requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_CHASSIS_RECOVERY_FAIL);
           }
-        } else if (st.state == TWAI_STATE_STOPPED) {
-          twaiReady = false;
-          canTwaiStoppedCount++;
-          if (canTwaiLastEventReason == CAN_REC_NONE) {
-            canTwaiLastEventReason = CAN_REC_TWAI_STOPPED;
-            canTwaiLastEventMs = (uint32_t)now;
+        } else if (st.state == MCP_CHASSIS_STATE_STOPPED) {
+          mcpChassisReady = false;
+          canChassisStoppedCount++;
+          if (canChassisLastEventReason == CAN_REC_NONE) {
+            canChassisLastEventReason = CAN_REC_CHASSIS_STOPPED;
+            canChassisLastEventMs = (uint32_t)now;
           }
           invalidateCanTxStateForCanBRecovery();
-          esp_err_t rs = twai_start();
+          esp_err_t rs = mcpChassisStart();
           if (rs == ESP_OK) {
-            canTwaiRestartOkCount++;
-            twaiReady = true;
-            T2CAN_SERIAL_PRINTLN("[CAN B] TWAI recovery complete -> restarted");
+            canChassisRestartOkCount++;
+            mcpChassisReady = true;
+            TMR_SERIAL_PRINTLN("[CAN B] CHASSIS recovery complete -> restarted");
           } else {
-            canTwaiRestartFailCount++;
-            canTwaiLastEventReason = CAN_REC_TWAI_RESTART_FAIL;
-            canTwaiLastEventMs = (uint32_t)now;
-            T2CAN_SERIAL_PRINTF("[CAN B] TWAI restart failed: %s\n", esp_err_to_name(rs));
-            requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_TWAI_RESTART_FAIL);
+            canChassisRestartFailCount++;
+            canChassisLastEventReason = CAN_REC_CHASSIS_RESTART_FAIL;
+            canChassisLastEventMs = (uint32_t)now;
+            TMR_SERIAL_PRINTF("[CAN B] CHASSIS restart failed: %s\n", esp_err_to_name(rs));
+            requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_CHASSIS_RESTART_FAIL);
           }
         } else {
-          twaiReady = false;
+          mcpChassisReady = false;
         }
       }
     }
@@ -745,15 +824,15 @@ static void canTaskTwai(void* arg) {
     // No-CAN warning (shared counter)
     if ((millis() - bootTime) > 20000 && canRxTotal() == 0) {
       if (millis() - lastNoCanWarn > 5000) {
-        T2CAN_SERIAL_PRINTLN("No CAN frames yet on either bus, staying alive.");
+        TMR_SERIAL_PRINTLN("No CAN frames yet on either bus, staying alive.");
         lastNoCanWarn = millis();
       }
     }
 
-    canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
+    canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                      CAN_TASK_STAGE_DELAY,
                                      (uint32_t)millis());
-    canTaskDiagnosticsFinishLoopPure(canTaskTwaiDiagnostics,
+    canTaskDiagnosticsFinishLoopPure(canTaskChassisDiagnostics,
                                      (uint32_t)micros());
     vTaskDelay(1);
   }
@@ -773,16 +852,16 @@ static void recordCanTaskHeartbeatTimeout(uint32_t now, bool aDead, bool bDead) 
       ? (bDead ? CAN_TASK_HEARTBEAT_BOTH : CAN_TASK_HEARTBEAT_A)
       : (bDead ? CAN_TASK_HEARTBEAT_B : CAN_TASK_HEARTBEAT_NONE);
   if (cause == CAN_TASK_HEARTBEAT_NONE) return;
-  const uint8_t stateA = canTaskStateCode(canTaskMcpHandle);
-  const uint8_t stateB = canTaskStateCode(canTaskTwaiHandle);
-  const uint32_t stackA = canTaskMcpHandle
-      ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskMcpHandle) : 0u;
-  const uint32_t stackB = canTaskTwaiHandle
-      ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskTwaiHandle) : 0u;
+  const uint8_t stateA = canTaskStateCode(canTaskBodyHandle);
+  const uint8_t stateB = canTaskStateCode(canTaskChassisHandle);
+  const uint32_t stackA = canTaskBodyHandle
+      ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskBodyHandle) : 0u;
+  const uint32_t stackB = canTaskChassisHandle
+      ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskChassisHandle) : 0u;
   const CanTaskTimeoutSnapshotPure snapshotA = canTaskDiagnosticsSnapshotPure(
       canTaskMcpDiagnostics, now, stateA, stackA);
   const CanTaskTimeoutSnapshotPure snapshotB = canTaskDiagnosticsSnapshotPure(
-      canTaskTwaiDiagnostics, now, stateB, stackB);
+      canTaskChassisDiagnostics, now, stateB, stackB);
   portENTER_CRITICAL(&canRecoveryMux);
   // Snapshot once for the restart request that is about to be queued. The
   // supervisor may loop again before reinitialization starts.
@@ -811,104 +890,70 @@ static void requestCanSubsystemRestart(uint8_t reason, uint8_t diagReason) {
 }
 
 static bool recoveryMcpColdInit() {
-  mcpReady = false;
-  if (mcpSpiStarted) {
-    SPI.end();
-    mcpSpiStarted = false;
-    delay(20);
+  // TMR uses one shared SPI bus. Never end/restart SPI around one controller,
+  // and never toggle GPIO9: it is J3 CHASSIS chip-select.
+  if (!mcpSpiStarted) {
+    SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI);
+    mcpSpiStarted = true;
   }
+  pinMode(MCP2515_BODY_CS, OUTPUT);
+  pinMode(MCP2515_CHASSIS_CS, OUTPUT);
+  pinMode(MCP2515_PARTY_CS, OUTPUT);
+  digitalWrite(MCP2515_BODY_CS, HIGH);
+  digitalWrite(MCP2515_CHASSIS_CS, HIGH);
+  digitalWrite(MCP2515_PARTY_CS, HIGH);
 
-  pinMode(MCP2515_CS, OUTPUT);
-  digitalWrite(MCP2515_CS, HIGH);
-  pinMode(MCP2515_RST, OUTPUT);
-  digitalWrite(MCP2515_RST, HIGH);
-  delay(1);
-  digitalWrite(MCP2515_RST, LOW);
+  pinMode(MCP2515_BODY_STBY, OUTPUT);
+  pinMode(MCP2515_CHASSIS_STBY, OUTPUT);
+  pinMode(MCP2515_PARTY_STBY, OUTPUT);
+  digitalWrite(MCP2515_BODY_STBY, LOW);
+  digitalWrite(MCP2515_CHASSIS_STBY, LOW);
+  digitalWrite(MCP2515_PARTY_STBY, LOW);
+  delay(5);
+
+  const bool bodyOk = mcpInitChecked();
+  const bool partyOk = mcpPartyInitChecked();
+
+  // Reuse the compatibility layer to initialize J3 CHASSIS.
+  mcpChassisReady = false;
+  const MCP2515::ERROR r = Can_B.reset();
   delay(2);
-  digitalWrite(MCP2515_RST, HIGH);
-  delay(2);
-
-  SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
-  mcpSpiStarted = true;
-  delay(20);
-
-  return mcpInitChecked();
+  const MCP2515::ERROR b = (r == MCP2515::ERROR_OK)
+      ? Can_B.setBitrate(CAN_500KBPS, MCP_CLOCK) : r;
+  const MCP2515::ERROR m = (b == MCP2515::ERROR_OK)
+      ? Can_B.setNormalMode() : b;
+  mcpChassisReady = r == MCP2515::ERROR_OK &&
+              b == MCP2515::ERROR_OK &&
+              m == MCP2515::ERROR_OK;
+  return bodyOk && partyOk && mcpChassisReady;
 }
 
-static bool recoveryTwaiInstallFresh() {
-  twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
-      (gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX, TWAI_MODE_NORMAL);
-  g.rx_queue_len = 256;
-  g.tx_queue_len = TWAI_TX_QUEUE_LEN;
-  twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
-  twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-
-  esp_err_t ie = twai_driver_install(&g, &t, &f);
-  if (ie != ESP_OK) {
-    twaiReady = false;
-    T2CAN_SERIAL_PRINTF("[CAN B] fresh install failed: %s\n", esp_err_to_name(ie));
-    return false;
-  }
-  esp_err_t se = twai_start();
-  if (se != ESP_OK) {
-    twaiReady = false;
-    T2CAN_SERIAL_PRINTF("[CAN B] fresh start failed: %s\n", esp_err_to_name(se));
-    twai_driver_uninstall();
-    return false;
-  }
-  uint32_t alerts = TWAI_ALERT_TX_FAILED | TWAI_ALERT_ERR_PASS |
-                    TWAI_ALERT_BUS_ERROR | TWAI_ALERT_BUS_OFF |
-                    TWAI_ALERT_RX_DATA | TWAI_ALERT_RX_QUEUE_FULL;
-  twai_reconfigure_alerts(alerts, NULL);
-  twaiReady = true;
-  return true;
+static bool recoveryChassisInstallFresh() {
+  // TMR logical CAN B = J3 CHASSIS MCP2515.
+  const MCP2515::ERROR r = Can_B.reset();
+  delay(2);
+  const MCP2515::ERROR b = (r == MCP2515::ERROR_OK)
+      ? Can_B.setBitrate(CAN_500KBPS, MCP_CLOCK) : r;
+  const MCP2515::ERROR m = (b == MCP2515::ERROR_OK)
+      ? Can_B.setNormalMode() : b;
+  mcpChassisReady = r == MCP2515::ERROR_OK &&
+              b == MCP2515::ERROR_OK &&
+              m == MCP2515::ERROR_OK;
+  return mcpChassisReady;
 }
 
-static bool recoveryTwaiFullReinit() {
-  twaiReady = false;
-  twai_status_info_t st = {};
-  esp_err_t gs = twai_get_status_info(&st);
-
-  if (gs == ESP_OK) {
-    if (st.state == TWAI_STATE_RUNNING) {
-      esp_err_t e = twai_stop();
-      if (e != ESP_OK) {
-        T2CAN_SERIAL_PRINTF("[CAN B] hard stop failed: %s\n", esp_err_to_name(e));
-        return false;
-      }
-    } else if (st.state == TWAI_STATE_BUS_OFF || st.state == TWAI_STATE_RECOVERING) {
-      if (st.state == TWAI_STATE_BUS_OFF) {
-        esp_err_t e = twai_initiate_recovery();
-        if (e != ESP_OK) {
-          T2CAN_SERIAL_PRINTF("[CAN B] hard recovery start failed: %s\n", esp_err_to_name(e));
-          return false;
-        }
-      }
-      uint32_t start = (uint32_t)millis();
-      while ((uint32_t)((uint32_t)millis() - start) < RECOVERY_TWAI_WAIT_MS) {
-        twai_status_info_t cur = {};
-        if (twai_get_status_info(&cur) != ESP_OK) break;
-        if (cur.state == TWAI_STATE_STOPPED) break;
-        delay(25);
-      }
-      twai_status_info_t cur = {};
-      if (twai_get_status_info(&cur) == ESP_OK && cur.state != TWAI_STATE_STOPPED) {
-        T2CAN_SERIAL_PRINTLN("[CAN B] recovery did not reach STOPPED");
-        return false;
-      }
-    }
-  }
-
-  esp_err_t ue = twai_driver_uninstall();
-  if (ue != ESP_OK && ue != ESP_ERR_INVALID_STATE) {
-    T2CAN_SERIAL_PRINTF("[CAN B] uninstall failed: %s\n", esp_err_to_name(ue));
-    return false;
-  }
-
-  pinMode(CAN_TX, INPUT);
-  pinMode(CAN_RX, INPUT);
-  delay(50);
-  return recoveryTwaiInstallFresh();
+static bool recoveryChassisFullReinit() {
+  mcpChassisReady = false;
+  const MCP2515::ERROR r = Can_B.reset();
+  delay(2);
+  const MCP2515::ERROR b = (r == MCP2515::ERROR_OK)
+      ? Can_B.setBitrate(CAN_500KBPS, MCP_CLOCK) : r;
+  const MCP2515::ERROR m = (b == MCP2515::ERROR_OK)
+      ? Can_B.setNormalMode() : b;
+  mcpChassisReady = r == MCP2515::ERROR_OK &&
+              b == MCP2515::ERROR_OK &&
+              m == MCP2515::ERROR_OK;
+  return mcpChassisReady;
 }
 
 // Maintenance never deletes tasks while they may own SPI/state locks and never
@@ -941,35 +986,27 @@ static bool prepareCanForMaintenance() {
     vTaskDelay(pdMS_TO_TICKS(5));
   }
   started = (uint32_t)millis();
-  while ((canTaskMcpHandle && !canTaskMcpQuiesced) ||
-         (canTaskTwaiHandle && !canTaskTwaiQuiesced)) {
+  while ((canTaskBodyHandle && !canTaskMcpQuiesced) ||
+         (canTaskChassisHandle && !canTaskChassisQuiesced)) {
     if ((uint32_t)((uint32_t)millis() - started) >= 500u) return finish(false);
     vTaskDelay(pdMS_TO_TICKS(5));
   }
-  // All CAN owners are parked; reset holds CAN A inactive and discards TX buffers.
+  // All CAN owners are parked. Put all three TMR transceivers in standby.
   mcpReady = false;
-  pinMode(MCP2515_RST, OUTPUT);
-  digitalWrite(MCP2515_RST, LOW);
-  twaiReady = false;
-  twai_status_info_t st = {};
-  const esp_err_t status = twai_get_status_info(&st);
-  if (status == ESP_OK) {
-    if (st.state == TWAI_STATE_RUNNING && twai_stop() != ESP_OK) return finish(false);
-    if (st.state == TWAI_STATE_RECOVERING) return finish(false);
-    // Uninstall is legal in STOPPED or BUS_OFF; no bus recovery/start is needed.
-    if (twai_driver_uninstall() != ESP_OK) return finish(false);
-  } else if (status != ESP_ERR_INVALID_STATE) {
-    return finish(false);
-  }
-  // Driver uninstall discards both queues and disables the peripheral.
-  pinMode(CAN_TX, INPUT);
-  pinMode(CAN_RX, INPUT);
+  mcpPartyReady = false;
+  mcpChassisReady = false;
+  pinMode(MCP2515_BODY_STBY, OUTPUT);
+  pinMode(MCP2515_CHASSIS_STBY, OUTPUT);
+  pinMode(MCP2515_PARTY_STBY, OUTPUT);
+  digitalWrite(MCP2515_BODY_STBY, HIGH);
+  digitalWrite(MCP2515_CHASSIS_STBY, HIGH);
+  digitalWrite(MCP2515_PARTY_STBY, HIGH);
   invalidateCanTxStateForFullRecovery();
   __atomic_store_n(&canMaintenanceStopped, true, __ATOMIC_RELEASE);
   return finish(true);
 }
 
-static void restartT2CanSafely() {
+static void restartTmrCanSafely() {
   // A failed handshake never falls through to an uncoordinated reboot.
   while (!prepareCanForMaintenance()) vTaskDelay(pdMS_TO_TICKS(100));
   ESP.restart();
@@ -978,42 +1015,42 @@ static void restartT2CanSafely() {
 static void recoveryStopCanTasks() {
   canTasksStopping = true;
   canTaskMcpQuiesced = false;
-  canTaskTwaiQuiesced = false;
+  canTaskChassisQuiesced = false;
 
   uint32_t start = (uint32_t)millis();
-  while ((!canTaskMcpQuiesced || !canTaskTwaiQuiesced) &&
+  while ((!canTaskMcpQuiesced || !canTaskChassisQuiesced) &&
          (uint32_t)((uint32_t)millis() - start) < 300) {
     vTaskDelay(pdMS_TO_TICKS(5));
   }
 
-  TaskHandle_t a = canTaskMcpHandle;
-  TaskHandle_t b = canTaskTwaiHandle;
-  canTaskMcpHandle = nullptr;
-  canTaskTwaiHandle = nullptr;
+  TaskHandle_t a = canTaskBodyHandle;
+  TaskHandle_t b = canTaskChassisHandle;
+  canTaskBodyHandle = nullptr;
+  canTaskChassisHandle = nullptr;
   if (a) vTaskDelete(a);
   if (b) vTaskDelete(b);
 
   canTasksStopping = false;
   canTaskMcpQuiesced = false;
-  canTaskTwaiQuiesced = false;
+  canTaskChassisQuiesced = false;
   canTaskMcpHeartbeatMs = 0;
-  canTaskTwaiHeartbeatMs = 0;
+  canTaskChassisHeartbeatMs = 0;
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
-  canTaskDiagnosticsResetPure(canTaskTwaiDiagnostics);
+  canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
   vTaskDelay(pdMS_TO_TICKS(RECOVERY_TASK_STOP_SETTLE_MS));
 }
 
 static bool recoveryStartCanTasks() {
-  BaseType_t a = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, 5, &canTaskMcpHandle, 1);
+  BaseType_t a = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, 5, &canTaskBodyHandle, 1);
   if (a != pdPASS) {
-    canTaskMcpHandle = nullptr;
+    canTaskBodyHandle = nullptr;
     return false;
   }
-  BaseType_t b = xTaskCreatePinnedToCore(canTaskTwai, "canB", 8192, nullptr, 4, &canTaskTwaiHandle, 1);
+  BaseType_t b = xTaskCreatePinnedToCore(canTaskChassis, "canB", 8192, nullptr, 4, &canTaskChassisHandle, 1);
   if (b != pdPASS) {
-    vTaskDelete(canTaskMcpHandle);
-    canTaskMcpHandle = nullptr;
-    canTaskTwaiHandle = nullptr;
+    vTaskDelete(canTaskBodyHandle);
+    canTaskBodyHandle = nullptr;
+    canTaskChassisHandle = nullptr;
     return false;
   }
   return true;
@@ -1026,7 +1063,7 @@ static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason) {
   canLastHardReinitReason = reason;
   canLastHardDiagReason = diagReason;
   canHardReinitCount++;
-  T2CAN_SERIAL_PRINTF("[CAN SUP] hard CAN reinitialize #%lu reason=%u diag=%s\n",
+  TMR_SERIAL_PRINTF("[CAN SUP] hard CAN reinitialize #%lu reason=%u diag=%s\n",
                 (unsigned long)canHardReinitCount, (unsigned)reason,
                 canRecoveryDiagnosticReasonName(diagReason));
 
@@ -1039,7 +1076,7 @@ static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason) {
   recoveryStopCanTasks();
   invalidateCanTxStateForFullRecovery();
   bool aOk = recoveryMcpColdInit();
-  bool bOk = recoveryTwaiFullReinit();
+  bool bOk = recoveryChassisFullReinit();
   bool tasksOk = aOk && bOk && recoveryStartCanTasks();
 
   lastCanAFrameMs = 0;
@@ -1053,12 +1090,12 @@ static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason) {
   if (!(aOk && bOk && tasksOk)) {
     bootCaptureHardFinish(bootCapHardIdx, false);
     canHardReinitFailCount++;
-    T2CAN_SERIAL_PRINTF("[CAN SUP] hard CAN reinitialize FAILED A=%u B=%u tasks=%u\n",
+    TMR_SERIAL_PRINTF("[CAN SUP] hard CAN reinitialize FAILED A=%u B=%u tasks=%u\n",
                   aOk ? 1 : 0, bOk ? 1 : 0, tasksOk ? 1 : 0);
     return false;
   }
   bootCaptureHardFinish(bootCapHardIdx, true);
-  T2CAN_SERIAL_PRINTLN("[CAN SUP] hard CAN reinitialize complete");
+  TMR_SERIAL_PRINTLN("[CAN SUP] hard CAN reinitialize complete");
   return true;
 }
 
@@ -1067,7 +1104,7 @@ static void canRecoverySupervisorTick(uint32_t now) {
 }
 
 static void canSupervisorTask(void* arg) {
-  T2CAN_SERIAL_PRINTLN("[CAN SUP] recovery-only supervisor started");
+  TMR_SERIAL_PRINTLN("[CAN SUP] recovery-only supervisor started");
   for (;;) {
     uint32_t now = (uint32_t)millis();
     if (canMaintenanceActive()) {
@@ -1081,14 +1118,14 @@ static void canSupervisorTask(void* arg) {
       // Independent task heartbeat: still advances while the vehicle is asleep.
       // Therefore silence on the CAN wires is not confused with a wedged task.
       bool graceDone = (uint32_t)(now - canInitTime) >= RECOVERY_TASK_START_GRACE_MS;
-      bool aTaskDead = canTaskMcpHandle && graceDone &&
+      bool aTaskDead = canTaskBodyHandle && graceDone &&
                        (canTaskMcpHeartbeatMs == 0 ||
                         (uint32_t)(now - canTaskMcpHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
-      bool bTaskDead = canTaskTwaiHandle && graceDone &&
-                       (canTaskTwaiHeartbeatMs == 0 ||
-                        (uint32_t)(now - canTaskTwaiHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
+      bool bTaskDead = canTaskChassisHandle && graceDone &&
+                       (canTaskChassisHeartbeatMs == 0 ||
+                        (uint32_t)(now - canTaskChassisHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
       if (aTaskDead || bTaskDead) {
-        T2CAN_SERIAL_PRINTF("[CAN SUP] task heartbeat stale A=%u B=%u\n", aTaskDead ? 1 : 0, bTaskDead ? 1 : 0);
+        TMR_SERIAL_PRINTF("[CAN SUP] task heartbeat stale A=%u B=%u\n", aTaskDead ? 1 : 0, bTaskDead ? 1 : 0);
         recordCanTaskHeartbeatTimeout(now, aTaskDead, bTaskDead);
         requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_TASK_HEARTBEAT_TIMEOUT);
       }
@@ -1100,7 +1137,7 @@ static void canSupervisorTask(void* arg) {
 
       if (bothFresh) {
         if (!recoveryEverBothActive || recoverySleeping || recoveryWakeAcquireStartMs != 0) {
-          T2CAN_SERIAL_PRINTLN("[CAN SUP] CAN A+B active");
+          TMR_SERIAL_PRINTLN("[CAN SUP] CAN A+B active");
         }
         recoveryEverBothActive = true;
         recoverySleeping = false;
@@ -1119,7 +1156,7 @@ static void canSupervisorTask(void* arg) {
             recoverySleeping = true;
             recoveryWakeAcquireStartMs = 0;
             canRecoverySleepCount++;
-            T2CAN_SERIAL_PRINTF("[CAN SUP] vehicle CAN sleep #%lu -> passive wait\n",
+            TMR_SERIAL_PRINTF("[CAN SUP] vehicle CAN sleep #%lu -> passive wait\n",
                           (unsigned long)canRecoverySleepCount);
           }
         } else {
@@ -1127,7 +1164,7 @@ static void canSupervisorTask(void* arg) {
             recoverySleeping = false;
             recoveryWakeAcquireStartMs = now;
             canRecoveryWakeCount++;
-            T2CAN_SERIAL_PRINTF("[CAN SUP] vehicle CAN wake #%lu -> acquire other bus\n",
+            TMR_SERIAL_PRINTF("[CAN SUP] vehicle CAN wake #%lu -> acquire other bus\n",
                           (unsigned long)canRecoveryWakeCount);
           }
 
@@ -1173,7 +1210,7 @@ static void canSupervisorTask(void* arg) {
           recoveryColdRetryCount++;
           recoveryLastHardRequestMs = now;
           recoveryWakeAcquireStartMs = 0;
-          T2CAN_SERIAL_PRINTF("[CAN SUP] cold acquire retry %u/%u\n",
+          TMR_SERIAL_PRINTF("[CAN SUP] cold acquire retry %u/%u\n",
                         (unsigned)recoveryColdRetryCount,
                         (unsigned)RECOVERY_COLD_MAX_RETRIES);
           requestCanSubsystemRestart(CAN_SUP_HARD_ACQUIRE, CAN_REC_COLD_ACQUIRE_TIMEOUT);
@@ -1181,7 +1218,7 @@ static void canSupervisorTask(void* arg) {
                    !recoveryColdRetriesExhausted) {
           recoveryColdRetriesExhausted = true;
           recoverySleeping = true;
-          T2CAN_SERIAL_PRINTLN("[CAN SUP] no RX after bounded retries -> passive sleep/wake wait");
+          TMR_SERIAL_PRINTLN("[CAN SUP] no RX after bounded retries -> passive sleep/wake wait");
         }
 
         // If a real frame arrives after passive wait, resume bounded acquisition.
@@ -1205,8 +1242,8 @@ static void canSupervisorTask(void* arg) {
 
     if (cmd != CAN_SUP_NONE && !canSubsystemBusy) {
       if (!recoveryHardReinitialize(cmd, diagReason)) {
-        T2CAN_SERIAL_PRINTLN("[CAN SUP] subsystem recovery failed -> reboot T-2CAN");
-        restartT2CanSafely();
+        TMR_SERIAL_PRINTLN("[CAN SUP] subsystem recovery failed -> reboot T-2CAN");
+        restartTmrCanSafely();
       }
     }
 

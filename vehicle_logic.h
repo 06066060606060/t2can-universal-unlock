@@ -119,17 +119,17 @@ static volatile uint32_t r79FastEchoTxFail = 0;
 static uint8_t r79LabLastStockRaw[8] = {0};
 
 static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now);
-static void r79LabRecordTxResult(bool ok, const twai_message_t &out, uint8_t txKind);
+static void r79LabRecordTxResult(bool ok, const struct can_frame &out, uint8_t txKind);
 static bool r79LabTransmitShadow(const uint8_t *stock, uint8_t txKind,
                                  uint32_t hardDeadlineMs,
                                  uint32_t expectedGeneration);
-static bool r79FixedFastEcho(const twai_message_t &src);
+static bool r79FixedFastEcho(const struct can_frame &src);
 static void r79FixedObserveStock(uint8_t mux, uint32_t nowMs);
 static void r79FixedTick();
-static bool r79Mode2FastEcho(const twai_message_t &src);
+static bool r79Mode2FastEcho(const struct can_frame &src);
 static void r79Mode2ObserveStock(uint8_t mux, uint32_t nowMs);
 static void r79Mode2Tick();
-static bool r79ProcessStockFrame(const twai_message_t &src, uint8_t mux,
+static bool r79ProcessStockFrame(const struct can_frame &src, uint8_t mux,
                                  uint32_t nowMs);
 static void r79TransportTick();
 static bool r79CopyLatestStock(uint8_t out[8]);
@@ -141,7 +141,7 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
                                uint32_t expectedGeneration = 0u);
 
 // ═══════════════════════════════════════════════════════════════
-// SUMMON MONITOR / VH OVERLAYS (CAN B - TWAI)
+// SUMMON MONITOR / VH OVERLAYS (CAN B - CHASSIS)
 // ═══════════════════════════════════════════════════════════════
 
 static inline uint8_t readMuxID(const uint8_t *data) {
@@ -205,9 +205,9 @@ static void laneGraphCacheStock(uint8_t bus, const uint8_t *raw, uint32_t epoch,
   portEXIT_CRITICAL(&r79LabMux);
 }
 
-static void laneGraphRecordTx(const twai_message_t &out, esp_err_t err,
+static void laneGraphRecordTx(const struct can_frame &out, esp_err_t err,
                               uint8_t bus = LANE_GRAPH_CHASSIS_PURE) {
-  if (out.identifier != 0x3FDu || out.data_length_code != 8u || readMuxID(out.data) != 1u) return;
+  if (out.can_id != 0x3FDu || out.can_dlc != 8u || readMuxID(out.data) != 1u) return;
   portENTER_CRITICAL(&r79LabMux);
   if (bus != laneGraphBus) { portEXIT_CRITICAL(&r79LabMux); return; }
   laneGraphLastTxValid = err == ESP_OK;
@@ -218,22 +218,22 @@ static void laneGraphRecordTx(const twai_message_t &out, esp_err_t err,
 
 // The display-only/DMS/ULC stock clones use the ordinary epoch/freshness and
 // non-Summon admission rules. They never apply the R79 bit18/19/47 transform.
-static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
+static esp_err_t mux1DisplayTransmit(const struct can_frame *msg,
                                      uint32_t expectedEpoch,
                                      uint8_t requiredFreshMask,
                                      bool requireLaneChange,
                                      uint32_t receivedMs = (uint32_t)millis()) {
-  if (!msg || msg->extd || msg->rtr || msg->identifier != 0x3FDu ||
-      msg->data_length_code != 8u || readMuxID(msg->data) != 1u) return ESP_ERR_INVALID_ARG;
+  if (!msg || ((msg->can_id & CAN_EFF_FLAG) != 0) || ((msg->can_id & CAN_RTR_FLAG) != 0) || msg->can_id != 0x3FDu ||
+      msg->can_dlc != 8u || readMuxID(msg->data) != 1u) return ESP_ERR_INVALID_ARG;
   const uint32_t laneGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
     return ESP_ERR_INVALID_STATE;
-  twai_message_t out = *msg;
+  struct can_frame out = *msg;
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
+  if (!canTxAdministrativeHold && mcpChassisReady &&
       vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology) &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask) &&
-      twaiNonSummonAdmissionOpen()) {
+      chassisNonSummonAdmissionOpen()) {
     const bool laneGenerationValid = laneGeneration ==
         __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
     const bool stockFresh = (uint32_t)((uint32_t)millis() - receivedMs) <= LANE_GRAPH_AP_FRESH_MS_PURE;
@@ -241,7 +241,7 @@ static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
     const bool visionChanged = stockFresh && visionControlApplyFinal(out.data, VISION_CONTROL_CHASSIS_PURE);
     const bool changed = laneChanged || visionChanged;
     if (!requireLaneChange || (laneGenerationValid && changed)) {
-      err = twai_transmit(&out, 0);
+      err = mcpChassisTransmit(&out, 0);
       canBTraceRecordTx(&out, err);
       laneGraphRecordTx(out, err);
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
@@ -332,13 +332,13 @@ static void r79LabObserve3fdMux1(const uint8_t *data, uint8_t dlc) {
   // accepted stock template and production counters afterward.
 }
 
-static void r79LabRecordTxResult(bool ok, const twai_message_t &out, uint8_t txKind) {
+static void r79LabRecordTxResult(bool ok, const struct can_frame &out, uint8_t txKind) {
   portENTER_CRITICAL(&r79LabMux);
   if (ok) r79LabTxOk++; else r79LabTxFail++;
   if (txKind == R79LAB_TX_PERIODIC) {
     if (ok) r79LabPeriodicTxOk++; else r79LabPeriodicTxFail++;
   }
-  if (ok && out.data_length_code >= 8) {
+  if (ok && out.can_dlc >= 8) {
     r79LabLastTxValid = true;
     r79LabEffectiveCabinCamera = getBit(out.data, R79LAB_ENABLE_CABIN_CAMERA_BIT) ? 1 : 0;
   }
@@ -401,7 +401,7 @@ static bool laneGraphActive() {
   portEXIT_CRITICAL(&stateMux);
   return laneGraphActivePure(mode, labMenuEnabled,
       laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus),
-      (bus == LANE_GRAPH_BODY_PURE ? mcpReady : twaiReady) && !canTxAdministrativeHold, valid, active,
+      (bus == LANE_GRAPH_BODY_PURE ? mcpReady : mcpChassisReady) && !canTxAdministrativeHold, valid, active,
       (uint32_t)((uint32_t)millis() - stamp));
 }
 
@@ -500,8 +500,8 @@ static volatile uint32_t sumRx1016   = 0;
 // ═══════════════════════════════════════════════════════════════
 // ADVANCED EAP — MODEL YL SPLIT-BUS ROUTING
 //   CAN A / MCP2515 / Party CAN : RX DAS_visualDebug.behaviorType (0x24A, DLC 8)
-//   CAN B / TWAI / VH CAN      : RX/TX SCCM_turnIndicatorStalkStatus (0x249, DLC 4)
-//   CAN B / TWAI / VH CAN      : RX-only UI_driverAssistControl (0x3F8) for SPR / passive telemetry
+//   CAN B / CHASSIS / VH CAN      : RX/TX SCCM_turnIndicatorStalkStatus (0x249, DLC 4)
+//   CAN B / CHASSIS / VH CAN      : RX-only UI_driverAssistControl (0x3F8) for SPR / passive telemetry
 //
 // Model YL also carries numeric ID 0x24A on VH CAN with DLC 4. That is a
 // different bus-local frame and MUST NOT be used as DAS_visualDebug.
@@ -605,7 +605,7 @@ static DriverWindowArmContextPure driverWindowLabArmContextSnapshot(
   portEXIT_CRITICAL(&driverWindowLabMux);
 
   epochOut = canTxEpochSnapshot();
-  context.canTxAllowed = !canTxAdministrativeHold && twaiReady && epochOut != 0u;
+  context.canTxAllowed = !canTxAdministrativeHold && mcpChassisReady && epochOut != 0u;
   context.guardGeneration = canTxCancellationGenerationSnapshot(
       &driverWindowLabCancelGeneration);
   return context;
@@ -686,8 +686,8 @@ static void driverWindowLabServiceTick() {
   portEXIT_CRITICAL(&driverWindowLabMux);
 }
 
-static void handleDriverWindowLab3C2CanB(const twai_message_t &incoming) {
-  if (incoming.data_length_code < 8 || !driverWindowMux0Pure(incoming.data)) return;
+static void handleDriverWindowLab3C2CanB(const struct can_frame &incoming) {
+  if (incoming.can_dlc < 8 || !driverWindowMux0Pure(incoming.data)) return;
   const uint32_t now = (uint32_t)millis();
   bool pending = false;
   uint32_t txEpoch = 0;
@@ -698,7 +698,7 @@ static void handleDriverWindowLab3C2CanB(const twai_message_t &incoming) {
   portENTER_CRITICAL(&driverWindowLabMux);
   decision = driverWindowLabConsumeStockPure(
       driverWindowLabState, now, txEpoch, context, incoming.data,
-      incoming.data_length_code);
+      incoming.can_dlc);
   driverWindowLabStockValid = true;
   driverWindowLabStockMs = now;
   memcpy(driverWindowLabStockRaw, incoming.data, 8);
@@ -710,9 +710,9 @@ static void handleDriverWindowLab3C2CanB(const twai_message_t &incoming) {
   portEXIT_CRITICAL(&driverWindowLabMux);
   if (!decision.transmit) return;
 
-  twai_message_t out = incoming;
+  struct can_frame out = incoming;
   memcpy(out.data, decision.data, 8);
-  const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
+  const esp_err_t err = canTxChassisTransmitWithMaskTaggedGuarded(
       &out, txEpoch, CAN_TX_FRESH_VH,
       CAN_TX_TRACE_SOURCE_DRIVER_WINDOW_LAB,
       &driverWindowLabCancelGeneration, decision.guardGeneration);
@@ -1291,29 +1291,29 @@ static const char *alcStateName(uint8_t v) {
 // CAN B load-shedding / queue telemetry. v3.6d2 reserves a small amount of
 // headroom in fresh real PARK and promotes R79 to absolute application-level
 // priority as soon as remote Summon startup evidence becomes fresh.
-static constexpr uint16_t TWAI_TX_QUEUE_LEN = 16;
-static constexpr uint16_t TWAI_PARK_NON_R79_QUEUE_LIMIT = 14;
-static constexpr uint16_t TWAI_SUMMON_NON_R79_QUEUE_LIMIT = 6;
-static constexpr uint8_t  TWAI_RX_DRAIN_BUDGET = 64;
-static constexpr uint32_t TWAI_QUEUE_TELEMETRY_PERIOD_MS = 50;
+static constexpr uint16_t MCP_CHASSIS_TX_QUEUE_LEN = 16;
+static constexpr uint16_t MCP_CHASSIS_PARK_NON_R79_QUEUE_LIMIT = 14;
+static constexpr uint16_t MCP_CHASSIS_SUMMON_NON_R79_QUEUE_LIMIT = 6;
+static constexpr uint8_t  MCP_CHASSIS_RX_DRAIN_BUDGET = 64;
+static constexpr uint32_t MCP_CHASSIS_QUEUE_TELEMETRY_PERIOD_MS = 50;
 
-static volatile uint32_t twaiTxQueueNow = 0;
-static volatile uint32_t twaiTxQueueMax = 0;
-static volatile uint32_t twaiRxQueueNow = 0;
-static volatile uint32_t twaiRxQueueMax = 0;
+static volatile uint32_t chassisTxQueueNow = 0;
+static volatile uint32_t chassisTxQueueMax = 0;
+static volatile uint32_t chassisRxQueueNow = 0;
+static volatile uint32_t chassisRxQueueMax = 0;
 
-static volatile uint32_t twaiNonSummonShed = 0;
-static volatile uint32_t twaiParkSoftShed = 0;
-static volatile uint32_t twaiReadyShed = 0;
-static volatile uint32_t twaiActiveShed = 0;
+static volatile uint32_t chassisNonSummonShed = 0;
+static volatile uint32_t chassisParkSoftShed = 0;
+static volatile uint32_t chassisReadyShed = 0;
+static volatile uint32_t chassisActiveShed = 0;
 
 // Keep the browser independent from ESP-IDF enum ordering.
-static const char* twaiStateName(int state) {
+static const char* mcpChassisStateName(int state) {
   switch (state) {
-    case TWAI_STATE_STOPPED:    return "STOPPED";
-    case TWAI_STATE_RUNNING:    return "RUNNING";
-    case TWAI_STATE_BUS_OFF:    return "BUS OFF";
-    case TWAI_STATE_RECOVERING: return "RECOVERING";
+    case MCP_CHASSIS_STATE_STOPPED:    return "STOPPED";
+    case MCP_CHASSIS_STATE_RUNNING:    return "RUNNING";
+    case MCP_CHASSIS_STATE_BUS_OFF:    return "BUS OFF";
+    case MCP_CHASSIS_STATE_RECOVERING: return "RECOVERING";
     default:                    return "UNKNOWN";
   }
 }
@@ -1499,7 +1499,7 @@ static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now) {
   out.decision = r79TxDecisionPure(apActive, out.summonSessionActive, manual, allowManualDriving);
 
   if (canTxAdministrativeHold) out.state = R79_TX_STATE_ADMIN_HOLD;
-  else if (!twaiReady) out.state = R79_TX_STATE_CAN_OFFLINE;
+  else if (!mcpChassisReady) out.state = R79_TX_STATE_CAN_OFFLINE;
   else if (!stockValid) out.state = R79_TX_STATE_WAIT_TEMPLATE;
   else if (!out.decision.txEnabled) out.state = R79_TX_STATE_SUSPENDED;
   else if (!out.apGate.allowed) {
@@ -1526,36 +1526,36 @@ static bool summonLoadSheddingActive() {
   return priority == SUMMON_PRIORITY_READY || priority == SUMMON_PRIORITY_ACTIVE;
 }
 
-static bool twaiReadQueueStatus(twai_status_info_t *out = nullptr) {
-  twai_status_info_t st = {};
-  if (twai_get_status_info(&st) != ESP_OK) return false;
-  twaiTxQueueNow = st.msgs_to_tx;
-  twaiRxQueueNow = st.msgs_to_rx;
-  if (st.msgs_to_tx > twaiTxQueueMax) twaiTxQueueMax = st.msgs_to_tx;
-  if (st.msgs_to_rx > twaiRxQueueMax) twaiRxQueueMax = st.msgs_to_rx;
+static bool mcpChassisReadQueueStatus(McpChassisStatus *out = nullptr) {
+  McpChassisStatus st = {};
+  if (mcpChassisGetStatus(&st) != ESP_OK) return false;
+  chassisTxQueueNow = st.msgs_to_tx;
+  chassisRxQueueNow = st.msgs_to_rx;
+  if (st.msgs_to_tx > chassisTxQueueMax) chassisTxQueueMax = st.msgs_to_tx;
+  if (st.msgs_to_rx > chassisRxQueueMax) chassisRxQueueMax = st.msgs_to_rx;
   if (out) *out = st;
   return true;
 }
 
 // Non-R79 CAN-B traffic is admitted by explicit transport priority. NORMAL is
-// unchanged. Fresh real PARK softly reserves two of the 16 TWAI queue slots.
+// unchanged. Fresh real PARK softly reserves two of the 16 CHASSIS queue slots.
 // READY and ACTIVE preserve the stronger historical six-frame ceiling so R79
 // can be enqueued before and throughout remote motion.
-static bool twaiNonSummonAdmissionOpen() {
+static bool chassisNonSummonAdmissionOpen() {
   const uint8_t priority = summonPriorityStateSnapshot((uint32_t)millis());
   if (priority == SUMMON_PRIORITY_NORMAL) return true;
 
-  twai_status_info_t st = {};
-  if (!twaiReadQueueStatus(&st)) return false;
+  McpChassisStatus st = {};
+  if (!mcpChassisReadQueueStatus(&st)) return false;
   if (summonPriorityNonR79AdmissionPure(
-          priority, st.msgs_to_tx, TWAI_PARK_NON_R79_QUEUE_LIMIT,
-          TWAI_SUMMON_NON_R79_QUEUE_LIMIT))
+          priority, st.msgs_to_tx, MCP_CHASSIS_PARK_NON_R79_QUEUE_LIMIT,
+          MCP_CHASSIS_SUMMON_NON_R79_QUEUE_LIMIT))
     return true;
 
-  twaiNonSummonShed++;
-  if (priority == SUMMON_PRIORITY_PARK_STANDBY) twaiParkSoftShed++;
-  else if (priority == SUMMON_PRIORITY_READY) twaiReadyShed++;
-  else if (priority == SUMMON_PRIORITY_ACTIVE) twaiActiveShed++;
+  chassisNonSummonShed++;
+  if (priority == SUMMON_PRIORITY_PARK_STANDBY) chassisParkSoftShed++;
+  else if (priority == SUMMON_PRIORITY_READY) chassisReadyShed++;
+  else if (priority == SUMMON_PRIORITY_ACTIVE) chassisActiveShed++;
   return false;
 }
 
@@ -1648,16 +1648,15 @@ static bool pedalMapTransmitImmediateFromCache(uint8_t targetRaw) {
 
   bool ok = false;
   if (activeProfileIsYl()) {
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!chassisNonSummonAdmissionOpen()) {
       portENTER_CRITICAL(&pedalMapMux); pedalMapBlocked++; portEXIT_CRITICAL(&pedalMapMux);
       return false;
     }
-    twai_message_t out = {};
-    out.identifier = UI_POWERTRAIN_ID;
-    out.data_length_code = 8;
-    out.flags = 0;
-    memcpy(out.data, stockData, sizeof(stockData));
-    ok = canTxTwaiTransmit(&out, txEpoch) == ESP_OK;
+    struct can_frame out = {};
+    out.can_id = UI_POWERTRAIN_ID;
+    out.can_dlc = 8;
+      memcpy(out.data, stockData, sizeof(stockData));
+    ok = canTxChassisTransmit(&out, txEpoch) == ESP_OK;
   } else if (activeCanAIsBody()) {
     struct can_frame out = {};
     out.can_id = UI_POWERTRAIN_ID;
@@ -1775,7 +1774,7 @@ static void pedalMapClearSessionOnParkTransition(int previousGearState, int curr
 }
 
 static bool pedalMapObserveAndPrepare(const uint8_t *srcData, uint8_t dlc, uint8_t outData[8],
-                                     uint32_t &txEpoch, bool requireTwaiAdmission,
+                                     uint32_t &txEpoch, bool requireChassisAdmission,
                                      bool &apDriveProfileOut) {
   apDriveProfileOut = false;
   if (!srcData || dlc != 8 || !outData) return false;
@@ -1801,7 +1800,7 @@ static bool pedalMapObserveAndPrepare(const uint8_t *srcData, uint8_t dlc, uint8
     // regen byte[2] target on the supported 0x334 route.
     if (stock == 0 && srcData[2] == apRegen) return false;
     txEpoch=canTxEpochSnapshot();
-    if (requireTwaiAdmission && !twaiNonSummonAdmissionOpen()) {
+    if (requireChassisAdmission && !chassisNonSummonAdmissionOpen()) {
       portENTER_CRITICAL(&pedalMapMux); pedalMapBlocked++; portEXIT_CRITICAL(&pedalMapMux);
       return false;
     }
@@ -1827,7 +1826,7 @@ static bool pedalMapObserveAndPrepare(const uint8_t *srcData, uint8_t dlc, uint8
   portEXIT_CRITICAL(&pedalMapMux);
   if (!active || stock==target) return false;
   if (!manualDrivingGateOpen(now) || summonLoadSheddingActive() ||
-      (requireTwaiAdmission && !twaiNonSummonAdmissionOpen())) {
+      (requireChassisAdmission && !chassisNonSummonAdmissionOpen())) {
     portENTER_CRITICAL(&pedalMapMux); pedalMapBlocked++; portEXIT_CRITICAL(&pedalMapMux);
     return false;
   }
@@ -1842,16 +1841,16 @@ static bool pedalMapObserveAndPrepare(const uint8_t *srcData, uint8_t dlc, uint8
   return true;
 }
 
-// Model Y L: 0x334 is on VH / CAN B (TWAI).
-static void handlePedalMap334OnCanB(const twai_message_t &src) {
-  if (src.extd || src.rtr || src.data_length_code != 8) return;
+// Model Y L: 0x334 is on VH / CAN B (CHASSIS).
+static void handlePedalMap334OnCanB(const struct can_frame &src) {
+  if (((src.can_id & CAN_EFF_FLAG) != 0) || ((src.can_id & CAN_RTR_FLAG) != 0) || src.can_dlc != 8) return;
   uint8_t outData[8] = {};
   uint32_t txEpoch = 0;
   bool apDriveProfileTx = false;
-  if (!pedalMapObserveAndPrepare(src.data, src.data_length_code, outData, txEpoch, true, apDriveProfileTx)) return;
-  twai_message_t out=src;
+  if (!pedalMapObserveAndPrepare(src.data, src.can_dlc, outData, txEpoch, true, apDriveProfileTx)) return;
+  struct can_frame out=src;
   memcpy(out.data,outData,8);
-  const esp_err_t err=canTxTwaiTransmit(&out,txEpoch);
+  const esp_err_t err=canTxChassisTransmit(&out,txEpoch);
   portENTER_CRITICAL(&pedalMapMux);
   if(err==ESP_OK) {
     pedalMapTxOk++;
@@ -2087,17 +2086,6 @@ static BlinkerTxConsumeResultPure observe249AndTakeBlinkerRequest(
   return consumed;
 }
 
-// Read the real 0x249 frame on CAN B and send one stock-synchronized overlay
-// only when a fresh shared request was consumed above.
-static void handle249OnCanB(const uint8_t *data, uint8_t dlc) {
-  const BlinkerTxConsumeResultPure request =
-      observe249AndTakeBlinkerRequest(data, dlc);
-  if (request.transmit) {
-    sendStalkFrameCanB(dirToTurn(request.dir), canTxEpochSnapshot(),
-                       request.source == BLINKER_TX_SOURCE_S3XY_PURE);
-  }
-}
-
 static uint8_t stalkFrameSource(bool directUser) {
   return directUser ? BLINKER_TX_SOURCE_S3XY_PURE
                     : BLINKER_TX_SOURCE_AUTO_PURE;
@@ -2141,43 +2129,6 @@ static void stalkFrameRecordResult(uint8_t turn, bool directUser,
   blinkerTxRecordLocked(turnToDir(turn), stalkFrameSource(directUser),
                         success ? 2 : 3);
   portEXIT_CRITICAL(&blinkAMux);
-}
-
-// Send SCCM_turnIndicatorStalkStatus on CAN B.
-//
-// Do not fabricate a 0x249 payload from zeros. The newest real
-// Model YL stock frame is used as the template so byte1 upper bits, byte2
-// upper bits and byte3 remain exactly as the vehicle produced them.
-// Only the rolling counter and requested turn nibble are changed, then the
-// validated full-payload CRC is recalculated.
-static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser) {
-  if (!directUser && ulcNoConfirmEnabledSnapshot()) return;
-  uint8_t cnt;
-  uint8_t stockTemplate[4] = {0};
-  const bool haveStockTemplate = stalkFrameSnapshot(cnt, stockTemplate);
-
-  // Do not inject a guessed SCCM frame before a real Model YL 0x249 template
-  // has been observed on the bus.
-  if (!haveStockTemplate) {
-    stalkFrameRecordBlocked(turn, directUser);
-    return;
-  }
-
-  twai_message_t out = {};
-  out.identifier = LEFTSTALK_ID;
-  out.data_length_code = 4;
-  out.flags = 0;
-  (void)stalkFramePreparePure(stockTemplate, sizeof(stockTemplate), cnt, turn,
-                              out.data);
-
-  // Auto Blinker is lower priority than Summon. Never block CAN B RX.
-  esp_err_t err = ESP_ERR_TIMEOUT;
-  const uint8_t traceSource = directUser
-      ? CAN_TX_TRACE_SOURCE_S3XY_BUTTON
-      : CAN_TX_TRACE_SOURCE_AUTO_BLINKER;
-  if (twaiNonSummonAdmissionOpen())
-    err = canTxTwaiTransmitTagged(&out, txEpoch, traceSource);
-  stalkFrameRecordResult(turn, directUser, err == ESP_OK, false);
 }
 
 static void handle249OnCanA(const uint8_t *data, uint8_t dlc) {
@@ -2285,7 +2236,7 @@ static void handle3C2OnCanA(const struct can_frame &incoming) {
 static portMUX_TYPE tsl9InputMux = portMUX_INITIALIZER_UNLOCKED;
 static Tsl9InputSchedulerPure tsl9InputScheduler = {};
 static struct can_frame tsl9InputCanATemplate = {};
-static twai_message_t tsl9InputCanBTemplate = {};
+static struct can_frame tsl9InputCanBTemplate = {};
 static volatile bool tsl9InputCanATemplateValid = false;
 static volatile bool tsl9InputCanBTemplateValid = false;
 static volatile uint32_t tsl9InputCanATemplateMs = 0;
@@ -2351,9 +2302,9 @@ static void tsl9InputObserveCanA(const struct can_frame &incoming) {
   portEXIT_CRITICAL(&tsl9InputMux);
 }
 
-static void tsl9InputObserveCanB(const twai_message_t &incoming) {
+static void tsl9InputObserveCanB(const struct can_frame &incoming) {
   if (activeProfileTsl9InputOnBodyCanA() ||
-      !activeProfileTsl9InputSupported() || incoming.data_length_code < 8 ||
+      !activeProfileTsl9InputSupported() || incoming.can_dlc < 8 ||
       tsl9InputMuxPure(incoming.data) != TSL9_INPUT_MUX1_PURE) return;
   const uint32_t now = (uint32_t)millis();
   const int8_t left = tsl9InputDecodeSignedSixBitPure(incoming.data[2]);
@@ -2412,7 +2363,7 @@ static Tsl9InputInputsPure tsl9InputInputsSnapshot(uint32_t now,
   in.warningActive = in.enabled && (torqueSelected
       ? visualWarningActive : scrollWarningActive);
   in.txAllowed = !canTxAdministrativeHold &&
-      (onBodyCanA ? mcpReady : twaiReady);
+      (onBodyCanA ? mcpReady : mcpChassisReady);
   in.mode = torqueSelected ? TSL9_INPUT_MODE_RIGHT_SPEED_PURE : tsl9Mode;
   in.randomValue = 0u;
   in.periodicIntervalSeconds = torqueSelected
@@ -2439,14 +2390,14 @@ static bool tsl9InputSendCanA(const struct can_frame &stock,
   return attempted && err == MCP2515::ERROR_OK;
 }
 
-static bool tsl9InputSendCanB(const twai_message_t &stock,
+static bool tsl9InputSendCanB(const struct can_frame &stock,
                               const Tsl9InputCommandPure &command) {
-  twai_message_t out = stock;
+  struct can_frame out = stock;
   tsl9InputApplyCommandPure(command, out.data);
   const uint32_t txEpoch = canTxEpochSnapshot();
-  const esp_err_t err = canTxTwaiTransmitWithMask(
+  const esp_err_t err = canTxChassisTransmitWithMask(
       &out, txEpoch, CAN_TX_FRESH_VH);
-  researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code,
+  researchCaptureObserveTxVh((uint16_t)out.can_id, out.can_dlc,
                              out.data, err == ESP_OK);
   return err == ESP_OK;
 }
@@ -2496,7 +2447,7 @@ static void tsl9InputServiceCanB() {
   const uint32_t now = (uint32_t)millis();
   Tsl9InputInputsPure in = tsl9InputInputsSnapshot(now, false);
   Tsl9InputCommandPure command = {};
-  twai_message_t stock = {};
+  struct can_frame stock = {};
   bool haveTemplate = false;
   portENTER_CRITICAL(&tsl9InputMux);
   haveTemplate = tsl9InputCanBTemplateValid;
@@ -2756,8 +2707,9 @@ static void blinkATxTick() {
   if (activeTurnSignalVariant == TURN_SIGNAL_STALKLESS) return; // 0x3C2 echoes on each live mux1 RX
   if ((uint32_t)(now - lastTxMs) < BLINKA_TX_PERIOD_MS) return;
   lastTxMs = now;
-  if (activeProfileIsYl()) sendStalkFrameCanB(turn, txEpoch, directUser);
-  else if (activeCanAIsBody()) sendStalkFrameCanA(turn, txEpoch, directUser);
+  // TMR: stalk state and Auto Blinker 0x249 are always BODY/J2.
+  // CHASSIS/J3 only supplies the 0x24A planner/behavior state.
+  sendStalkFrameCanA(turn, txEpoch, directUser);
 }
 
 // Legacy 0x3F8 ULC injection remains removed; LAB provides only the
@@ -3001,8 +2953,8 @@ static bool tlsscHighwayGateBlocked(uint32_t now) {
 
 static bool ulcNoConfirmGateOpen();
 
-static void lab3f8ObserveCanB(const twai_message_t &src) {
-    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr)) return;
+static void lab3f8ObserveCanB(const struct can_frame &src) {
+    if (!lab3f8FrameValidPure(src.can_id, src.can_dlc, ((src.can_id & CAN_EFF_FLAG) != 0), ((src.can_id & CAN_RTR_FLAG) != 0))) return;
     const uint32_t now = lab3f8FrameRxMs;
     portENTER_CRITICAL(&lab3f8Mux);
     if (lab3f8CanBLastMs) lab3f8CanBPeriodMs = (uint32_t)(now - lab3f8CanBLastMs);
@@ -3010,7 +2962,7 @@ static void lab3f8ObserveCanB(const twai_message_t &src) {
     lab3f8CanBEpoch = lab3f8FrameRxEpoch;
     lab3f8CanBRx++;
     lab3f8CanBValid = true;
-    lab3f8CanBDlc = src.data_length_code > 8 ? 8 : src.data_length_code;
+    lab3f8CanBDlc = src.can_dlc > 8 ? 8 : src.can_dlc;
     memset(lab3f8CanBData, 0, sizeof(lab3f8CanBData));
     memcpy(lab3f8CanBData, src.data, lab3f8CanBDlc);
     portEXIT_CRITICAL(&lab3f8Mux);
@@ -3101,10 +3053,10 @@ static void uiAutoLaneChangeObserveAndInjectCanA(const struct can_frame &src) {
     portEXIT_CRITICAL(&autoLc293Mux);
 }
 
-static void uiAutoLaneChangeObserveAndInjectCanB(const twai_message_t &src) {
-    if (src.extd || src.rtr || src.data_length_code < 8) return;
+static void uiAutoLaneChangeObserveAndInjectCanB(const struct can_frame &src) {
+    if (((src.can_id & CAN_EFF_FLAG) != 0) || ((src.can_id & CAN_RTR_FLAG) != 0) || src.can_dlc < 8) return;
     const uint32_t now = (uint32_t)millis();
-    const uint8_t raw = uiAutoLaneChangeReadRawPure(src.data, src.data_length_code);
+    const uint8_t raw = uiAutoLaneChangeReadRawPure(src.data, src.can_dlc);
     bool enabled;
     uint8_t targetBus;
     portENTER_CRITICAL(&autoLc293Mux);
@@ -3122,16 +3074,16 @@ static void uiAutoLaneChangeObserveAndInjectCanB(const twai_message_t &src) {
         return;
     }
     if (raw == UI_AUTO_LANE_CHANGE_ON_PURE) return;
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!chassisNonSummonAdmissionOpen()) {
         portENTER_CRITICAL(&autoLc293Mux); uiAutoLaneChangeTxBFail++; portEXIT_CRITICAL(&autoLc293Mux);
         return;
     }
 
-    twai_message_t out = src;
-    if (!uiAutoLaneChangeFinalizePure(out.data, out.data_length_code)) return;
+    struct can_frame out = src;
+    if (!uiAutoLaneChangeFinalizePure(out.data, out.can_dlc)) return;
     const uint32_t txEpoch = canTxEpochSnapshot();
-    const esp_err_t err = canTxTwaiTransmit(&out, txEpoch);
-    researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code, out.data, err == ESP_OK);
+    const esp_err_t err = canTxChassisTransmit(&out, txEpoch);
+    researchCaptureObserveTxVh((uint16_t)out.can_id, out.can_dlc, out.data, err == ESP_OK);
     portENTER_CRITICAL(&autoLc293Mux);
     if (err == ESP_OK) uiAutoLaneChangeTxBOk++; else uiAutoLaneChangeTxBFail++;
     uiAutoLaneChangeLastTxValid = true;
@@ -3181,8 +3133,8 @@ static void countryOverrideRecordResult(uint8_t bus, uint16_t id,
     portEXIT_CRITICAL(&countryOverrideMux);
 }
 
-static void countryOverrideObserve238CanB(const twai_message_t &src, uint32_t txEpoch) {
-    if (src.extd || src.rtr || src.data_length_code != 8u) return;
+static void countryOverrideObserve238CanB(const struct can_frame &src, uint32_t txEpoch) {
+    if (((src.can_id & CAN_EFF_FLAG) != 0) || ((src.can_id & CAN_RTR_FLAG) != 0) || src.can_dlc != 8u) return;
     if (!countryOverrideRouteAllowedPure(
             activeVehicleProfile, activeVehicleTopology, 1u, 0x238u)) return;
     // Snapshot cancellation before reading mode or constructing a payload.
@@ -3192,8 +3144,8 @@ static void countryOverrideObserve238CanB(const twai_message_t &src, uint32_t tx
     portENTER_CRITICAL(&countryOverrideMux);
     countryOverrideRx238++;
     portEXIT_CRITICAL(&countryOverrideMux);
-    twai_message_t out = src;
-    if (!countryOverrideApply238Pure(out.data, out.data_length_code, mode)) return;
+    struct can_frame out = src;
+    if (!countryOverrideApply238Pure(out.data, out.can_dlc, mode)) return;
     if (!countryOverrideGateOpen()) {
         portENTER_CRITICAL(&countryOverrideMux);
         countryOverrideBlocked++;
@@ -3201,7 +3153,7 @@ static void countryOverrideObserve238CanB(const twai_message_t &src, uint32_t tx
         return;
     }
 
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!chassisNonSummonAdmissionOpen()) {
         portENTER_CRITICAL(&countryOverrideMux);
         countryOverrideBlocked++;
         portEXIT_CRITICAL(&countryOverrideMux);
@@ -3211,11 +3163,11 @@ static void countryOverrideObserve238CanB(const twai_message_t &src, uint32_t tx
     }
 
     const uint32_t now = (uint32_t)millis();
-    const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
+    const esp_err_t err = canTxChassisTransmitWithMaskTaggedGuarded(
         &out, txEpoch, CAN_TX_FRESH_VH, CAN_TX_TRACE_SOURCE_DEFAULT,
         &countryOverrideCancelGeneration, guardGeneration);
-    researchCaptureObserveTxVh((uint16_t)out.identifier,
-                               out.data_length_code, out.data,
+    researchCaptureObserveTxVh((uint16_t)out.can_id,
+                               out.can_dlc, out.data,
                                err == ESP_OK);
     countryOverrideRecordResult(2u, 0x238u, 0xFFu, out.data,
                                 err == ESP_OK, now);
@@ -3255,8 +3207,8 @@ static void countryOverrideObserve7ffCanA(const struct can_frame &src, uint32_t 
                                 ok, now);
 }
 
-static void countryOverrideObserve7ffCanB(const twai_message_t &src, uint32_t txEpoch) {
-    if (src.extd || src.rtr || src.data_length_code != 8u) return;
+static void countryOverrideObserve7ffCanB(const struct can_frame &src, uint32_t txEpoch) {
+    if (((src.can_id & CAN_EFF_FLAG) != 0) || ((src.can_id & CAN_RTR_FLAG) != 0) || src.can_dlc != 8u) return;
     if (!countryOverrideRouteAllowedPure(
             activeVehicleProfile, activeVehicleTopology, 1u, 0x7FFu)) return;
     // Snapshot cancellation before reading mode or constructing a payload.
@@ -3266,8 +3218,8 @@ static void countryOverrideObserve7ffCanB(const twai_message_t &src, uint32_t tx
     portENTER_CRITICAL(&countryOverrideMux);
     countryOverrideRx7ffB++;
     portEXIT_CRITICAL(&countryOverrideMux);
-    twai_message_t out = src;
-    if (!countryOverrideApply7ffPure(out.data, out.data_length_code, mode, countryOverrideMapModeSnapshot())) return;
+    struct can_frame out = src;
+    if (!countryOverrideApply7ffPure(out.data, out.can_dlc, mode, countryOverrideMapModeSnapshot())) return;
     if (!countryOverrideGateOpen()) {
         portENTER_CRITICAL(&countryOverrideMux);
         countryOverrideBlocked++;
@@ -3275,7 +3227,7 @@ static void countryOverrideObserve7ffCanB(const twai_message_t &src, uint32_t tx
         return;
     }
 
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!chassisNonSummonAdmissionOpen()) {
         portENTER_CRITICAL(&countryOverrideMux);
         countryOverrideBlocked++;
         portEXIT_CRITICAL(&countryOverrideMux);
@@ -3285,11 +3237,11 @@ static void countryOverrideObserve7ffCanB(const twai_message_t &src, uint32_t tx
     }
 
     const uint32_t now = (uint32_t)millis();
-    const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
+    const esp_err_t err = canTxChassisTransmitWithMaskTaggedGuarded(
         &out, txEpoch, CAN_TX_FRESH_VH, CAN_TX_TRACE_SOURCE_DEFAULT,
         &countryOverrideCancelGeneration, guardGeneration);
-    researchCaptureObserveTxVh((uint16_t)out.identifier,
-                               out.data_length_code, out.data,
+    researchCaptureObserveTxVh((uint16_t)out.can_id,
+                               out.can_dlc, out.data,
                                err == ESP_OK);
     countryOverrideRecordResult(2u, 0x7FFu, out.data[0], out.data,
                                 err == ESP_OK, now);
@@ -3411,7 +3363,7 @@ static bool visionControlGateOpen(uint8_t bus, uint32_t now) {
   apValid = dasAutopilotStateValid; apState = dasAutopilotState4; apMs = lastDASStatusMillis;
   portEXIT_CRITICAL(&stateMux);
   const uint8_t mask = bus == 0u ? CAN_TX_FRESH_VH : CAN_TX_FRESH_PARTY;
-  const bool transport = !canTxAdministrativeHold && (bus == 0u ? twaiReady : mcpReady) &&
+  const bool transport = !canTxAdministrativeHold && (bus == 0u ? mcpChassisReady : mcpReady) &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, stock.epoch, mask);
   const bool stockValid = stock.valid && stock.profile == activeVehicleProfile &&
       stock.topology == activeVehicleTopology;
@@ -3482,7 +3434,7 @@ static String getVisionControlStatsJson() {
   bool readyB = false, readyA = false, held = true;
   if (canTxBarrierMutex && xSemaphoreTake(canTxBarrierMutex, 0) == pdTRUE) {
     epoch = canTxBarrierState.epoch; freshMask = canTxBarrierState.freshMask;
-    readyB = twaiReady; readyA = mcpReady; held = canTxAdministrativeHold;
+    readyB = mcpChassisReady; readyA = mcpReady; held = canTxAdministrativeHold;
     xSemaphoreGive(canTxBarrierMutex);
   }
   LaneGraphStockPure stock = {}; bool disabled; uint8_t bus; uint32_t txOk, txFail;
@@ -3533,7 +3485,7 @@ static void retiredLabSpeedSettingsCleanup() {
 }
 
 struct Lab3f8FinalContext {
-    twai_message_t stock;
+    struct can_frame stock;
     UlcCompositeSelectionPure selected;
     uint8_t confirmTiming;
     uint32_t generation, receivedMs;
@@ -3543,13 +3495,13 @@ struct Lab3f8FinalContext {
 
 // Called with canTxBarrierMutex held. Rebuild from the received stock frame,
 // Preserve source freshness, cancellation and the surviving field gates.
-static bool lab3f8FinalValidate(twai_message_t *out, void *opaque) {
+static bool lab3f8FinalValidate(struct can_frame *out, void *opaque) {
     Lab3f8FinalContext &context = *static_cast<Lab3f8FinalContext *>(opaque);
     if (canTxCancellationGenerationSnapshot(&lab3f8Generation) != context.generation)
       return false;
     const uint32_t now = (uint32_t)millis();
     if ((uint32_t)(now - context.receivedMs) > LAB3F8_FRESH_MS_PURE ||
-        !twaiNonSummonAdmissionOpen()) return false;
+        !chassisNonSummonAdmissionOpen()) return false;
     bool valid; uint8_t state;
     portENTER_CRITICAL(&stateMux);
     valid = dasAutopilotStateValid; state = dasAutopilotState4;
@@ -3561,15 +3513,15 @@ static bool lab3f8FinalValidate(twai_message_t *out, void *opaque) {
         ulcPolicyApGateOpenPure(ulcSelected, valid, state),
         ulcNoConfirmGateOpenWithTimingPure(activeProfileUlcNoConfirmSupported(),
             context.selected.confirmFreeEnabled, context.confirmTiming, valid, state)};
-    *out = context.stock; out->flags = 0;
-    context.result = ulcCompose3f8Pure(out->data, out->data_length_code, context.selected, gates);
+    *out = context.stock;
+    context.result = ulcCompose3f8Pure(out->data, out->can_dlc, context.selected, gates);
     context.finalComposed = context.result.changed;
     return context.result.changed;
 }
 
-static void injectDriverAssistControl(const twai_message_t &src) {
+static void injectDriverAssistControl(const struct can_frame &src) {
     lab3f8ObserveCanB(src);
-    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr)) return;
+    if (!lab3f8FrameValidPure(src.can_id, src.can_dlc, ((src.can_id & CAN_EFF_FLAG) != 0), ((src.can_id & CAN_RTR_FLAG) != 0))) return;
     const uint32_t generation = canTxCancellationGenerationSnapshot(&lab3f8Generation);
 
     UlcCompositeSelectionPure selected = {};
@@ -3623,15 +3575,14 @@ static void injectDriverAssistControl(const twai_message_t &src) {
         portEXIT_CRITICAL(&lab3f8Mux);
     }
 
-    twai_message_t out = src;
-    out.flags = 0;
-    const uint8_t stockBlindBefore =
+    struct can_frame out = src;
+      const uint8_t stockBlindBefore =
         (uint8_t)readBitsLE(out.data, 52, 2);
     UlcCompositeResultPure result =
-        ulcCompose3f8Pure(out.data, out.data_length_code, selected, gates);
+        ulcCompose3f8Pure(out.data, out.can_dlc, selected, gates);
     if (!result.changed) return;
 
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!chassisNonSummonAdmissionOpen()) {
         portENTER_CRITICAL(&lab3f8Mux);
         lab3f8TxFail++;
         if (result.ulcOffHighwayChanged) ulcOffHighwayTxFail++;
@@ -3646,12 +3597,12 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     const uint32_t now = (uint32_t)millis();
     const uint32_t txEpoch = lab3f8FrameRxEpoch;
     Lab3f8FinalContext context = {src, selected, confirmTiming, generation, lab3f8FrameRxMs, result};
-    const esp_err_t err = canTxTwaiTransmitValidated(
+    const esp_err_t err = canTxChassisTransmitValidated(
         &out, txEpoch, CAN_TX_FRESH_BOTH, lab3f8FinalValidate, &context);
     // Admission rejection counts initially prepared requests. Once final
     // composition succeeds, transport results belong only to surviving fields.
     if (context.finalComposed) result = context.result;
-    researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code, out.data, err == ESP_OK);
+    researchCaptureObserveTxVh((uint16_t)out.can_id, out.can_dlc, out.data, err == ESP_OK);
     const uint8_t actualTxBlind = (uint8_t)readBitsLE(out.data, 52, 2);
     portENTER_CRITICAL(&lab3f8Mux);
     lab3f8LastTxValid = true;
@@ -3666,7 +3617,7 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     else               lab3f8TxFail++;
     if (result.ulcOffHighwayChanged) {
       ulcOffHighwayLastTxValid = true;
-      ulcOffHighwayLastTxRaw = uiUlcOffHighwayReadRawPure(out.data, out.data_length_code);
+      ulcOffHighwayLastTxRaw = uiUlcOffHighwayReadRawPure(out.data, out.can_dlc);
       ulcOffHighwayLastTxMs = now;
       if (err == ESP_OK) ulcOffHighwayTxOk++; else ulcOffHighwayTxFail++;
     }
@@ -3680,13 +3631,12 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     portEXIT_CRITICAL(&lab3f8Mux);
 }
 
-static bool injectUlcSnooze3fdMux1(const twai_message_t &src) {
+static bool injectUlcSnooze3fdMux1(const struct can_frame &src) {
     const uint32_t now = (uint32_t)millis();
     if (!ulcSnoozeRequestActive(now) || !autoBlinkerNOAGateOpen(now)) return false;
 
-    twai_message_t out = src;
-    out.flags = 0;
-    if (getBit(out.data, 36)) {
+    struct can_frame out = src;
+      if (getBit(out.data, 36)) {
       ulcSnoozeFinishRequest();
       return false;
     }
@@ -3694,7 +3644,7 @@ static bool injectUlcSnooze3fdMux1(const twai_message_t &src) {
     // DMS is the final MUX1 overlay for every independently generated clone.
     r79DmsApplyFinal(out.data);
 
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!chassisNonSummonAdmissionOpen()) {
       portENTER_CRITICAL(&ulcSnoozeMux);
       ulcSnoozeTxFail++;
       portEXIT_CRITICAL(&ulcSnoozeMux);
@@ -3719,20 +3669,19 @@ static bool injectUlcSnooze3fdMux1(const twai_message_t &src) {
 // Reference firmware semantics verified for Standard 3/Y: preserve byte0 bits
 // 7..6 and force the low six bits to 0x1B. Model Y L remains unsupported until
 // its 0x331 field semantics are independently verified.
-static void doInjectTlsscRestore(const twai_message_t &src) {
+static void doInjectTlsscRestore(const struct can_frame &src) {
     if (!activeProfileTlsscRestoreSupported()) return;
     if (!bannedCar || !tlsscRestoreEnabled) return;
-    if (src.extd || src.rtr || src.data_length_code < 1) return;
+    if (((src.can_id & CAN_EFF_FLAG) != 0) || ((src.can_id & CAN_RTR_FLAG) != 0) || src.can_dlc < 1) return;
 
     const uint8_t patched0 = (uint8_t)((src.data[0] & 0xC0U) | 0x1BU);
     if (patched0 == src.data[0]) return;
-    if (!twaiNonSummonAdmissionOpen()) return;
+    if (!chassisNonSummonAdmissionOpen()) return;
 
-    twai_message_t out = src;
-    out.flags = 0;
-    out.data[0] = patched0;
+    struct can_frame out = src;
+      out.data[0] = patched0;
     const uint32_t txEpoch = canTxEpochSnapshot();
-    (void)canTxTwaiTransmit(&out, txEpoch);
+    (void)canTxChassisTransmit(&out, txEpoch);
 }
 
 // ── TLSSC green-light experiment : 0x25D APP_trafficControl / Party CAN ──
@@ -3748,7 +3697,7 @@ static void doInjectTlsscRestore(const twai_message_t &src) {
 static bool r79FastReactiveGateOpen();
 
 static esp_err_t r79ApGateTransmitGuarded(
-    const twai_message_t *msg, uint16_t waitMs, uint32_t expectedGeneration,
+    const struct can_frame *msg, uint16_t waitMs, uint32_t expectedGeneration,
     bool stockFresh = true) {
   if (!msg) return ESP_ERR_INVALID_ARG;
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
@@ -3757,10 +3706,10 @@ static esp_err_t r79ApGateTransmitGuarded(
   if (r79ApGateGenerationSnapshot() == expectedGeneration &&
       r79FastReactiveGateOpen())
     {
-      twai_message_t finalOut = *msg;
+      struct can_frame finalOut = *msg;
       if (stockFresh) laneGraphApplyFinal(finalOut.data);
       const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
-      err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+      err = mcpChassisTransmit(&finalOut, pdMS_TO_TICKS(waitMs));
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
       laneGraphRecordTx(finalOut, err);
       canBTraceRecordTx(&finalOut, err);
@@ -3769,10 +3718,10 @@ static esp_err_t r79ApGateTransmitGuarded(
   return err;
 }
 
-static esp_err_t r79LabDirectTwaiTransmit(
-    const twai_message_t *msg, uint16_t waitMs, uint32_t apGeneration) {
+static esp_err_t r79LabDirectChassisTransmit(
+    const struct can_frame *msg, uint16_t waitMs, uint32_t apGeneration) {
   if (!msg) return ESP_ERR_INVALID_ARG;
-  if (canTxAdministrativeHold || !twaiReady) {
+  if (canTxAdministrativeHold || !mcpChassisReady) {
     canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
     return ESP_ERR_INVALID_STATE;
   }
@@ -3780,8 +3729,8 @@ static esp_err_t r79LabDirectTwaiTransmit(
   return err;
 }
 
-static esp_err_t r79LabDirectTwaiTransmitGuarded(
-    const twai_message_t *msg, uint16_t waitMs,
+static esp_err_t r79LabDirectChassisTransmitGuarded(
+    const struct can_frame *msg, uint16_t waitMs,
     const volatile uint32_t *generation, uint32_t expectedGeneration,
     uint32_t apGeneration) {
   if (!msg || !generation) return ESP_ERR_INVALID_ARG;
@@ -3794,15 +3743,15 @@ static esp_err_t r79LabDirectTwaiTransmitGuarded(
     return ESP_ERR_INVALID_STATE;
   }
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
+  if (!canTxAdministrativeHold && mcpChassisReady &&
       canTxCancellationGenerationSnapshot(generation) == expectedGeneration &&
       r79ApGateGenerationSnapshot() == apGeneration &&
       r79FastReactiveGateOpen())
     {
-      twai_message_t finalOut = *msg;
+      struct can_frame finalOut = *msg;
       if (laneGraphCachedStockFresh()) laneGraphApplyFinal(finalOut.data);
       const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
-      err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+      err = mcpChassisTransmit(&finalOut, pdMS_TO_TICKS(waitMs));
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
       laneGraphRecordTx(finalOut, err);
       canBTraceRecordTx(&finalOut, err);
@@ -3821,10 +3770,10 @@ static bool r79Mode1PostMux2GenerationCurrent(uint32_t expectedGeneration) {
 static bool r79ImmediateClearTransmitQueueGuarded(uint32_t expectedApGeneration) {
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
     return false;
-  const bool allowed = !canTxAdministrativeHold && twaiReady &&
+  const bool allowed = !canTxAdministrativeHold && mcpChassisReady &&
       r79ApGateGenerationSnapshot() == expectedApGeneration &&
       r79FastReactiveGateOpen();
-  const bool cleared = allowed && twai_clear_transmit_queue() == ESP_OK;
+  const bool cleared = allowed && mcpChassisClearTxQueue() == ESP_OK;
   xSemaphoreGive(canTxBarrierMutex);
   return cleared;
 }
@@ -3833,9 +3782,9 @@ static bool r79Mode1PostMux2ClearTransmitQueueGuarded(
     uint32_t expectedGeneration) {
   if (canTxAdministrativeHold || !canTxBarrierMutex ||
       xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return false;
-  const bool allowed = !canTxAdministrativeHold && twaiReady &&
+  const bool allowed = !canTxAdministrativeHold && mcpChassisReady &&
       r79Mode1PostMux2GenerationCurrent(expectedGeneration);
-  const bool cleared = allowed && twai_clear_transmit_queue() == ESP_OK;
+  const bool cleared = allowed && mcpChassisClearTxQueue() == ESP_OK;
   xSemaphoreGive(canTxBarrierMutex);
   return cleared;
 }
@@ -3869,7 +3818,7 @@ static void r79RetrySchedule(
 // gear or DAS does not suppress R79. Only the already-established manual D/R
 // latch blocks TX, while AP or confirmed Summon wins exactly as before.
 static bool r79FastReactiveGateOpen() {
-  if (canTxAdministrativeHold || !twaiReady) return false;
+  if (canTxAdministrativeHold || !mcpChassisReady) return false;
 
   bool apActive = false;
   bool summonConfirmed = false;
@@ -3895,7 +3844,7 @@ static void r79FastReactiveRecordTxState(esp_err_t err, uint32_t now) {
 }
 
 // Receive-synchronized R79 echo. Called as the first special-case operation
-// after TWAI dequeues a standard 0x3FD mux1 frame. The production path has one
+// after CHASSIS dequeues a standard 0x3FD mux1 frame. The production path has one
 // fixed bounded 2 ms queue-admission wait; payload authorization, emergency
 // flush and bounded retry semantics remain unchanged.
 static bool r79CopyLatestStock(uint8_t out[8]) {
@@ -3922,10 +3871,9 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
     return false;
   }
 
-  twai_message_t out = {};
-  out.identifier = 0x3FD;
-  out.data_length_code = 8;
-  out.flags = 0;
+  struct can_frame out = {};
+  out.can_id = 0x3FD;
+  out.can_dlc = 8;
   memcpy(out.data, stock, 8);
   if (readMuxID(out.data) != 1) return false;
   uint8_t bit18Policy;
@@ -3936,9 +3884,9 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
   r79DmsApplyFinal(out.data);
 
   const esp_err_t err = generation
-      ? r79LabDirectTwaiTransmitGuarded(
+      ? r79LabDirectChassisTransmitGuarded(
           &out, waitMs, generation, expectedGeneration, apGeneration)
-      : r79LabDirectTwaiTransmit(&out, waitMs, apGeneration);
+      : r79LabDirectChassisTransmit(&out, waitMs, apGeneration);
   if (errOut) *errOut = err;
   r79LabRecordTxResult(err == ESP_OK, out, txKind);
 
@@ -3949,7 +3897,7 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
 }
 
 // Production request path: one normal R79 attempt. In READY/ACTIVE only, an
-// enqueue timeout may destructively clear the pending TWAI TX queue and retry
+// enqueue timeout may destructively clear the pending CHASSIS TX queue and retry
 // the newest R79 template once immediately. If it still fails, schedule the
 // bounded +5/+15/+30 ms recovery sequence. Queue flush is never used in NORMAL
 // or PARK_STANDBY.
@@ -3976,7 +3924,7 @@ static bool r79LabTransmitShadow(const uint8_t *stock, uint8_t txKind,
   if (err == ESP_ERR_TIMEOUT &&
       !r79FixedDeadlineExpiredPure(retryNow, hardDeadlineMs) &&
       r79Mode1PostMux2GenerationCurrent(expectedGeneration) &&
-      !canTxAdministrativeHold && twaiReady) {
+      !canTxAdministrativeHold && mcpChassisReady) {
     portENTER_CRITICAL(&r79LabMux);
     r79EmergencyQueueFlushCount++;
     portEXIT_CRITICAL(&r79LabMux);
@@ -4128,8 +4076,8 @@ static void r79LabRetryTick() {
 // Mode 1 production transport. Accepted stock MUX1 uses the selected historical
 // initial enqueue wait (zero-wait Fast Echo or bounded 2 ms Wait). Recovery
 // remains bounded, and accepted stock MUX2 owns one configurable quiet slot.
-static bool r79FixedFastEcho(const twai_message_t &src) {
-  if (src.data_length_code < 8 || readMuxID(src.data) != 1u) return false;
+static bool r79FixedFastEcho(const struct can_frame &src) {
+  if (src.can_dlc < 8 || readMuxID(src.data) != 1u) return false;
   const uint32_t apGeneration = r79ApGateGenerationSnapshot();
   const uint32_t now = (uint32_t)millis();
   if (!r79FastReactiveGateOpen()) return false;
@@ -4141,10 +4089,9 @@ static bool r79FixedFastEcho(const twai_message_t &src) {
   portEXIT_CRITICAL(&r79LabMux);
   const uint16_t waitMs = r79Mode1TxWaitMsPure(waitMode);
 
-  twai_message_t out = {};
-  out.identifier = 0x3FD;
-  out.data_length_code = 8;
-  out.flags = 0;
+  struct can_frame out = {};
+  out.can_id = 0x3FD;
+  out.can_dlc = 8;
   memcpy(out.data, src.data, 8);
   r79FixedApplyBitsPure(out.data, bit18Policy, r79Hw3Active());
   r79DmsApplyFinal(out.data);
@@ -4165,7 +4112,7 @@ static bool r79FixedFastEcho(const twai_message_t &src) {
   uint8_t priority = summonPriorityStateSnapshot(now);
   esp_err_t recoveryErr = err;
   if (err == ESP_ERR_TIMEOUT && summonPriorityAllowsR79FlushPure(priority) &&
-      !canTxAdministrativeHold && twaiReady) {
+      !canTxAdministrativeHold && mcpChassisReady) {
     if (r79ImmediateClearTransmitQueueGuarded(apGeneration)) {
       portENTER_CRITICAL(&r79LabMux);
       r79EmergencyQueueFlushCount++;
@@ -4249,16 +4196,15 @@ static void r79FixedTick() {
 // Mode 2 mirrors the V14 MUX1 payload policy without vehicle-version
 // detection. It is deliberately a single zero-wait attempt: no queue flush,
 // retry schedule, bit18 override, or LAB bit43 overlay is allowed here.
-static bool r79Mode2FastEcho(const twai_message_t &src) {
-  if (src.data_length_code < 8 || readMuxID(src.data) != 1u) return false;
+static bool r79Mode2FastEcho(const struct can_frame &src) {
+  if (src.can_dlc < 8 || readMuxID(src.data) != 1u) return false;
   const uint32_t apGeneration = r79ApGateGenerationSnapshot();
   const uint32_t now = (uint32_t)millis();
   if (!r79FastReactiveGateOpen()) return false;
 
-  twai_message_t out = {};
-  out.identifier = 0x3FD;
-  out.data_length_code = 8;
-  out.flags = 0;
+  struct can_frame out = {};
+  out.can_id = 0x3FD;
+  out.can_dlc = 8;
   memcpy(out.data, src.data, 8);
   (void)r79Mode2ApplyBitsPure(out.data, r79Hw3Active());
   r79DmsApplyFinal(out.data);
@@ -4295,11 +4241,10 @@ static bool r79DmsWorkPendingSnapshot() {
   return pending;
 }
 
-static bool r79DmsOnlyTransmit(const twai_message_t &src) {
-  if (src.data_length_code < 8u || readMuxID(src.data) != 1u ||
-      !r79DmsNagActive() || canTxAdministrativeHold || !twaiReady) return false;
-  twai_message_t out = src;
-  out.flags = 0;
+static bool r79DmsOnlyTransmit(const struct can_frame &src) {
+  if (src.can_dlc < 8u || readMuxID(src.data) != 1u ||
+      !r79DmsNagActive() || canTxAdministrativeHold || !mcpChassisReady) return false;
+  struct can_frame out = src;
   if (!r79DmsApplyFinal(out.data)) return false;
   const esp_err_t err = mux1DisplayTransmit(&out, canTxEpochSnapshot(), CAN_TX_FRESH_VH, false);
   portENTER_CRITICAL(&r79LabMux);
@@ -4308,7 +4253,7 @@ static bool r79DmsOnlyTransmit(const twai_message_t &src) {
   return true;  // This stock clone was claimed even when enqueue failed.
 }
 
-static bool r79ProcessStockFrame(const twai_message_t &src, uint8_t mux,
+static bool r79ProcessStockFrame(const struct can_frame &src, uint8_t mux,
                                  uint32_t nowMs) {
   uint8_t mode;
   portENTER_CRITICAL(&r79LabMux);
@@ -4366,18 +4311,18 @@ static void laneGraphObserveBody(const struct can_frame &src, uint32_t txEpoch,
     const bool ok = result == MCP2515::ERROR_OK;
     visionControlRecordTx(visionChanged, VISION_CONTROL_BODY_PURE, ok);
     canATraceRecordTx(&out, ok ? MCP_TX_OK : MCP_TX_SEND_ERROR, result, CAN_TX_TRACE_SOURCE_DEFAULT);
-    twai_message_t diagnostic = {};
-    diagnostic.identifier = 0x3FDu; diagnostic.data_length_code = 8u;
+    struct can_frame diagnostic = {};
+    diagnostic.can_id = 0x3FDu; diagnostic.can_dlc = 8u;
     memcpy(diagnostic.data, out.data, 8u);
     laneGraphRecordTx(diagnostic, ok ? ESP_OK : ESP_FAIL, LANE_GRAPH_BODY_PURE);
   }
   xSemaphoreGive(canTxBarrierMutex);
 }
 
-static void laneGraphObserveStock(const twai_message_t &src, uint32_t txEpoch,
+static void laneGraphObserveStock(const struct can_frame &src, uint32_t txEpoch,
                                   bool stockClaimed,
                                   uint32_t receivedMs = (uint32_t)millis()) {
-  if (src.extd || src.rtr || src.identifier != 0x3FDu || src.data_length_code != 8u || readMuxID(src.data) != 1u) return;
+  if (((src.can_id & CAN_EFF_FLAG) != 0) || ((src.can_id & CAN_RTR_FLAG) != 0) || src.can_id != 0x3FDu || src.can_dlc != 8u || readMuxID(src.data) != 1u) return;
   laneGraphCacheStock(LANE_GRAPH_CHASSIS_PURE, src.data, txEpoch, receivedMs);
   if (stockClaimed || r79DmsWorkPendingSnapshot()) return;
   (void)mux1DisplayTransmit(&src, txEpoch, CAN_TX_FRESH_VH, true, receivedMs);
@@ -4403,10 +4348,9 @@ static void r79Mode2Tick() {
   portEXIT_CRITICAL(&r79LabMux);
   if (action != R79_MODE2_DELAY_FIRE_PURE || !haveStock) return;
 
-  twai_message_t out = {};
-  out.identifier = 0x3FD;
-  out.data_length_code = 8;
-  out.flags = 0;
+  struct can_frame out = {};
+  out.can_id = 0x3FD;
+  out.can_dlc = 8;
   memcpy(out.data, stock, 8);
   if (readMuxID(out.data) != 1u) return;
   (void)r79Mode2ApplyBitsPure(out.data, r79Hw3Active());
@@ -4502,7 +4446,7 @@ static bool requestTurnSignalPulseFromButton(uint8_t dir) {
                           eventToken, now);
 }
 
-static void injectTLSSC(const twai_message_t &src) {
+static void injectTLSSC(const struct can_frame &src) {
     const uint32_t now = (uint32_t)millis();
     const uint32_t txEpoch = canTxEpochSnapshot();
     bool en, ap, noa, blockNoa, injected, clearPending;
@@ -4522,9 +4466,8 @@ static void injectTLSSC(const twai_message_t &src) {
       portEXIT_CRITICAL(&roadContextMux);
     }
     const bool desiredActive = en && ap && !highwayBlocked && !(blockNoa && noa);
-    twai_message_t out = src;
-    out.flags = 0;
-    bool tlsscTx = false;
+    struct can_frame out = src;
+      bool tlsscTx = false;
     bool tlsscClearTx = false;
 
     // MUX0 has a single stock-follow clone for TLSSC.
@@ -4557,11 +4500,11 @@ static void injectTLSSC(const twai_message_t &src) {
     if (!tlsscTx) return;
 
     // TLSSC is lower priority than Summon and must never block CAN B RX.
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!chassisNonSummonAdmissionOpen()) {
       sumTxFail++;
       return;
     }
-    const esp_err_t err = canTxTwaiTransmit(&out, txEpoch);
+    const esp_err_t err = canTxChassisTransmit(&out, txEpoch);
     portENTER_CRITICAL(&stateMux);
     if (tlsscClearTx) {
       if (err == ESP_OK) {
@@ -4656,7 +4599,7 @@ static void nvsSchemaFinalize() {
   }
 
   if (!ok) {
-    T2CAN_SERIAL_PRINTLN("NVS schema migration incomplete; will retry next boot");
+    TMR_SERIAL_PRINTLN("NVS schema migration incomplete; will retry next boot");
     return;
   }
 
@@ -4673,10 +4616,10 @@ static void nvsSchemaFinalize() {
       cleanup.remove("blkDly17");
       cleanup.end();
     }
-    T2CAN_SERIAL_PRINTLN("NVS schema 1 cleanup complete");
+    TMR_SERIAL_PRINTLN("NVS schema 1 cleanup complete");
     return;
   }
-  T2CAN_SERIAL_PRINTLN("NVS schema marker write failed; will retry next boot");
+  TMR_SERIAL_PRINTLN("NVS schema marker write failed; will retry next boot");
 }
 
 static void featureCfgLoad() {
@@ -4920,7 +4863,7 @@ static bool featureConfigMigrateToSchema3() {
   p.end();
   if (!featureConfigWriteSchema3Values(config) ||
       !featureConfigSchema3ReadBackMatches(config)) {
-    T2CAN_SERIAL_PRINTLN("NVS schema 3 value verification failed; will retry");
+    TMR_SERIAL_PRINTLN("NVS schema 3 value verification failed; will retry");
     return false;
   }
 
@@ -4998,7 +4941,7 @@ static bool featureConfigMigrateToSchema2() {
   const FeatureConfigMigrationPure migrated = migrateLegacyLab3f8Pure(legacy);
   if (!featureConfigWriteSchema2Values(migrated) ||
       !featureConfigSchema2ReadBackMatches(migrated)) {
-    T2CAN_SERIAL_PRINTLN("NVS schema 2 value verification failed; will retry");
+    TMR_SERIAL_PRINTLN("NVS schema 2 value verification failed; will retry");
     return false;
   }
   if (!p.begin("t2meta", false)) return false;

@@ -3,7 +3,7 @@
 #include "vehicle_profile.h"
 
 // Host-testable Summon routing and state decisions. Physical bus A is the
-// MCP2515 side (Party or Body by topology); physical bus B is TWAI
+// MCP2515 side (Party or Body by topology); physical bus B is CHASSIS
 // (VH or Chassis by topology).
 enum SummonBusMaskPure : uint8_t {
   SUMMON_BUS_NONE = 0x00,
@@ -26,31 +26,22 @@ static inline SummonRoutePure summonRoutePure(uint8_t profileId, uint8_t topolog
   SummonRoutePure r = {};
   if (!vehicleProfileTopologyValid(profileId, topology)) return r;
 
-  if (profileId == VEHICLE_MODEL_YL && topology == VEHICLE_TOPOLOGY_YL_PARTY_VH) {
-    r.valid = true;
-    r.gearBusMask = SUMMON_BUS_A;
-    r.dasBusMask = SUMMON_BUS_A;
-    r.sprBusMask = SUMMON_BUS_B;
-    r.transportBusMask = SUMMON_BUS_B;
-    // V2.6 compatibility transport: only the bus carrying stock 0x3FD must
-    // be fresh when R79 is emitted. Party remains the source of gear/AP state.
+  // TMR has three physical buses. This legacy two-mask model keeps A/B as
+  // logical feature lanes: PARTY for Model Y L, CHASSIS for standard 3/Y.
+  // The third physical bus (BODY) is handled by the TMR CAN runtime.
+  r.valid = true;
+  if (profileId == VEHICLE_MODEL_YL) {
+    r.gearBusMask = SUMMON_BUS_A;       // logical PARTY
+    r.dasBusMask = SUMMON_BUS_A;        // logical PARTY
+    r.sprBusMask = SUMMON_BUS_B;        // logical BODY/VH
+    r.transportBusMask = SUMMON_BUS_B;  // logical BODY/VH
     r.requiredTxFreshMask = SUMMON_BUS_B;
-    // The YL 0x186 samples captured so far do not validate the generic
-    // data[2] gear mapping. Keep 0x118 authoritative until separately proven.
     r.allow186Fallback = false;
-    return r;
-  }
-
-  if (profileId != VEHICLE_MODEL_YL &&
-      (topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
-       topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS)) {
-    r.valid = true;
-    r.gearBusMask = SUMMON_BUS_B;
-    r.dasBusMask = SUMMON_BUS_B;
-    r.sprBusMask = SUMMON_BUS_B;
-    r.transportBusMask = SUMMON_BUS_B;
-    // Standard 3/Y Summon is self-contained on Chassis CAN. Body/Party CAN A
-    // must not block remote-Summon R79 transport while it is still asleep.
+  } else {
+    r.gearBusMask = SUMMON_BUS_B;       // CHASSIS
+    r.dasBusMask = SUMMON_BUS_B;        // CHASSIS
+    r.sprBusMask = SUMMON_BUS_B;        // CHASSIS
+    r.transportBusMask = SUMMON_BUS_B;  // CHASSIS
     r.requiredTxFreshMask = SUMMON_BUS_B;
     r.allow186Fallback = true;
   }

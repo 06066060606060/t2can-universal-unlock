@@ -433,8 +433,8 @@ static String summonStatsToJson() {
   const bool roadFresh = roadValid && roadLast != 0 && roadAge <= ROAD_CONTEXT_FRESH_MS;
   const bool highwayBlocked = tlsscHighwayGateBlocked(now);
 
-  twai_status_info_t st = {};
-  const bool twaiStatusOk = (twai_get_status_info(&st) == ESP_OK);
+  McpChassisStatus st = {};
+  const bool chassisStatusOk = (mcpChassisGetStatus(&st) == ESP_OK);
 
   String out;
   out.reserve(2600);
@@ -493,12 +493,12 @@ static String summonStatsToJson() {
   jw.u32("priorityState", (uint32_t)(priorityState));
   jw.string("priorityStateName", summonPriorityStateName(priorityState));
   jw.boolean("loadSheddingActive", priorityState == SUMMON_PRIORITY_READY || priorityState == SUMMON_PRIORITY_ACTIVE);
-  jw.u32("txQueueNow", (uint32_t)(twaiTxQueueNow));
-  jw.u32("txQueueMax", (uint32_t)(twaiTxQueueMax));
-  jw.u32("nonSummonShed", (uint32_t)(twaiNonSummonShed));
-  jw.u32("parkSoftShed", (uint32_t)(twaiParkSoftShed));
-  jw.u32("readyShed", (uint32_t)(twaiReadyShed));
-  jw.u32("activeShed", (uint32_t)(twaiActiveShed));
+  jw.u32("txQueueNow", (uint32_t)(chassisTxQueueNow));
+  jw.u32("txQueueMax", (uint32_t)(chassisTxQueueMax));
+  jw.u32("nonSummonShed", (uint32_t)(chassisNonSummonShed));
+  jw.u32("parkSoftShed", (uint32_t)(chassisParkSoftShed));
+  jw.u32("readyShed", (uint32_t)(chassisReadyShed));
+  jw.u32("activeShed", (uint32_t)(chassisActiveShed));
   jw.boolean("r79RetryPending", r79RetryPendingLocal);
   jw.u32("r79RetryIndex", (uint32_t)(r79RetryPendingLocal ? r79RetryIndexLocal + 1U : 0U));
   jw.u32("r79RetryScheduled", (uint32_t)(r79RetryScheduledLocal));
@@ -515,8 +515,8 @@ static String summonStatsToJson() {
   jw.u32("rx390", r390);
   jw.u32("rx921", r921);
   jw.u32("rx1016", r1016);
-  jw.i32("canState", twaiStatusOk ? (int32_t)st.state : -1);
-  jw.string("canStateName", twaiStatusOk ? twaiStateName(st.state) : "UNAVAILABLE");
+  jw.i32("canState", chassisStatusOk ? (int32_t)st.state : -1);
+  jw.string("canStateName", chassisStatusOk ? mcpChassisStateName(st.state) : "UNAVAILABLE");
   jw.u32("uptimeS", (uint32_t)((millis() - bootTime) / 1000));
   jw.finish();
   return out;
@@ -703,7 +703,7 @@ static String blinkAStatsToJson() {
   rawHex.toUpperCase();
   jw.string("realRaw", rawHex);
   jw.boolean("cksumSelfTest", selfTest);
-  jw.i32("canBState", (int32_t)twaiReady);
+  jw.i32("canBState", (int32_t)mcpChassisReady);
   jw.u32("uptimeS", (millis() - bootTime) / 1000);
   jw.finish();
   return s;
@@ -1095,25 +1095,32 @@ static String r79StatsToJson() {
 static constexpr uint32_t CAN_TRAFFIC_UI_FRESH_MS = 1500;
 
 struct CanTrafficUiSnapshot {
-  bool mcpSeen;
-  bool twaiSeen;
-  bool mcpOnline;
-  bool twaiOnline;
-  uint32_t mcpAgeMs;
-  uint32_t twaiAgeMs;
+  bool bodySeen;
+  bool chassisSeen;
+  bool partySeen;
+  bool bodyOnline;
+  bool chassisOnline;
+  bool partyOnline;
+  uint32_t bodyAgeMs;
+  uint32_t chassisAgeMs;
+  uint32_t partyAgeMs;
 };
 
 static CanTrafficUiSnapshot canTrafficUiSnapshot() {
   const uint32_t now = (uint32_t)millis();
-  const uint32_t lastA = lastCanAFrameMs;
-  const uint32_t lastB = lastCanBFrameMs;
+  const uint32_t lastBody = lastCanAFrameMs;
+  const uint32_t lastChassis = lastCanBFrameMs;
+  const uint32_t lastParty = lastCanCFrameMs;
   CanTrafficUiSnapshot t = {};
-  t.mcpSeen = lastA != 0;
-  t.twaiSeen = lastB != 0;
-  t.mcpAgeMs = t.mcpSeen ? (uint32_t)(now - lastA) : 0;
-  t.twaiAgeMs = t.twaiSeen ? (uint32_t)(now - lastB) : 0;
-  t.mcpOnline = t.mcpSeen && t.mcpAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
-  t.twaiOnline = t.twaiSeen && t.twaiAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
+  t.bodySeen = lastBody != 0;
+  t.chassisSeen = lastChassis != 0;
+  t.partySeen = lastParty != 0;
+  t.bodyAgeMs = t.bodySeen ? (uint32_t)(now - lastBody) : 0;
+  t.chassisAgeMs = t.chassisSeen ? (uint32_t)(now - lastChassis) : 0;
+  t.partyAgeMs = t.partySeen ? (uint32_t)(now - lastParty) : 0;
+  t.bodyOnline = t.bodySeen && t.bodyAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
+  t.chassisOnline = t.chassisSeen && t.chassisAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
+  t.partyOnline = t.partySeen && t.partyAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
   return t;
 }
 
@@ -1125,12 +1132,15 @@ static String canTrafficStatsToJson() {
   String s;
   s.reserve(384);
   JsonWriterArduino jw(s);
-  jw.boolean("mcpTrafficSeen", t.mcpSeen);
-  jw.boolean("mcpTrafficOnline", t.mcpOnline);
-  jw.u32("mcpTrafficAgeMs", t.mcpAgeMs);
-  jw.boolean("twaiTrafficSeen", t.twaiSeen);
-  jw.boolean("twaiTrafficOnline", t.twaiOnline);
-  jw.u32("twaiTrafficAgeMs", t.twaiAgeMs);
+  jw.boolean("bodyTrafficSeen", t.bodySeen);
+  jw.boolean("bodyTrafficOnline", t.bodyOnline);
+  jw.u32("bodyTrafficAgeMs", t.bodyAgeMs);
+  jw.boolean("chassisTrafficSeen", t.chassisSeen);
+  jw.boolean("chassisTrafficOnline", t.chassisOnline);
+  jw.u32("chassisTrafficAgeMs", t.chassisAgeMs);
+  jw.boolean("partyTrafficSeen", t.partySeen);
+  jw.boolean("partyTrafficOnline", t.partyOnline);
+  jw.u32("partyTrafficAgeMs", t.partyAgeMs);
   jw.u32("trafficFreshMs", CAN_TRAFFIC_UI_FRESH_MS);
   jw.u32("mcpRxOverflowCount", overflowCount);
   jw.u32("mcpRxOverflowLastAgeMs", overflowLastMs ? millis() - overflowLastMs : 999999UL);
@@ -1146,33 +1156,33 @@ static String systemStatsToJson() {
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t minFreeHeap = ESP.getMinFreeHeap();
   const uint32_t largestHeapBlock = ESP.getMaxAllocHeap();
-  const uint32_t stackCanA = canTaskMcpHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskMcpHandle) : 0;
-  const uint32_t stackCanB = canTaskTwaiHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskTwaiHandle) : 0;
+  const uint32_t stackCanA = canTaskBodyHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskBodyHandle) : 0;
+  const uint32_t stackCanB = canTaskChassisHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskChassisHandle) : 0;
   const uint32_t stackCanSup = canSupervisorHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canSupervisorHandle) : 0;
   const uint32_t stackWeb = webTaskHandle ? (uint32_t)uxTaskGetStackHighWaterMark(webTaskHandle) : 0;
   const uint32_t stackS3xy = s3xyTaskHandle ? (uint32_t)uxTaskGetStackHighWaterMark(s3xyTaskHandle) : 0;
-  twai_status_info_t twaiNow = {};
-  const bool twaiStatusOk = (twai_get_status_info(&twaiNow) == ESP_OK);
-  CanTwaiRecoverySnapshot busOffSnap = {};
-  uint32_t twaiBusOffCount, twaiStoppedCount, twaiLocalRecoveryStartCount;
-  uint32_t twaiRecoveryStartFailCount, twaiRestartOkCount, twaiRestartFailCount;
-  uint32_t twaiLastEventMs, lastRxGapMs, maxRxGapMs;
-  uint8_t twaiLastEventReason, lastHardDiagReason;
+  McpChassisStatus chassisNow = {};
+  const bool chassisStatusOk = (mcpChassisGetStatus(&chassisNow) == ESP_OK);
+  CanChassisRecoverySnapshot busOffSnap = {};
+  uint32_t chassisBusOffCount, chassisStoppedCount, chassisLocalRecoveryStartCount;
+  uint32_t chassisRecoveryStartFailCount, chassisRestartOkCount, chassisRestartFailCount;
+  uint32_t chassisLastEventMs, lastRxGapMs, maxRxGapMs;
+  uint8_t chassisLastEventReason, lastHardDiagReason;
   uint8_t taskHeartbeatLastCause;
   uint32_t taskHeartbeatLastAgeAms, taskHeartbeatLastAgeBms;
   uint32_t taskHeartbeatTimeoutCountA, taskHeartbeatTimeoutCountB, taskHeartbeatTimeoutCountBoth;
   CanTaskTimeoutSnapshotPure taskSnapshotA = {};
   CanTaskTimeoutSnapshotPure taskSnapshotB = {};
   portENTER_CRITICAL(&canRecoveryMux);
-  busOffSnap = canTwaiLastBusOffSnapshot;
-  twaiBusOffCount = canTwaiBusOffCount;
-  twaiStoppedCount = canTwaiStoppedCount;
-  twaiLocalRecoveryStartCount = canTwaiLocalRecoveryStartCount;
-  twaiRecoveryStartFailCount = canTwaiRecoveryStartFailCount;
-  twaiRestartOkCount = canTwaiRestartOkCount;
-  twaiRestartFailCount = canTwaiRestartFailCount;
-  twaiLastEventReason = canTwaiLastEventReason;
-  twaiLastEventMs = canTwaiLastEventMs;
+  busOffSnap = canChassisLastBusOffSnapshot;
+  chassisBusOffCount = canChassisBusOffCount;
+  chassisStoppedCount = canChassisStoppedCount;
+  chassisLocalRecoveryStartCount = canChassisLocalRecoveryStartCount;
+  chassisRecoveryStartFailCount = canChassisRecoveryStartFailCount;
+  chassisRestartOkCount = canChassisRestartOkCount;
+  chassisRestartFailCount = canChassisRestartFailCount;
+  chassisLastEventReason = canChassisLastEventReason;
+  chassisLastEventMs = canChassisLastEventMs;
   lastHardDiagReason = canLastHardDiagReason;
   lastRxGapMs = canBLastRxGapMs;
   maxRxGapMs = canBMaxRxGapMs;
@@ -1204,14 +1214,14 @@ static String systemStatsToJson() {
   jw.u32("uptimeS", (uint32_t)((millis() - bootTime) / 1000));
   jw.boolean("mcpReady", mcpReady);
   jw.u32("mcpState", (uint32_t)(mcpState));
-  jw.boolean("twaiReady", twaiReady);
+  jw.boolean("mcpChassisReady", mcpChassisReady);
   const CanTrafficUiSnapshot traffic = canTrafficUiSnapshot();
-  jw.boolean("mcpTrafficSeen", traffic.mcpSeen);
-  jw.boolean("mcpTrafficOnline", traffic.mcpOnline);
-  jw.u32("mcpTrafficAgeMs", (uint32_t)(traffic.mcpAgeMs));
-  jw.boolean("twaiTrafficSeen", traffic.twaiSeen);
-  jw.boolean("twaiTrafficOnline", traffic.twaiOnline);
-  jw.u32("twaiTrafficAgeMs", (uint32_t)(traffic.twaiAgeMs));
+  jw.boolean("mcpTrafficSeen", traffic.bodySeen);
+  jw.boolean("mcpTrafficOnline", traffic.bodyOnline);
+  jw.u32("mcpTrafficAgeMs", (uint32_t)(traffic.bodyAgeMs));
+  jw.boolean("chassisTrafficSeen", traffic.chassisSeen);
+  jw.boolean("chassisTrafficOnline", traffic.chassisOnline);
+  jw.u32("chassisTrafficAgeMs", (uint32_t)(traffic.chassisAgeMs));
   jw.u32("trafficFreshMs", (uint32_t)(CAN_TRAFFIC_UI_FRESH_MS));
   uint32_t mcpOverflowCount, mcpOverflowLastMs;
   uint8_t mcpOverflowLastFlags;
@@ -1295,38 +1305,44 @@ static String systemStatsToJson() {
   jw.u32("canTaskSnapshotBMaxLoopUs", (uint32_t)taskSnapshotB.maxLoopDurationUs);
   jw.u32("canTaskSnapshotBStackHighWater", (uint32_t)taskSnapshotB.stackHighWater);
   jw.boolean("canRecoverySleeping", recoverySleeping);
-  jw.i32("twaiState", twaiStatusOk ? (int32_t)twaiNow.state : -1);
-  jw.string("twaiStateName", twaiStatusOk ? twaiStateName(twaiNow.state) : "UNAVAILABLE");
-  jw.u32("twaiBusOffCount", (uint32_t)(twaiBusOffCount));
-  jw.u32("twaiStoppedCount", (uint32_t)(twaiStoppedCount));
-  jw.u32("twaiLocalRecoveryStartCount", (uint32_t)(twaiLocalRecoveryStartCount));
-  jw.u32("twaiRecoveryStartFailCount", (uint32_t)(twaiRecoveryStartFailCount));
-  jw.u32("twaiRestartOkCount", (uint32_t)(twaiRestartOkCount));
-  jw.u32("twaiRestartFailCount", (uint32_t)(twaiRestartFailCount));
-  jw.i32("twaiLastEventReason", (int32_t)(twaiLastEventReason));
-  jw.string("twaiLastEventReasonName", canRecoveryDiagnosticReasonName(twaiLastEventReason));
-  jw.u32("twaiLastEventAgeMs", (uint32_t)((twaiLastEventMs ? statsNow - twaiLastEventMs : 999999UL)));
+  jw.i32("chassisState", chassisStatusOk ? (int32_t)chassisNow.state : -1);
+  jw.string("mcpChassisStateName", chassisStatusOk ? mcpChassisStateName(chassisNow.state) : "UNAVAILABLE");
+  jw.boolean("mcpPartyReady", mcpPartyReady);
+  jw.u32("mcpPartyState", (uint32_t)mcpPartyState);
+  jw.u32("mcpPartyTxOk", (uint32_t)mcpPartyTxOk);
+  jw.u32("mcpPartyTxFail", (uint32_t)mcpPartyTxFail);
+  jw.u32("mcpPartyRxCount", (uint32_t)mcpPartyRxCount);
+  jw.u32("mcpPartyTrafficAgeMs", (uint32_t)((lastCanCFrameMs ? statsNow - lastCanCFrameMs : 999999UL)));
+  jw.u32("chassisBusOffCount", (uint32_t)(chassisBusOffCount));
+  jw.u32("chassisStoppedCount", (uint32_t)(chassisStoppedCount));
+  jw.u32("chassisLocalRecoveryStartCount", (uint32_t)(chassisLocalRecoveryStartCount));
+  jw.u32("chassisRecoveryStartFailCount", (uint32_t)(chassisRecoveryStartFailCount));
+  jw.u32("chassisRestartOkCount", (uint32_t)(chassisRestartOkCount));
+  jw.u32("chassisRestartFailCount", (uint32_t)(chassisRestartFailCount));
+  jw.i32("chassisLastEventReason", (int32_t)(chassisLastEventReason));
+  jw.string("chassisLastEventReasonName", canRecoveryDiagnosticReasonName(chassisLastEventReason));
+  jw.u32("chassisLastEventAgeMs", (uint32_t)((chassisLastEventMs ? statsNow - chassisLastEventMs : 999999UL)));
   jw.u32("canBLastRxGapMs", (uint32_t)(lastRxGapMs));
   jw.u32("canBMaxRxGapMs", (uint32_t)(maxRxGapMs));
-  jw.u32("twaiTxErrorCounter", (uint32_t)((twaiStatusOk ? twaiNow.tx_error_counter : 0)));
-  jw.u32("twaiRxErrorCounter", (uint32_t)((twaiStatusOk ? twaiNow.rx_error_counter : 0)));
-  jw.u32("twaiTxFailedCount", (uint32_t)((twaiStatusOk ? twaiNow.tx_failed_count : 0)));
-  jw.u32("twaiRxMissedCount", (uint32_t)((twaiStatusOk ? twaiNow.rx_missed_count : 0)));
-  jw.u32("twaiRxOverrunCount", (uint32_t)((twaiStatusOk ? twaiNow.rx_overrun_count : 0)));
-  jw.u32("twaiArbLostCount", (uint32_t)((twaiStatusOk ? twaiNow.arb_lost_count : 0)));
-  jw.u32("twaiBusErrorCount", (uint32_t)((twaiStatusOk ? twaiNow.bus_error_count : 0)));
-  jw.boolean("twaiBusOffSnapshotValid", busOffSnap.valid);
-  jw.u32("twaiBusOffSnapshotAgeMs", (uint32_t)((busOffSnap.valid && canBRecordCurrent ? statsNow - busOffSnap.capturedMs : 999999UL)));
-  jw.u32("twaiBusOffSnapshotRxGapMs", (uint32_t)(busOffSnap.rxGapMs));
-  jw.u32("twaiBusOffSnapshotTxQueue", (uint32_t)(busOffSnap.msgsToTx));
-  jw.u32("twaiBusOffSnapshotRxQueue", (uint32_t)(busOffSnap.msgsToRx));
-  jw.u32("twaiBusOffSnapshotTxErr", (uint32_t)(busOffSnap.txErrorCounter));
-  jw.u32("twaiBusOffSnapshotRxErr", (uint32_t)(busOffSnap.rxErrorCounter));
-  jw.u32("twaiBusOffSnapshotTxFailed", (uint32_t)(busOffSnap.txFailedCount));
-  jw.u32("twaiBusOffSnapshotRxMissed", (uint32_t)(busOffSnap.rxMissedCount));
-  jw.u32("twaiBusOffSnapshotRxOverrun", (uint32_t)(busOffSnap.rxOverrunCount));
-  jw.u32("twaiBusOffSnapshotArbLost", (uint32_t)(busOffSnap.arbLostCount));
-  jw.u32("twaiBusOffSnapshotBusError", (uint32_t)(busOffSnap.busErrorCount));
+  jw.u32("chassisTxErrorCounter", (uint32_t)((chassisStatusOk ? chassisNow.tx_error_counter : 0)));
+  jw.u32("chassisRxErrorCounter", (uint32_t)((chassisStatusOk ? chassisNow.rx_error_counter : 0)));
+  jw.u32("chassisTxFailedCount", (uint32_t)((chassisStatusOk ? chassisNow.tx_failed_count : 0)));
+  jw.u32("chassisRxMissedCount", (uint32_t)((chassisStatusOk ? chassisNow.rx_missed_count : 0)));
+  jw.u32("chassisRxOverrunCount", (uint32_t)((chassisStatusOk ? chassisNow.rx_overrun_count : 0)));
+  jw.u32("chassisArbLostCount", (uint32_t)((chassisStatusOk ? chassisNow.arb_lost_count : 0)));
+  jw.u32("chassisBusErrorCount", (uint32_t)((chassisStatusOk ? chassisNow.bus_error_count : 0)));
+  jw.boolean("chassisBusOffSnapshotValid", busOffSnap.valid);
+  jw.u32("chassisBusOffSnapshotAgeMs", (uint32_t)((busOffSnap.valid && canBRecordCurrent ? statsNow - busOffSnap.capturedMs : 999999UL)));
+  jw.u32("chassisBusOffSnapshotRxGapMs", (uint32_t)(busOffSnap.rxGapMs));
+  jw.u32("chassisBusOffSnapshotTxQueue", (uint32_t)(busOffSnap.msgsToTx));
+  jw.u32("chassisBusOffSnapshotRxQueue", (uint32_t)(busOffSnap.msgsToRx));
+  jw.u32("chassisBusOffSnapshotTxErr", (uint32_t)(busOffSnap.txErrorCounter));
+  jw.u32("chassisBusOffSnapshotRxErr", (uint32_t)(busOffSnap.rxErrorCounter));
+  jw.u32("chassisBusOffSnapshotTxFailed", (uint32_t)(busOffSnap.txFailedCount));
+  jw.u32("chassisBusOffSnapshotRxMissed", (uint32_t)(busOffSnap.rxMissedCount));
+  jw.u32("chassisBusOffSnapshotRxOverrun", (uint32_t)(busOffSnap.rxOverrunCount));
+  jw.u32("chassisBusOffSnapshotArbLost", (uint32_t)(busOffSnap.arbLostCount));
+  jw.u32("chassisBusOffSnapshotBusError", (uint32_t)(busOffSnap.busErrorCount));
   uint8_t txTraceFrozenCount = 0;
   uint32_t txTraceFrozenMs = 0, txTraceBusOffOrdinal = 0;
   portENTER_CRITICAL(&canBTxTraceMux);
@@ -1343,11 +1359,11 @@ static String systemStatsToJson() {
   jw.string("busOffPersistState", canBusOffPersistStateName(CAN_BUS_OFF_BUS_B_PURE));
   jw.string("busOffPersistError", canBusOffPersistErrorName(CAN_BUS_OFF_BUS_B_PURE));
   jw.endObject();
-  jw.u32("twaiTxQueueNow", (uint32_t)(twaiTxQueueNow));
-  jw.u32("twaiTxQueueMax", (uint32_t)(twaiTxQueueMax));
-  jw.u32("twaiRxQueueNow", (uint32_t)(twaiRxQueueNow));
-  jw.u32("twaiRxQueueMax", (uint32_t)(twaiRxQueueMax));
-  jw.u32("twaiNonSummonShed", (uint32_t)(twaiNonSummonShed));
+  jw.u32("chassisTxQueueNow", (uint32_t)(chassisTxQueueNow));
+  jw.u32("chassisTxQueueMax", (uint32_t)(chassisTxQueueMax));
+  jw.u32("chassisRxQueueNow", (uint32_t)(chassisRxQueueNow));
+  jw.u32("chassisRxQueueMax", (uint32_t)(chassisRxQueueMax));
+  jw.u32("chassisNonSummonShed", (uint32_t)(chassisNonSummonShed));
   jw.boolean("otaInProgress", otaInProgress);
   jw.boolean("otaSuccess", otaSuccess);
   jw.boolean("otaError", otaError);
@@ -1413,7 +1429,7 @@ static String bootCaptureToCsv() {
   bootCaptureAppendEvent(out, "CAN_RX_TASKS_STARTED", canTasks);
   bootCaptureAppendEvent(out, "WIFI_AP_READY", wifiReady);
   bootCaptureAppendEvent(out, "FIRST_CAN_A_ANY", firstA, "Party/MCP2515");
-  bootCaptureAppendEvent(out, "FIRST_CAN_B_ANY", firstB, "VH/TWAI");
+  bootCaptureAppendEvent(out, "FIRST_CAN_B_ANY", firstB, "VH/CHASSIS");
 
   String d370;
   if (first370Raw != 0xFFFF) {
@@ -1451,7 +1467,7 @@ static String bootCaptureToCsv() {
 }
 
 static void httpBootCaptureCsv() {
-  server.sendHeader("Content-Disposition", "attachment; filename=T2CAN_boot_capture.csv");
+  server.sendHeader("Content-Disposition", "attachment; filename=TMR_boot_capture.csv");
   server.send(200, "text/csv", bootCaptureToCsv());
 }
 
@@ -1509,7 +1525,7 @@ static void httpCanATxTraceCsv() {
   memcpy(entries, canATxTraceFrozen, sizeof(CanATxTraceEntry) * count);
   portEXIT_CRITICAL(&canATxTraceMux);
 
-  server.sendHeader("Content-Disposition", "attachment; filename=T2CAN_CANA_TX_TRACE.csv");
+  server.sendHeader("Content-Disposition", "attachment; filename=TMR_CANA_TX_TRACE.csv");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/csv", "");
   char line[384];
@@ -1563,7 +1579,7 @@ static void httpCanBTxTraceCsv() {
   memcpy(entries, canBTxTraceFrozen, sizeof(CanBTxTraceEntry) * count);
   portEXIT_CRITICAL(&canBTxTraceMux);
 
-  server.sendHeader("Content-Disposition", "attachment; filename=T2CAN_CANB_TX_TRACE.csv");
+  server.sendHeader("Content-Disposition", "attachment; filename=TMR_CANB_TX_TRACE.csv");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/csv", "");
   char line[320];
@@ -1597,7 +1613,7 @@ static void wifiApBuildDefaultSsid(String &ssid) {
   uint8_t mac[6] = {0};
   WiFi.softAPmacAddress(mac);
   char buf[24];
-  snprintf(buf, sizeof(buf), "T2CAN-%02X%02X", mac[4], mac[5]);
+  snprintf(buf, sizeof(buf), "TMR-%02X%02X", mac[4], mac[5]);
   ssid = buf;
 }
 
@@ -1657,7 +1673,7 @@ static bool wifiApStartOnce(const String &ssid, const String &password) {
       wifiApActivePassword = password;
       return true;
     }
-    T2CAN_SERIAL_PRINTF("WiFi: AP start failed for SSID=%s attempt=%u/3\n",
+    TMR_SERIAL_PRINTF("WiFi: AP start failed for SSID=%s attempt=%u/3\n",
                   ssid.c_str(), (unsigned)(attempt + 1));
     vTaskDelay(pdMS_TO_TICKS(500));
   }
@@ -1675,7 +1691,7 @@ static bool wifiApActivate(const String &requestedSsid, const String &requestedP
   String fallbackSsid;
   wifiApBuildDefaultSsid(fallbackSsid);
   const String fallbackPassword = "12345678";
-  T2CAN_SERIAL_PRINTLN("WiFi: custom AP failed; restoring fail-safe default AP");
+  TMR_SERIAL_PRINTLN("WiFi: custom AP failed; restoring fail-safe default AP");
   if (!wifiApStartOnce(fallbackSsid, fallbackPassword)) return false;
   wifiApPersistConfig(fallbackSsid, fallbackPassword);
   return true;
@@ -1751,7 +1767,7 @@ static void httpWifiApply() {
   // Only the SoftAP is recycled. CAN, BLE and the MCU remain running.
   delay(450);  // allow the HTTP response to leave before the client is dropped
   const bool ok = wifiApActivate(ssid, password, true);
-  T2CAN_SERIAL_PRINTF("WiFi: AP config apply %s · SSID=%s IP=%s\n",
+  TMR_SERIAL_PRINTF("WiFi: AP config apply %s · SSID=%s IP=%s\n",
                 ok ? "OK" : "FAILED", wifiApActiveSsid.c_str(), WiFi.softAPIP().toString().c_str());
 }
 
@@ -2009,7 +2025,7 @@ static void httpS3xyClear() {
 
 static void httpS3xyLogCsv() {
 #if S3XY_DIAGNOSTICS_ENABLED
-  server.sendHeader("Content-Disposition", "attachment; filename=T2CAN_S3XY_multi.csv");
+  server.sendHeader("Content-Disposition", "attachment; filename=TMR_S3XY_multi.csv");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/csv", "");
   server.sendContent("seq,ms,slot,type,rssi,len,data_hex,detail\n", sizeof("seq,ms,slot,type,rssi,len,data_hex,detail\n") - 1);
@@ -2090,7 +2106,7 @@ static void httpOtaUpload() {
         otaError      = false;
         otaBytes      = 0;
         otaErrMsg[0]  = '\0';
-        T2CAN_SERIAL_PRINTF("[OTA] Start: %s\n", up.filename.c_str());
+        TMR_SERIAL_PRINTF("[OTA] Start: %s\n", up.filename.c_str());
 
         if (!prepareCanForMaintenance()) {
             otaError = true;
@@ -2100,24 +2116,24 @@ static void httpOtaUpload() {
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
             otaError = true;
             strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
-            T2CAN_SERIAL_PRINTF("[OTA] begin() failed: %s\n", otaErrMsg);
+            TMR_SERIAL_PRINTF("[OTA] begin() failed: %s\n", otaErrMsg);
         }
     } else if (up.status == UPLOAD_FILE_WRITE) {
         if (!otaError && Update.write(up.buf, up.currentSize) != up.currentSize) {
             otaError = true;
             strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
-            T2CAN_SERIAL_PRINTF("[OTA] write() failed: %s\n", otaErrMsg);
+            TMR_SERIAL_PRINTF("[OTA] write() failed: %s\n", otaErrMsg);
         }
         otaBytes += up.currentSize;
     } else if (up.status == UPLOAD_FILE_END) {
         if (!otaError && Update.end(true)) {
             otaSuccess = true;
             otaTotal   = otaBytes;
-            T2CAN_SERIAL_PRINTF("[OTA] Success: %u bytes\n", up.totalSize);
+            TMR_SERIAL_PRINTF("[OTA] Success: %u bytes\n", up.totalSize);
         } else if (!otaError) {
             otaError = true;
             strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
-            T2CAN_SERIAL_PRINTF("[OTA] end() failed: %s\n", otaErrMsg);
+            TMR_SERIAL_PRINTF("[OTA] end() failed: %s\n", otaErrMsg);
         }
         otaInProgress = false;
     } else if (up.status == UPLOAD_FILE_ABORTED) {
@@ -2125,7 +2141,7 @@ static void httpOtaUpload() {
         otaInProgress = false;
         otaError      = true;
         strncpy(otaErrMsg, "aborted", sizeof(otaErrMsg) - 1);
-        T2CAN_SERIAL_PRINTLN("[OTA] Aborted");
+        TMR_SERIAL_PRINTLN("[OTA] Aborted");
     }
 }
 
@@ -2137,7 +2153,7 @@ static void httpOtaFinish() {
     server.send(200, "application/json", resp);
     if (ok) {
         delay(700);
-        restartT2CanSafely();
+        restartTmrCanSafely();
     }
 }
 
@@ -2319,6 +2335,7 @@ static String researchCaptureStatsToJson() {
   jw.string("captureMode", researchCaptureModeName(mode));
   jw.string("canAName", activeProfileCanAName());
   jw.string("canBName", activeProfileCanBName());
+  jw.string("canCName", activeProfileCanCName());
   jw.boolean("rawAutoAlcSupported", activeProfileIsYl());
   jw.boolean("capturing", state == RESEARCH_CAPTURE_CAPTURING);
   jw.u32("segment", (uint32_t)(segment));
@@ -2604,7 +2621,7 @@ static void httpResearchCaptureCsv() {
   portEXIT_CRITICAL(&researchCaptureMux);
 
   const uint32_t exportRows = researchCaptureCsvExportRows(mode, count, rawCompleted, entries, archive);
-  server.sendHeader("X-T2CAN-CSV-Rows", String((unsigned long)exportRows));
+  server.sendHeader("X-TMR-CSV-Rows", String((unsigned long)exportRows));
   server.sendHeader("Content-Disposition", "attachment; filename=CAN_Research_Capture.csv");
   server.sendHeader("Cache-Control", "no-store");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -2724,7 +2741,7 @@ static void httpResearchCaptureCsv() {
     snprintf(line, sizeof(line), "%u,%s,%s,%s,%d,%lu,%lld,%u,%s,%s,%s,%d,0x%03X,%u,\"%s\"\n",
              (unsigned)e.segment, researchCaptureLabelSlotName(meta.labelSlot), quotedLabel, phase, (int)e.relativeMs,
              (unsigned long)meta.triggerMs, (long long)snapMs, (unsigned)e.frameAgeMs,
-             physicalBus, busRole, isTx ? "T2CAN_TX" : "RX", txOk, (unsigned)e.id, (unsigned)e.dlc, raw);
+             physicalBus, busRole, isTx ? "TMR_TX" : "RX", txOk, (unsigned)e.id, (unsigned)e.dlc, raw);
     researchCaptureCsvAppend(chunk, line);
     if ((i & 0x3FFU) == 0x3FFU) vTaskDelay(1);
   }
@@ -2773,7 +2790,7 @@ static void httpDriverMonitorCsv() {
     return;
   }
 
-  server.sendHeader("X-T2CAN-CSV-Rows", String((unsigned)count));
+  server.sendHeader("X-TMR-CSV-Rows", String((unsigned)count));
   server.sendHeader("Content-Disposition", "attachment; filename=Driver_Monitoring_Capture.csv");
   server.sendHeader("Cache-Control", "no-store");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -2846,6 +2863,7 @@ static String vehicleProfileStatusJson() {
   jw.string("topologyName", vehicleProfileTopologyName(activeVehicleTopology));
   jw.string("canA", activeProfileCanAName());
   jw.string("canB", activeProfileCanBName());
+  jw.string("canC", activeProfileCanCName());
   jw.u32("turn", activeTurnSignalVariant);
   jw.string("turnName", turnSignalVariantName(activeTurnSignalVariant));
   writeProfileCapabilityJson(jw);
@@ -2919,27 +2937,17 @@ static void httpProfileSelect() {
     return;
   }
 
-  uint8_t topology = (uint8_t)vehicleProfileDefaultTopology((uint8_t)profile);
-  if ((uint8_t)profile != VEHICLE_MODEL_YL) {
-    if (!server.hasArg("topology")) {
-      server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing topology\"}");
-      return;
-    }
-    topology = (uint8_t)server.arg("topology").toInt();
-  } else if (server.hasArg("topology")) {
-    topology = (uint8_t)server.arg("topology").toInt();
-  }
-  if (!vehicleProfileTopologyValid((uint8_t)profile, topology)) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid topology for profile\"}");
-    return;
-  }
+  // TMR has a single fixed physical topology. Ignore legacy/client topology
+  // parameters and always persist PARTY + BODY + CHASSIS.
+  const uint8_t topology = (uint8_t)VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS;
+
 
   uint8_t turn = TURN_SIGNAL_UNSET;
-  if (topology != VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS) {
+  if (topology == VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS) {
     turn = (uint8_t)vehicleProfileDefaultTurn((uint8_t)profile);
     if ((uint8_t)profile == VEHICLE_MODEL_3_HIGHLAND) {
       if (!server.hasArg("turn")) {
-        server.send(400, "application/json", "{\"ok\":false,\"error\":\"Highland Body+Chassis requires turn variant\"}");
+        server.send(400, "application/json", "{\"ok\":false,\"error\":\"Highland TMR requires turn variant\"}");
         return;
       }
       turn = (uint8_t)server.arg("turn").toInt();
@@ -2965,7 +2973,7 @@ static void httpProfileSelect() {
   }
   server.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
   delay(300);
-  restartT2CanSafely();
+  restartTmrCanSafely();
 }
 
 static void httpFeatureLab() {
@@ -3227,7 +3235,7 @@ static void httpResetNvsPreserveS3xyBle() {
                 "{\"ok\":true,\"rebooting\":true,\"profileSetup\":true,\"blePreserved\":true}");
   }
   delay(300);
-  restartT2CanSafely();
+  restartTmrCanSafely();
 }
 
 static void httpResetFirmwareSettings() {
@@ -3266,7 +3274,7 @@ static void httpResetFirmwareSettings() {
   portEXIT_CRITICAL(&blinkAMux);
   server.send(200, "application/json", "{\"ok\":true,\"rebooting\":true,\"profilePreserved\":true,\"blePreserved\":true}");
   delay(300);
-  restartT2CanSafely();
+  restartTmrCanSafely();
 }
 
 static void httpFactoryReset() {
@@ -3282,7 +3290,7 @@ static void httpFactoryReset() {
               ok ? "{\"ok\":true,\"rebooting\":true}"
                  : "{\"ok\":false,\"error\":\"factory reset failed; rebooting safe\"}");
   delay(300);
-  restartT2CanSafely();
+  restartTmrCanSafely();
 }
 
 static void httpCanHardReinit() {
@@ -3294,14 +3302,14 @@ static void httpCanHardReinit() {
   server.send(202, "application/json", "{\"ok\":true,\"action\":\"hard-can-reinit-requested\"}");
 }
 
-static void httpRebootT2Can() {
+static void httpRebootTmrCan() {
   if (!prepareCanForMaintenance()) {
     server.send(503, "application/json", "{\"ok\":false,\"error\":\"CAN stop not confirmed; retry reboot\"}");
     return;
   }
   server.send(200, "application/json", "{\"ok\":true,\"action\":\"rebooting\"}");
   delay(250);
-  restartT2CanSafely();
+  restartTmrCanSafely();
 }
 
 static void httpRoot() {
@@ -4474,7 +4482,7 @@ static String laneGraphStatsToJson() {
   const bool stockValid = busSupported && laneGraphStockFreshPure(stock, now, epoch, activeVehicleProfile, activeVehicleTopology);
   const uint8_t stockBit = stockCurrent ? ((stock.raw[5] >> 5) & 1u) : 0u;
   const bool transportReady = !canTxAdministrativeHold &&
-      (bus == LANE_GRAPH_BODY_PURE ? mcpReady : twaiReady) &&
+      (bus == LANE_GRAPH_BODY_PURE ? mcpReady : mcpChassisReady) &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch,
           bus == LANE_GRAPH_BODY_PURE ? CAN_TX_FRESH_PARTY : CAN_TX_FRESH_VH);
   const bool active = laneGraphActive() && stockValid && transportReady;
@@ -4718,8 +4726,8 @@ static String homeFastSnapshotToJson() {
   const char *r79TxReasonLocal = r79RuntimeReasonNameForUi(r79RuntimeLocal);
 
   const CanTrafficUiSnapshot traffic = canTrafficUiSnapshot();
-  twai_status_info_t twaiHome = {};
-  const bool twaiHomeOk = twai_get_status_info(&twaiHome) == ESP_OK;
+  McpChassisStatus chassisHome = {};
+  const bool chassisHomeOk = mcpChassisGetStatus(&chassisHome) == ESP_OK;
 
   String j; j.reserve(820);
   JsonWriterArduino jw(j);
@@ -4747,16 +4755,23 @@ static String homeFastSnapshotToJson() {
   jw.boolean("canReinitializing", canReinitializing);
   jw.endObject();
   jw.beginObject("summon");
-  jw.i32("canState", twaiHomeOk ? (int32_t)twaiHome.state : -1);
-  jw.string("canStateName", twaiHomeOk ? twaiStateName(twaiHome.state) : "UNAVAILABLE");
+  jw.i32("canState", chassisHomeOk ? (int32_t)chassisHome.state : -1);
+  jw.string("canStateName", chassisHomeOk ? mcpChassisStateName(chassisHome.state) : "UNAVAILABLE");
   jw.endObject();
   jw.beginObject("cantraffic");
-  jw.boolean("mcpTrafficSeen", traffic.mcpSeen);
-  jw.boolean("mcpTrafficOnline", traffic.mcpOnline);
-  jw.u32("mcpTrafficAgeMs", traffic.mcpAgeMs);
-  jw.boolean("twaiTrafficSeen", traffic.twaiSeen);
-  jw.boolean("twaiTrafficOnline", traffic.twaiOnline);
-  jw.u32("twaiTrafficAgeMs", traffic.twaiAgeMs);
+  jw.boolean("bodyTrafficSeen", traffic.bodySeen);
+  jw.boolean("bodyTrafficOnline", traffic.bodyOnline);
+  jw.u32("bodyTrafficAgeMs", traffic.bodyAgeMs);
+  jw.boolean("chassisTrafficSeen", traffic.chassisSeen);
+  jw.boolean("chassisTrafficOnline", traffic.chassisOnline);
+  jw.u32("chassisTrafficAgeMs", traffic.chassisAgeMs);
+  jw.boolean("partyTrafficSeen", traffic.partySeen);
+  jw.boolean("partyTrafficOnline", traffic.partyOnline);
+  jw.u32("partyTrafficAgeMs", traffic.partyAgeMs);
+  // Legacy dashboard keys retained for clients that still request them.
+  jw.boolean("mcpTrafficSeen", traffic.bodySeen);
+  jw.boolean("mcpTrafficOnline", traffic.bodyOnline);
+  jw.u32("mcpTrafficAgeMs", traffic.bodyAgeMs);
   jw.endObject();
   jw.beginObject("r79");
   jw.string("txState", r79RuntimeStateName(r79RuntimeLocal.state));
@@ -5066,8 +5081,8 @@ static String homeSnapshotToJson() {
   portENTER_CRITICAL(&lab3f8Mux); alcModeLocal = lab3f8AlcMode; portEXIT_CRITICAL(&lab3f8Mux);
 
   const CanTrafficUiSnapshot traffic = canTrafficUiSnapshot();
-  twai_status_info_t twaiHome = {};
-  const bool twaiHomeOk = twai_get_status_info(&twaiHome) == ESP_OK;
+  McpChassisStatus chassisHome = {};
+  const bool chassisHomeOk = mcpChassisGetStatus(&chassisHome) == ESP_OK;
 
   String j;
   j.reserve(1550);
@@ -5110,12 +5125,12 @@ static String homeSnapshotToJson() {
   jw.boolean("parked", parked);
   jw.boolean("aca", aca);
   jw.boolean("spr", spr);
-  jw.u32("txQueueNow", twaiTxQueueNow);
-  jw.u32("txQueueMax", twaiTxQueueMax);
+  jw.u32("txQueueNow", chassisTxQueueNow);
+  jw.u32("txQueueMax", chassisTxQueueMax);
   jw.u32("txOk", sumTxOkLocal);
   jw.u32("txFail", sumTxFailLocal);
-  jw.i32("canState", twaiHomeOk ? (int32_t)twaiHome.state : -1);
-  jw.string("canStateName", twaiHomeOk ? twaiStateName(twaiHome.state) : "UNAVAILABLE");
+  jw.i32("canState", chassisHomeOk ? (int32_t)chassisHome.state : -1);
+  jw.string("canStateName", chassisHomeOk ? mcpChassisStateName(chassisHome.state) : "UNAVAILABLE");
   jw.endObject();
 
   jw.beginObject("s3xy");
@@ -5127,12 +5142,12 @@ static String homeSnapshotToJson() {
   jw.endObject();
 
   jw.beginObject("cantraffic");
-  jw.boolean("mcpTrafficSeen", traffic.mcpSeen);
-  jw.boolean("mcpTrafficOnline", traffic.mcpOnline);
-  jw.u32("mcpTrafficAgeMs", traffic.mcpAgeMs);
-  jw.boolean("twaiTrafficSeen", traffic.twaiSeen);
-  jw.boolean("twaiTrafficOnline", traffic.twaiOnline);
-  jw.u32("twaiTrafficAgeMs", traffic.twaiAgeMs);
+  jw.boolean("mcpTrafficSeen", traffic.bodySeen);
+  jw.boolean("mcpTrafficOnline", traffic.bodyOnline);
+  jw.u32("mcpTrafficAgeMs", traffic.bodyAgeMs);
+  jw.boolean("chassisTrafficSeen", traffic.chassisSeen);
+  jw.boolean("chassisTrafficOnline", traffic.chassisOnline);
+  jw.u32("chassisTrafficAgeMs", traffic.chassisAgeMs);
   jw.endObject();
 
   jw.beginObject("r79");
@@ -5388,13 +5403,13 @@ static bool resetRuntimeStats() {
   tlsscHighwayTransitions = 0;
   portEXIT_CRITICAL(&roadContextMux);
 
-  twaiReadQueueStatus();
-  twaiTxQueueMax = twaiTxQueueNow;
-  twaiRxQueueMax = twaiRxQueueNow;
-  twaiNonSummonShed = 0;
-  twaiParkSoftShed = 0;
-  twaiReadyShed = 0;
-  twaiActiveShed = 0;
+  mcpChassisReadQueueStatus();
+  chassisTxQueueMax = chassisTxQueueNow;
+  chassisRxQueueMax = chassisRxQueueNow;
+  chassisNonSummonShed = 0;
+  chassisParkSoftShed = 0;
+  chassisReadyShed = 0;
+  chassisActiveShed = 0;
 
   portENTER_CRITICAL(&canRecoveryMux);
   canHardReinitCount = 0;
@@ -5412,20 +5427,20 @@ static bool resetRuntimeStats() {
   canTaskHeartbeatTimeoutCountBoth = 0;
   canTaskHeartbeatLastSnapshotA = {};
   canTaskHeartbeatLastSnapshotB = {};
-  canTwaiBusOffCount = 0;
-  canTwaiStoppedCount = 0;
-  canTwaiLocalRecoveryStartCount = 0;
-  canTwaiRecoveryStartFailCount = 0;
-  canTwaiRestartOkCount = 0;
-  canTwaiRestartFailCount = 0;
-  canTwaiLastEventReason = CAN_REC_NONE;
-  canTwaiLastEventMs = 0;
+  canChassisBusOffCount = 0;
+  canChassisStoppedCount = 0;
+  canChassisLocalRecoveryStartCount = 0;
+  canChassisRecoveryStartFailCount = 0;
+  canChassisRestartOkCount = 0;
+  canChassisRestartFailCount = 0;
+  canChassisLastEventReason = CAN_REC_NONE;
+  canChassisLastEventMs = 0;
   canBLastRxGapMs = 0;
   canBMaxRxGapMs = 0;
-  canTwaiLastBusOffSnapshot = {};
+  canChassisLastBusOffSnapshot = {};
   portEXIT_CRITICAL(&canRecoveryMux);
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
-  canTaskDiagnosticsResetPure(canTaskTwaiDiagnostics);
+  canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
   canARxDiagnosticsResetPure(canARxDiagnostics);
   canATraceReset();
   canBTraceReset();
@@ -5445,7 +5460,7 @@ static void httpResetRuntimeStats() {
 }
 
 static void webTask(void *arg) {
-  T2CAN_SERIAL_PRINTLN("WiFi: Starting AP...");
+  TMR_SERIAL_PRINTLN("WiFi: Starting AP...");
   WiFi.disconnect(true);
   delay(100);
   WiFi.mode(WIFI_AP);
@@ -5453,14 +5468,14 @@ static void webTask(void *arg) {
   String ssid, password;
   wifiApLoadConfig(ssid, password);
   while (!wifiApActivate(ssid, password, true)) {
-    T2CAN_SERIAL_PRINTLN("WiFi: Failed to start AP, retrying...");
+    TMR_SERIAL_PRINTLN("WiFi: Failed to start AP, retrying...");
     vTaskDelay(pdMS_TO_TICKS(3000));
   }
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
   IPAddress ip = WiFi.softAPIP();
 #endif
   bootCaptureMarkOnce(&bootCapWifiReadyMs);
-#if T2CAN_SERIAL_DIAGNOSTICS
+#if TMR_SERIAL_DIAGNOSTICS
   Serial.printf("AP: SSID=%s IP=%s\n", wifiApActiveSsid.c_str(), ip.toString().c_str());
 #endif
 
@@ -5472,7 +5487,7 @@ static void webTask(void *arg) {
   server.on("/api/profile/select", HTTP_POST, httpProfileSelect);
   server.on("/api/system/factory-reset", HTTP_POST, httpFactoryReset);
   server.on("/api/system/reset-nvs-keep-ble", HTTP_POST, httpResetNvsPreserveS3xyBle);
-  server.on("/api/system/reboot", HTTP_POST, httpRebootT2Can);
+  server.on("/api/system/reboot", HTTP_POST, httpRebootTmrCan);
   server.on("/api/wifi/status", HTTP_GET, httpWifiStatus);
   server.on("/api/wifi/apply", HTTP_POST, httpWifiApply);
   server.on("/update", HTTP_POST, httpOtaFinish, httpOtaUpload);

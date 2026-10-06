@@ -183,7 +183,7 @@ static bool driverMonitorCaptureInit() {
   driverMonitorExporting = false;
   memset(driverMonitorSegments, 0, sizeof(driverMonitorSegments));
   portEXIT_CRITICAL(&driverMonitorCaptureMux);
-  T2CAN_SERIAL_PRINTF("Driver Monitoring Capture: allocated %u + %u bytes (%s)\n",
+  TMR_SERIAL_PRINTF("Driver Monitoring Capture: allocated %u + %u bytes (%s)\n",
                 (unsigned)preBytes, (unsigned)archiveBytes, psram ? "PSRAM" : "internal RAM");
   return true;
 }

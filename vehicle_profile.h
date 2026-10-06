@@ -14,9 +14,10 @@ enum VehicleProfileId : uint8_t {
 
 enum VehicleCanTopology : uint8_t {
   VEHICLE_TOPOLOGY_NONE = 0,
-  VEHICLE_TOPOLOGY_YL_PARTY_VH = 1,
-  VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS = 2,
-  VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS = 3
+  VEHICLE_TOPOLOGY_YL_PARTY_VH = 1,          // legacy value, invalid on TMR
+  VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS = 2, // legacy value, invalid on TMR
+  VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS = 3, // legacy value, invalid on TMR
+  VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS = 4
 };
 
 enum TurnSignalVariant : uint8_t {
@@ -35,11 +36,11 @@ struct VehicleProfileSpec {
 
 static inline const VehicleProfileSpec *vehicleProfileSpec(uint8_t id) {
   static const VehicleProfileSpec specs[] = {
-    {VEHICLE_MODEL_YL, "Model Y L", VEHICLE_TOPOLOGY_YL_PARTY_VH, TURN_SIGNAL_STALK, false},
-    {VEHICLE_MODEL_Y_JUNIPER, "Model Y Juniper", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
-    {VEHICLE_MODEL_Y_LEGACY, "Model Y Legacy", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
-    {VEHICLE_MODEL_3_HIGHLAND, "Model 3 Highland", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_UNSET, true},
-    {VEHICLE_MODEL_3_LEGACY, "Model 3 Legacy", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true}
+    {VEHICLE_MODEL_YL, "Model Y L", VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS, TURN_SIGNAL_STALK, false},
+    {VEHICLE_MODEL_Y_JUNIPER, "Model Y Juniper", VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
+    {VEHICLE_MODEL_Y_LEGACY, "Model Y Legacy", VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
+    {VEHICLE_MODEL_3_HIGHLAND, "Model 3 Highland", VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS, TURN_SIGNAL_UNSET, true},
+    {VEHICLE_MODEL_3_LEGACY, "Model 3 Legacy", VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS, TURN_SIGNAL_STALK, true}
   };
   for (const auto &s : specs) if ((uint8_t)s.id == id) return &s;
   return nullptr;
@@ -55,11 +56,8 @@ static inline VehicleCanTopology vehicleProfileDefaultTopology(uint8_t id) {
 }
 
 static inline bool vehicleProfileTopologyValid(uint8_t id, uint8_t topology) {
-  if (!vehicleProfileValid(id)) return false;
-  if (id == VEHICLE_MODEL_YL)
-    return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
-  return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
-         topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS;
+  return vehicleProfileValid(id) &&
+         topology == VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS;
 }
 
 // Compatibility helper: this is the legacy/default topology for a model, not
@@ -71,41 +69,39 @@ static inline TurnSignalVariant vehicleProfileDefaultTurn(uint8_t id) {
 }
 
 static inline bool vehicleProfileCanAIsParty(uint8_t id, uint8_t topology) {
-  return vehicleProfileTopologyValid(id, topology) &&
-         (topology == VEHICLE_TOPOLOGY_YL_PARTY_VH ||
-          topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS);
+  (void)id;
+  return false;
 }
 
 static inline bool vehicleProfileCanAIsBody(uint8_t id, uint8_t topology) {
-  return vehicleProfileTopologyValid(id, topology) &&
-         topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileTopologyValid(id, topology);
 }
 
 static inline bool vehicleProfileCanBIsChassis(uint8_t id, uint8_t topology) {
-  return vehicleProfileTopologyValid(id, topology) &&
-         (topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
-          topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS);
+  return vehicleProfileTopologyValid(id, topology);
+}
+
+static inline bool vehicleProfileCanCIsParty(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology);
 }
 
 static inline bool vehicleProfileTsl9InputSupported(uint8_t id, uint8_t topology) {
-  return vehicleProfileTopologyValid(id, topology) &&
-         (id == VEHICLE_MODEL_YL || vehicleProfileCanBIsChassis(id, topology));
+  return vehicleProfileTopologyValid(id, topology);
 }
 
 // Standard Body+Chassis profiles use the Body CAN scroll control. Model YL
 // and Standard Party+Chassis retain their existing CAN B routes.
 static inline bool vehicleProfileTsl9InputOnBodyCanA(uint8_t id,
                                                      uint8_t topology) {
-  return vehicleProfileCanAIsBody(id, topology);
+  return vehicleProfileTopologyValid(id, topology);
 }
 
 static inline bool vehicleProfileNagTorqueSupported(uint8_t id, uint8_t topology) {
-  return vehicleProfileCanAIsParty(id, topology);
+  return vehicleProfileCanCIsParty(id, topology);
 }
 
 static inline bool vehicleProfileNagTsl9Supported(uint8_t id, uint8_t topology) {
-  if (!vehicleProfileTopologyValid(id, topology)) return false;
-  return id == VEHICLE_MODEL_YL || vehicleProfileCanAIsBody(id, topology);
+  return vehicleProfileCanAIsBody(id, topology);
 }
 
 // Only pre-refresh Legacy 3/Y uses the gateway-translated DAS_status 0x39B
@@ -143,10 +139,7 @@ static inline bool vehicleProfileNagSupported(uint8_t id, uint8_t topology) {
 }
 
 static inline bool vehicleProfileAdvancedEapSupported(uint8_t id, uint8_t topology) {
-  if (!vehicleProfileTopologyValid(id, topology)) return false;
-  // YL keeps its existing Party+VH split-bus implementation. Standard 3/Y
-  // requires Body CAN on CAN A for Advanced EAP/Auto Blinker.
-  return id == VEHICLE_MODEL_YL || topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileTopologyValid(id, topology);
 }
 
 static inline bool vehicleProfileEuUnlockSupported(uint8_t id, uint8_t topology) {
@@ -164,8 +157,7 @@ static inline bool vehicleProfileDmsNagSupported(uint8_t id, uint8_t topology) {
 }
 
 static inline bool vehicleProfileBodyControlsSupported(uint8_t id, uint8_t topology) {
-  return vehicleProfileTopologyValid(id, topology) &&
-         topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileTopologyValid(id, topology);
 }
 
 // 0x334 UI_powertrainControl / UI_pedalMap routing. Model Y L exposes the
@@ -173,9 +165,7 @@ static inline bool vehicleProfileBodyControlsSupported(uint8_t id, uint8_t topol
 // pedal-map field on Vehicle/Body CAN, so it is available only when CAN A is
 // wired as Body. Party+Chassis intentionally has no Body 0x334 path.
 static inline bool vehicleProfilePedalMapSupported(uint8_t id, uint8_t topology) {
-  if (!vehicleProfileTopologyValid(id, topology)) return false;
-  if (id == VEHICLE_MODEL_YL) return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
-  return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileCanAIsBody(id, topology);
 }
 
 // AP Drive Profile uses the same supported 0x334 route as PedalMap. YL/VH is
@@ -215,8 +205,6 @@ static inline bool vehicleProfileBannedCarSupported(uint8_t id) {
 
 static inline bool vehicleProfileTurnValid(uint8_t id, uint8_t topology, uint8_t turn) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
-  if (topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS)
-    return turn == TURN_SIGNAL_UNSET;
   if (id == VEHICLE_MODEL_3_HIGHLAND)
     return turn == TURN_SIGNAL_STALK || turn == TURN_SIGNAL_STALKLESS;
   return turn == TURN_SIGNAL_STALK;
@@ -224,7 +212,6 @@ static inline bool vehicleProfileTurnValid(uint8_t id, uint8_t topology, uint8_t
 
 static inline TurnSignalVariant vehicleProfileResolvedTurn(uint8_t id, uint8_t topology, uint8_t storedTurn) {
   if (!vehicleProfileTopologyValid(id, topology)) return TURN_SIGNAL_UNSET;
-  if (topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS) return TURN_SIGNAL_UNSET;
   if (id == VEHICLE_MODEL_3_HIGHLAND)
     return vehicleProfileTurnValid(id, topology, storedTurn) ? (TurnSignalVariant)storedTurn : TURN_SIGNAL_UNSET;
   return TURN_SIGNAL_STALK;
@@ -238,21 +225,21 @@ static inline const char *vehicleProfileName(uint8_t id) {
 
 static inline const char *vehicleProfileTopologyName(uint8_t topology) {
   switch (topology) {
-    case VEHICLE_TOPOLOGY_YL_PARTY_VH: return "PARTY + VH";
-    case VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS: return "BODY + CHASSIS";
-    case VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS: return "PARTY + CHASSIS";
+    case VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS: return "PARTY + BODY + CHASSIS";
     default: return "DISABLED";
   }
 }
 
 static inline const char *vehicleProfileCanAName(uint8_t id, uint8_t topology) {
-  if (!vehicleProfileTopologyValid(id, topology)) return "DISABLED";
-  return vehicleProfileCanAIsParty(id, topology) ? "PARTY" : "BODY";
+  return vehicleProfileTopologyValid(id, topology) ? "BODY" : "DISABLED";
 }
 
 static inline const char *vehicleProfileCanBName(uint8_t id, uint8_t topology) {
-  if (!vehicleProfileTopologyValid(id, topology)) return "DISABLED";
-  return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH ? "VH" : "CHASSIS";
+  return vehicleProfileTopologyValid(id, topology) ? "CHASSIS" : "DISABLED";
+}
+
+static inline const char *vehicleProfileCanCName(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology) ? "PARTY" : "DISABLED";
 }
 
 static inline const char *turnSignalVariantName(uint8_t turn) {
@@ -376,6 +363,14 @@ static inline const char *activeProfileCanBName() {
   return vehicleProfileCanBName(activeVehicleProfile, activeVehicleTopology);
 }
 
+static inline bool activeCanCIsParty() {
+  return vehicleProfileCanCIsParty(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline const char *activeProfileCanCName() {
+  return vehicleProfileCanCName(activeVehicleProfile, activeVehicleTopology);
+}
+
 static bool vehicleProfileWriteBootstrapMarker(bool migrationNotice) {
   Preferences p;
   if (!p.begin(VEHICLE_PROFILE_NAMESPACE, false)) return false;
@@ -400,9 +395,10 @@ static bool vehicleProfileLoadFromNvs() {
 
   // v3.0 compatibility: previously configured profiles have no topology key.
   // Resolve those to the exact topology v3.0 used before this feature.
-  const uint8_t topology = topologyStored == VEHICLE_TOPOLOGY_NONE
-                         ? (uint8_t)vehicleProfileDefaultTopology(id)
-                         : topologyStored;
+  // TMR has one physical topology. Migrate any legacy T-2CAN topology value
+  // to the fixed three-bus layout without forcing the user through setup.
+  (void)topologyStored;
+  const uint8_t topology = (uint8_t)VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS;
   if (!vehicleProfileTopologyValid(id, topology)) return false;
 
   const TurnSignalVariant resolved = vehicleProfileResolvedTurn(id, topology, turnStored);

@@ -583,7 +583,7 @@ static bool researchCaptureInit() {
   mainBytes = researchCaptureAllocatedMainBytes;
   auxBytes = researchCaptureAllocatedAuxBytes;
   portEXIT_CRITICAL(&researchCaptureMux);
-  T2CAN_SERIAL_PRINTF("CAN Research Capture: %s · %s · main=%u KiB · aux=%u KiB · state=%u KiB · snapshot=%lu rows · raw=%lu frames/%u segments\n",
+  TMR_SERIAL_PRINTF("CAN Research Capture: %s · %s · main=%u KiB · aux=%u KiB · state=%u KiB · snapshot=%lu rows · raw=%lu frames/%u segments\n",
                 ok ? "PSRAM READY" : "DISABLED", researchCaptureModeName(mode),
                 (unsigned)(mainBytes / 1024U), (unsigned)(auxBytes / 1024U),
                 (unsigned)((RESEARCH_CAPTURE_LATEST_BYTES + RESEARCH_CAPTURE_KNOWN_BYTES) / 1024U),
