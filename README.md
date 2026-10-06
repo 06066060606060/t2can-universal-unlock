@@ -20,7 +20,7 @@
 - Independent Country and Map Region settings
 - Improved CAN task diagnostics and Research Capture reliability.
 - Fixed several CAN synchronization and transmission safety issues.
-- And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/CHANGELOG.md)
+- And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
 - 
 **v3.7.2 Highlights**
 - Lane-change instant cancel hotfix
