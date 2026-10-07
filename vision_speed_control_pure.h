@@ -16,7 +16,8 @@ static inline bool visionControlFramePure(uint32_t id, uint8_t dlc, bool extende
 static inline bool visionControlGatePure(bool selected, bool lab, bool supported,
     bool transport, bool apValid, uint8_t apState, uint32_t now, uint32_t apMs,
     bool stockValid, uint32_t stockMs) {
-  return selected && lab && supported && transport && apValid && apState >= 3u && apState <= 6u &&
+  (void)lab;
+  return selected && supported && transport && apValid && apState >= 3u && apState <= 6u &&
       (uint32_t)(now - apMs) <= VISION_CONTROL_FRESH_MS_PURE && stockValid &&
       (uint32_t)(now - stockMs) <= VISION_CONTROL_FRESH_MS_PURE;
 }
@@ -25,3 +26,11 @@ static inline bool visionControlApplyPure(uint8_t *data, uint8_t dlc, bool activ
   data[6] &= 0xFDu;
   return true;
 }
+
+// Same-bus stock cache, independent of retired display overlays.
+struct VisionControlStockPure {
+  bool valid;
+  uint8_t raw[8];
+  uint32_t lastMs, epoch, rx;
+  uint8_t profile, topology;
+};

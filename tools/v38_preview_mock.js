@@ -10,7 +10,8 @@
   const canA=topology===2?'BODY':'PARTY',canB=topology===1?'VH':'CHASSIS';
   const nagTorqueSupported=topology!==2,nagTsl9Supported=topology!==3,nagSupported=nagTorqueSupported||nagTsl9Supported,advancedEapSupported=topology!==3,pedalMapSupported=topology!==3;
   window.__t2PreviewState={model,topology,turn,ap};
-  let canRx=0,dmsNag=true;
+  const driverMonitoring={enabled:true,supported:true,active:apActive};
+  const visionControl={requestDisabled:false,bus:0,supported:true,bodySupported:model!==1&&topology===2,busSupported:true,busSelectorVisible:model!==1,labEnabled:true,apActive,apFresh:true,stockValid:true,stockBit:1,rxAgeMs:24,rxCount:1240,gateOpen:false,txOk:0,txFail:0,state:'OFF'};
   const country={countrySupported:true,countryMode:0,countryGateOpen:false};
   const nag={enabled:false,ignoreApState:false,method:nagTorqueSupported?0:1,tsl9Sequence:0,pauseAtZeroSpeed:false,mode:7,humanVariant:1,hoRatePct:50,burstMs:300,pauseMs:2000,targetId:0x488,apStateId:0x399,steeringId:0x370,torque:[]};
   const nagStats={torque:0.03,ho:0,injNm:apActive?-0.22:0,injHo:apActive?1:0,rx:90222,txOk:89687,txFail:0,lastTxAgeMs:apActive?15:13900,maxTxGapMs:40,apActive,canAState:1,dasStateValid:true,dasState,dasAgeMs:15,sessionTxOk:18697,lastSkip:'NONE',lastSkipAgeMs:999999,vehicleSpeedValid:true,vehicleSpeedKph:71.2,vehicleSpeedFresh:true,stoppedGate:false,stopCarrierActive:false,humanPhase:apActive?'PEAK':'WAIT',humanMotion:'DRIVING',humanEventType:'HUMAN',humanEventCount:31,humanDirection:-1,humanOutputNm:apActive?-0.22:0,humanCarrier:false,humanSessionAgeMs:18500};
@@ -27,6 +28,8 @@
     window.__t2PreviewState.ap=ap;
     Object.assign(nagStats,{apActive,dasState,injNm:apActive?-0.22:0,injHo:apActive?1:0,lastTxAgeMs:apActive?15:13900,humanPhase:apActive?'PEAK':'WAIT',humanOutputNm:apActive?-0.22:0});
     Object.assign(r79,{txState:apActive?'ACTIVE':'SUSPENDED',txReason:apActive?'AP engaged':'AP OFF',dasState,lastTxAgeMs:apActive?12:13900,runtimeState:apActive?'ACTIVE':'SUSPENDED'});
+    driverMonitoring.active=driverMonitoring.enabled&&apActive;
+    Object.assign(visionControl,{apActive,gateOpen:visionControl.requestDisabled&&apActive,state:!visionControl.requestDisabled?'OFF':apActive?'READY':'WAIT_AP'});
     homeFast.nag.apActive=apActive;
     Object.assign(homeFast.blink,{dasState,displayState:dasState,noaSessionStateName:noaActive?'READY':'INACTIVE'});
   };
@@ -39,6 +42,19 @@
     if(u.pathname==='/api/country/stats')return send(country);
     if(u.pathname==='/api/country/update'){country.countryMode=Number(u.searchParams.get('mode'));return send(country);}
     if(u.pathname==='/api/nag/config')return send(nag);
+    if(u.pathname==='/api/driver-monitoring/config'){
+      if(u.searchParams.has('enabled'))driverMonitoring.enabled=u.searchParams.get('enabled')==='1';
+      driverMonitoring.active=driverMonitoring.enabled&&apActive;
+      return send(driverMonitoring);
+    }
+    if(u.pathname==='/api/vision-control/stats')return send(visionControl);
+    if(u.pathname==='/api/vision-control/update'){
+      if(u.searchParams.has('disabled'))visionControl.requestDisabled=u.searchParams.get('disabled')==='1';
+      if(u.searchParams.has('bus'))visionControl.bus=Number(u.searchParams.get('bus'))===1?1:0;
+      visionControl.gateOpen=visionControl.requestDisabled&&apActive;
+      visionControl.state=!visionControl.requestDisabled?'OFF':apActive?'READY':'WAIT_AP';
+      return send(visionControl);
+    }
     if(u.pathname==='/api/nag/stats')return send(nagStats);
     if(u.pathname==='/api/nag/update'){
       if(u.searchParams.has('ignoreApState'))nag.ignoreApState=u.searchParams.get('ignoreApState')==='1';
@@ -63,13 +79,11 @@
     if(u.pathname==='/api/nag/mode'){nag.mode=Number(u.searchParams.get('m'));return send(nag);}
     if(u.pathname==='/api/s3xy/stats')return send(s3xy);
     if(u.pathname==='/api/r79/stats')return send(r79);
-    if(u.pathname==='/api/lab/can-a-rx/update'){canRx=Number(u.searchParams.get('mode'))===1?1:0;return send({savedMode:canRx,effectiveMode:canRx});}
-    if(u.pathname==='/api/lab/dms-nag/update'){dmsNag=u.searchParams.get('enabled')==='1';return send({supported:true,enabled:dmsNag,active:dmsNag});}
     if(u.pathname==='/api/snapshot'){
       const groups=u.searchParams.get('groups');
       if(groups==='home-fast')return send({fast:homeFast,...(u.searchParams.has('slow')?{slow:homeSlow}:{})});
       if(groups==='home-slow')return send(homeSlow);
-      if(groups==='lab-lite')return send({r79,alc:{alcValid:true,alcRaw:apActive?8:0,alcAgeMs:10,lane239Valid:true,lane239AgeMs:14,leftLaneExists:1,leftLineUsageRaw:2,leftForkRaw:0,rightLaneExists:1,rightLineUsageRaw:2,rightForkRaw:0},dmsNag:{supported:true,enabled:dmsNag,active:dmsNag},canARx:{savedMode:canRx,effectiveMode:canRx}});
+      if(groups==='lab-lite')return send({r79,alc:{alcValid:true,alcRaw:apActive?8:0,alcAgeMs:10,lane239Valid:true,lane239AgeMs:14,leftLaneExists:1,leftLineUsageRaw:2,leftForkRaw:0,rightLaneExists:1,rightLineUsageRaw:2,rightForkRaw:0},dmsNag:driverMonitoring});
       if(groups==='settings-lite')return send({system:{fwVersion:'3.8.4'},blink:{delayMs:300},summon:{sessionActive:false},s3xy,lab3f8:{alcMode:0},r79});
       if(groups==='system')return send({system:{fwVersion:'3.8.4'}});
       return send({});

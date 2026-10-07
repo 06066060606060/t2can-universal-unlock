@@ -1,6 +1,7 @@
-#include "lane_graph_pure.h"
 #include "vision_speed_control_pure.h"
 #pragma once
+
+static bool r79DmsApplyFinal(uint8_t *data);
 
 // VEHICLE FEATURE LOGIC / R79 / SUMMON / ALC / VH RECORDER
 // Kept in the same translation unit to preserve proven runtime behavior.
@@ -54,20 +55,14 @@ static constexpr uint32_t R79_AP_DAS_FRESH_MS = 3000u;
 static portMUX_TYPE r79LabMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t r79Bit18Policy = R79_BIT18_DEFAULT_PURE;
 static volatile bool r79Hw3Enabled = false;
-static volatile uint8_t laneGraphMode = LANE_GRAPH_OFF_PURE;
-static volatile uint8_t laneGraphBus = LANE_GRAPH_CHASSIS_PURE;
-static LaneGraphStockPure laneGraphStock[2] = {};
 static volatile bool visionControlRequestDisabledState = false;
 static volatile uint8_t visionControlBus = VISION_CONTROL_CHASSIS_PURE;
-static LaneGraphStockPure visionControlStock[2] = {};
+static VisionControlStockPure visionControlStock[2] = {};
 static volatile uint32_t visionControlTxOk = 0u, visionControlTxFail = 0u;
 static volatile uint32_t visionControlGeneration = 1u;
 static bool visionControlApplyFinal(uint8_t *data, uint8_t bus);
 static void visionControlRecordTx(bool changed, uint8_t bus, bool ok);
 static void visionControlCacheStock(uint8_t bus, const uint8_t *raw, uint32_t epoch, uint32_t receivedMs);
-static volatile uint32_t laneGraphTxOk = 0u, laneGraphTxFail = 0u;
-static volatile bool laneGraphLastTxValid = false;
-static volatile uint8_t laneGraphLastTxBit45 = 0u;
 static volatile uint8_t r79TransportMode = R79_MODE_DEFAULT_PURE;
 static volatile uint8_t r79Mode1TxWaitMode = R79_MODE1_WAIT_DEFAULT_PURE;
 static volatile bool r79Mode1ReinjectEnabled = true;
@@ -165,67 +160,19 @@ static bool r79Hw3Active() {
   return enabled && activeProfileR79Hw3Supported();
 }
 
-// Display policy is evaluated inside final TX admission. Prepared clones keep
-// stock bit45 so retries, AP release, and LAB/OFF transitions cannot replay it.
-static bool laneGraphActive();
-
-static bool laneGraphCachedStockFresh() {
-  portENTER_CRITICAL(&r79LabMux);
-  const bool fresh = r79LabStockValid &&
-      (uint32_t)((uint32_t)millis() - r79LabLastStockMs) <= LANE_GRAPH_AP_FRESH_MS_PURE;
-  portEXIT_CRITICAL(&r79LabMux);
-  return fresh;
-}
-
-static uint8_t laneGraphBusSnapshot() {
-  portENTER_CRITICAL(&r79LabMux);
-  const uint8_t bus = laneGraphBus;
-  portEXIT_CRITICAL(&r79LabMux);
-  return bus;
-}
 
 // This helper is only used for physical CAN B clones. Body never overlays CAN B.
-static bool laneGraphApplyFinal(uint8_t *data) {
-  return laneGraphApplyPure(data, 8u,
-      laneGraphBusSnapshot() == LANE_GRAPH_CHASSIS_PURE && laneGraphActive());
-}
-
-static void laneGraphCacheStock(uint8_t bus, const uint8_t *raw, uint32_t epoch,
-                                uint32_t receivedMs = (uint32_t)millis()) {
-  if (!laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus)) return;
-  portENTER_CRITICAL(&r79LabMux);
-  LaneGraphStockPure &cache = laneGraphStock[bus];
-  cache.valid = true;
-  memcpy(cache.raw, raw, 8u);
-  cache.lastMs = receivedMs;
-  cache.epoch = epoch;
-  cache.profile = activeVehicleProfile;
-  cache.topology = activeVehicleTopology;
-  cache.rx++;
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
-static void laneGraphRecordTx(const twai_message_t &out, esp_err_t err,
-                              uint8_t bus = LANE_GRAPH_CHASSIS_PURE) {
-  if (out.identifier != 0x3FDu || out.data_length_code != 8u || readMuxID(out.data) != 1u) return;
-  portENTER_CRITICAL(&r79LabMux);
-  if (bus != laneGraphBus) { portEXIT_CRITICAL(&r79LabMux); return; }
-  laneGraphLastTxValid = err == ESP_OK;
-  laneGraphLastTxBit45 = (out.data[5] >> 5) & 1u;
-  if (err == ESP_OK) laneGraphTxOk++; else laneGraphTxFail++;
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
 // The display-only/DMS/ULC stock clones use the ordinary epoch/freshness and
 // non-Summon admission rules. They never apply the R79 bit18/19/47 transform.
 static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
                                      uint32_t expectedEpoch,
                                      uint8_t requiredFreshMask,
-                                     bool requireLaneChange,
-                                     uint32_t receivedMs = (uint32_t)millis()) {
+                                     bool requireVisionChange,
+                                     uint32_t receivedMs = (uint32_t)millis(),
+                                     bool requireDms = false) {
   if (!msg || msg->extd || msg->rtr || msg->identifier != 0x3FDu ||
       msg->data_length_code != 8u || readMuxID(msg->data) != 1u) return ESP_ERR_INVALID_ARG;
-  const uint32_t laneGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
+  const uint32_t displayGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
     return ESP_ERR_INVALID_STATE;
   twai_message_t out = *msg;
@@ -234,16 +181,15 @@ static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
       vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology) &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask) &&
       twaiNonSummonAdmissionOpen()) {
-    const bool laneGenerationValid = laneGeneration ==
+    const bool displayGenerationValid = displayGeneration ==
         __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
-    const bool stockFresh = (uint32_t)((uint32_t)millis() - receivedMs) <= LANE_GRAPH_AP_FRESH_MS_PURE;
-    const bool laneChanged = (!requireLaneChange || stockFresh) && laneGraphApplyFinal(out.data);
+    const bool stockFresh = (uint32_t)((uint32_t)millis() - receivedMs) <= VISION_CONTROL_FRESH_MS_PURE;
     const bool visionChanged = stockFresh && visionControlApplyFinal(out.data, VISION_CONTROL_CHASSIS_PURE);
-    const bool changed = laneChanged || visionChanged;
-    if (!requireLaneChange || (laneGenerationValid && changed)) {
+    const bool dmsChanged = r79DmsApplyFinal(out.data);
+    if ((!requireDms || dmsChanged) && (!requireVisionChange || (displayGenerationValid && visionChanged))) {
       err = twai_transmit(&out, 0);
       canBTraceRecordTx(&out, err);
-      laneGraphRecordTx(out, err);
+
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
     }
   }
@@ -252,7 +198,7 @@ static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
 }
 
 // canTxBarrierMutex is held by the caller.
-static void laneGraphCancelPendingLocked() {
+static void mux1CancelPendingLocked() {
   portENTER_CRITICAL(&r79LabMux);
   __atomic_add_fetch(&r79ApGateGeneration, 1u, __ATOMIC_ACQ_REL);
   __atomic_add_fetch(&r79Mode1PostMux2Generation, 1u, __ATOMIC_ACQ_REL);
@@ -266,24 +212,23 @@ static void laneGraphCancelPendingLocked() {
   portEXIT_CRITICAL(&r79LabMux);
 }
 
-static bool r79DmsNagActive() {
-  bool nagEnabled, dmsEnabled;
+static bool driverMonitoringControlSnapshot() {
+  portENTER_CRITICAL(&driverMonitoringControlMux);
+  const bool enabled = driverMonitoringDisableEnabled;
+  portEXIT_CRITICAL(&driverMonitoringControlMux);
+  return enabled;
+}
+
+static bool r79DmsControlActive() {
   bool apValid, apActive;
-  uint8_t method, mode;
-  portENTER_CRITICAL(&nagCfgMux);
-  nagEnabled = nagCfg.enabled;
-  dmsEnabled = nagCfg.dmsControlEnabled;
-  method = nagMethodSanitizePure(nagCfg.method);
-  mode = nagCfg.mode;
-  portEXIT_CRITICAL(&nagCfgMux);
   nagApGateSnapshot(apValid, apActive);
-  return r79DmsPolicyActivePure(
-      nagEnabled, dmsEnabled, activeProfileDmsNagSupported(),
-      apValid, apActive, method, mode);
+  return driverMonitoringDisablePolicyActivePure(
+      driverMonitoringControlSnapshot(), activeProfileDmsNagSupported(),
+      apValid, apActive);
 }
 
 static inline bool r79DmsApplyFinal(uint8_t *data) {
-  return r79DmsApplyFinalOverlayPure(data, r79DmsNagActive());
+  return r79DmsApplyFinalOverlayPure(data, r79DmsControlActive());
 }
 
 static const char* r79RuntimeStateName(uint8_t state) {
@@ -385,26 +330,6 @@ static volatile uint32_t lastDASStatusMillis = 0;  // diagnostic age only; not a
 // Presentation-only cache. Hard CAN reinitialization may retain the last
 // confirmed AP label briefly while every functional AP gate remains invalid.
 static ApDisplayHoldPure apDisplayHold = {};
-
-static bool laneGraphActive() {
-  uint8_t mode, bus;
-  portENTER_CRITICAL(&r79LabMux);
-  mode = laneGraphMode;
-  bus = laneGraphBus;
-  portEXIT_CRITICAL(&r79LabMux);
-  bool valid, active;
-  uint32_t stamp;
-  portENTER_CRITICAL(&stateMux);
-  valid = dasAutopilotStateValid;
-  active = dasStateApActivePure(valid, dasAutopilotState4);
-  stamp = lastDASStatusMillis;
-  portEXIT_CRITICAL(&stateMux);
-  return laneGraphActivePure(mode, labMenuEnabled,
-      laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus),
-      (bus == LANE_GRAPH_BODY_PURE ? mcpReady : twaiReady) && !canTxAdministrativeHold, valid, active,
-      (uint32_t)((uint32_t)millis() - stamp));
-}
-
 
 // NAG right-speed assistance. Torque mode restores the former independently
 // configurable periodic pulse and can use either the four-step V8.2 waveform
@@ -1078,14 +1003,6 @@ static volatile uint8_t lab3f8UlcOffHighwayMode = LAB3F8_STOCK;
 static volatile uint32_t lab3f8TxOk = 0;
 static volatile uint32_t lab3f8TxFail = 0;
 static volatile uint32_t lab3f8GateBlocked = 0;
-static volatile bool lab3f8LastTxValid = false;
-static volatile uint8_t lab3f8LastTxBlind = 0;
-static volatile uint8_t lab3f8LastTxStockBlind = 0;
-static volatile uint8_t lab3f8LastTxSelectedBlind = LAB3F8_STOCK;
-static volatile bool lab3f8LastTxBlindChanged = false;
-static volatile uint8_t lab3f8LastTxResult = 0; // 0=NONE, 1=QUEUED, 2=FAILED
-static volatile uint32_t lab3f8LastTxMs = 0;
-static volatile bool lab3f8LastTxBit56 = false;
 
 // AP-active 0x3F8 ULC policy counters/state.
 static volatile uint32_t ulcOffHighwayTxOk = 0;
@@ -1211,7 +1128,7 @@ static bool countryOverrideSetLabEnabledWithBarrier(bool enabled) {
   if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
   const bool changed = labMenuEnabled != enabled;
   labMenuEnabled = enabled;
-  if (changed) laneGraphCancelPendingLocked();
+  if (changed) mux1CancelPendingLocked();
   if (changed) __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
   // Country settings are independent of LAB menu visibility.
   xSemaphoreGive(canTxBarrierMutex);
@@ -1347,6 +1264,7 @@ static bool r79FreshGearRawLocked(uint32_t now, uint8_t &rawOut) {
          rawOut == TESLA_GEAR_N || rawOut == TESLA_GEAR_D;
 }
 
+// Reuse an owned TX barrier; otherwise acquire it before cancellation. No CAN I/O.
 // Fresh one-sided ACA/SPR evidence is used only to avoid entering manual
 // suppression during the first moments of a remote Summon startup. It is not a
 // confirmed Summon session and therefore never labels the dashboard SUMMON.
@@ -2824,7 +2742,9 @@ static void handle390(const uint8_t *data) {
     const uint32_t now = (uint32_t)millis();
     const uint8_t gear = readVehicleGear(data);
     const int gs = gearState(gear);
-    if (gs < 0) return;
+    if (gs < 0) {
+      return;
+    }
 
     int prevGs;
     const bool countryBarrierLocked = countryOverrideAuthorizationBarrierLock();
@@ -3391,7 +3311,7 @@ static void visionControlCacheStock(uint8_t bus, const uint8_t *raw,
                                     uint32_t epoch, uint32_t receivedMs) {
   if (!visionControlBusSupported(bus)) return;
   portENTER_CRITICAL(&r79LabMux);
-  LaneGraphStockPure &stock = visionControlStock[bus];
+  VisionControlStockPure &stock = visionControlStock[bus];
   stock.valid = true; memcpy(stock.raw, raw, 8u);
   stock.lastMs = receivedMs; stock.epoch = epoch;
   stock.profile = activeVehicleProfile; stock.topology = activeVehicleTopology; ++stock.rx;
@@ -3401,7 +3321,7 @@ static void visionControlCacheStock(uint8_t bus, const uint8_t *raw,
 // Caller holds the shared TX barrier. No lookup of a different physical bus.
 static bool visionControlGateOpen(uint8_t bus, uint32_t now) {
   if (bus > 1u || !visionControlBusSupported(bus)) return false;
-  bool selected; uint8_t configured; LaneGraphStockPure stock;
+  bool selected; uint8_t configured; VisionControlStockPure stock;
   portENTER_CRITICAL(&r79LabMux);
   selected = visionControlRequestDisabledState; configured = visionControlBus;
   stock = visionControlStock[bus];
@@ -3415,12 +3335,13 @@ static bool visionControlGateOpen(uint8_t bus, uint32_t now) {
       canTxBarrierAllowsMaskedPure(canTxBarrierState, stock.epoch, mask);
   const bool stockValid = stock.valid && stock.profile == activeVehicleProfile &&
       stock.topology == activeVehicleTopology;
-  return configured == bus && visionControlGatePure(selected, labMenuEnabled, true,
+  return configured == bus && visionControlGatePure(selected, true, true,
       transport, apValid, apState, now, apMs, stockValid, stock.lastMs);
 }
 
 static bool visionControlApplyFinal(uint8_t *data, uint8_t bus) {
-  return visionControlApplyPure(data, 8u, visionControlGateOpen(bus, (uint32_t)millis()));
+  const uint32_t now = (uint32_t)millis();
+  return visionControlApplyPure(data, 8u, visionControlGateOpen(bus, now));
 }
 
 static void visionControlRecordTx(bool changed, uint8_t bus, bool ok) {
@@ -3462,7 +3383,7 @@ static bool visionControlApplySettings(bool disabled, uint8_t bus) {
     visionControlRequestDisabledState = disabled; visionControlBus = bus;
     ++visionControlGeneration;
     portEXIT_CRITICAL(&r79LabMux);
-    laneGraphCancelPendingLocked();
+    mux1CancelPendingLocked();
   }
   xSemaphoreGive(canTxBarrierMutex);
   return saved;
@@ -3485,7 +3406,7 @@ static String getVisionControlStatsJson() {
     readyB = twaiReady; readyA = mcpReady; held = canTxAdministrativeHold;
     xSemaphoreGive(canTxBarrierMutex);
   }
-  LaneGraphStockPure stock = {}; bool disabled; uint8_t bus; uint32_t txOk, txFail;
+  VisionControlStockPure stock = {}; bool disabled; uint8_t bus; uint32_t txOk, txFail;
   portENTER_CRITICAL(&r79LabMux);
   disabled = visionControlRequestDisabledState; bus = visionControlBus;
   if (bus <= 1u) stock = visionControlStock[bus];
@@ -3505,15 +3426,15 @@ static String getVisionControlStatsJson() {
   const uint8_t mask = bus == 0u ? CAN_TX_FRESH_VH : CAN_TX_FRESH_PARTY;
   const bool transport = epoch != 0u && !held && (bus == 0u ? readyB : readyA) &&
       (freshMask & mask) == mask;
-  const bool gate = visionControlGatePure(disabled, labMenuEnabled, busSupported,
+  const bool gate = visionControlGatePure(disabled, true, busSupported,
       transport, apValid, apState, now, apMs, valid, stock.lastMs);
   const int32_t raw = valid ? (int32_t)((stock.raw[6] >> 1) & 1u) : -1;
-  const char *state = !supported || !busSupported ? "UNSUPPORTED" : !disabled || !labMenuEnabled ? "OFF" :
+  const char *state = !supported || !busSupported ? "UNSUPPORTED" : !disabled ? "OFF" :
       !fresh || !transport ? "WAIT_STOCK" : !apFresh || !apActive ? "WAIT_AP" : raw == 0 ? "STOCK_ZERO" : "READY";
   String json; JsonWriterArduino jw(json);
   jw.boolean("requestDisabled", disabled); jw.u32("bus", bus);
   jw.boolean("supported", supported); jw.boolean("busSupported", busSupported);
-  jw.boolean("bodySupported", visionControlBusSupported(1u)); jw.boolean("labEnabled", labMenuEnabled);
+  jw.boolean("bodySupported", visionControlBusSupported(1u)); jw.boolean("labEnabled", true);
   jw.boolean("busSelectorVisible", activeVehicleProfile != VEHICLE_MODEL_YL);
   jw.boolean("apActive", apActive); jw.boolean("apFresh", apFresh);
   jw.boolean("stockValid", valid); jw.i32("stockBit", raw);
@@ -3625,8 +3546,6 @@ static void injectDriverAssistControl(const twai_message_t &src) {
 
     twai_message_t out = src;
     out.flags = 0;
-    const uint8_t stockBlindBefore =
-        (uint8_t)readBitsLE(out.data, 52, 2);
     UlcCompositeResultPure result =
         ulcCompose3f8Pure(out.data, out.data_length_code, selected, gates);
     if (!result.changed) return;
@@ -3652,16 +3571,7 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     // composition succeeds, transport results belong only to surviving fields.
     if (context.finalComposed) result = context.result;
     researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code, out.data, err == ESP_OK);
-    const uint8_t actualTxBlind = (uint8_t)readBitsLE(out.data, 52, 2);
     portENTER_CRITICAL(&lab3f8Mux);
-    lab3f8LastTxValid = true;
-    lab3f8LastTxBlind = actualTxBlind;
-    lab3f8LastTxStockBlind = stockBlindBefore;
-    lab3f8LastTxSelectedBlind = selected.blindSpotMode;
-    lab3f8LastTxBlindChanged = result.blindSpotChanged;
-    lab3f8LastTxResult = (err == ESP_OK) ? 1 : 2;
-    lab3f8LastTxMs = now;
-    lab3f8LastTxBit56 = getBit(out.data, 56);
     if (err == ESP_OK) lab3f8TxOk++;
     else               lab3f8TxFail++;
     if (result.ulcOffHighwayChanged) {
@@ -3691,8 +3601,7 @@ static bool injectUlcSnooze3fdMux1(const twai_message_t &src) {
       return false;
     }
     setBit(out.data, 36, true); // UI_ulcSnooze
-    // DMS is the final MUX1 overlay for every independently generated clone.
-    r79DmsApplyFinal(out.data);
+    // DMS is composed only inside final enqueue admission.
 
     if (!twaiNonSummonAdmissionOpen()) {
       portENTER_CRITICAL(&ulcSnoozeMux);
@@ -3748,21 +3657,22 @@ static void doInjectTlsscRestore(const twai_message_t &src) {
 static bool r79FastReactiveGateOpen();
 
 static esp_err_t r79ApGateTransmitGuarded(
-    const twai_message_t *msg, uint16_t waitMs, uint32_t expectedGeneration,
-    bool stockFresh = true) {
+    const twai_message_t *msg, uint16_t waitMs, uint32_t expectedGeneration) {
   if (!msg) return ESP_ERR_INVALID_ARG;
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
     return ESP_ERR_INVALID_STATE;
   esp_err_t err = ESP_ERR_INVALID_STATE;
   if (r79ApGateGenerationSnapshot() == expectedGeneration &&
-      r79FastReactiveGateOpen())
+      r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == expectedGeneration)
     {
       twai_message_t finalOut = *msg;
-      if (stockFresh) laneGraphApplyFinal(finalOut.data);
+      r79DmsApplyFinal(finalOut.data);
+
       const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
-      err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+      if (r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == expectedGeneration)
+        err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
-      laneGraphRecordTx(finalOut, err);
+
       canBTraceRecordTx(&finalOut, err);
     }
   xSemaphoreGive(canTxBarrierMutex);
@@ -3776,7 +3686,7 @@ static esp_err_t r79LabDirectTwaiTransmit(
     canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
     return ESP_ERR_INVALID_STATE;
   }
-  const esp_err_t err = r79ApGateTransmitGuarded(msg, waitMs, apGeneration, laneGraphCachedStockFresh());
+  const esp_err_t err = r79ApGateTransmitGuarded(msg, waitMs, apGeneration);
   return err;
 }
 
@@ -3797,14 +3707,17 @@ static esp_err_t r79LabDirectTwaiTransmitGuarded(
   if (!canTxAdministrativeHold && twaiReady &&
       canTxCancellationGenerationSnapshot(generation) == expectedGeneration &&
       r79ApGateGenerationSnapshot() == apGeneration &&
-      r79FastReactiveGateOpen())
+      r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == apGeneration)
     {
       twai_message_t finalOut = *msg;
-      if (laneGraphCachedStockFresh()) laneGraphApplyFinal(finalOut.data);
+      r79DmsApplyFinal(finalOut.data);
+
       const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
-      err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+      if (r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == apGeneration &&
+          canTxCancellationGenerationSnapshot(generation) == expectedGeneration)
+        err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
-      laneGraphRecordTx(finalOut, err);
+
       canBTraceRecordTx(&finalOut, err);
     }
   xSemaphoreGive(canTxBarrierMutex);
@@ -3823,7 +3736,7 @@ static bool r79ImmediateClearTransmitQueueGuarded(uint32_t expectedApGeneration)
     return false;
   const bool allowed = !canTxAdministrativeHold && twaiReady &&
       r79ApGateGenerationSnapshot() == expectedApGeneration &&
-      r79FastReactiveGateOpen();
+      r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == expectedApGeneration;
   const bool cleared = allowed && twai_clear_transmit_queue() == ESP_OK;
   xSemaphoreGive(canTxBarrierMutex);
   return cleared;
@@ -3834,6 +3747,7 @@ static bool r79Mode1PostMux2ClearTransmitQueueGuarded(
   if (canTxAdministrativeHold || !canTxBarrierMutex ||
       xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return false;
   const bool allowed = !canTxAdministrativeHold && twaiReady &&
+      r79FastReactiveGateOpen() &&
       r79Mode1PostMux2GenerationCurrent(expectedGeneration);
   const bool cleared = allowed && twai_clear_transmit_queue() == ESP_OK;
   xSemaphoreGive(canTxBarrierMutex);
@@ -3854,6 +3768,12 @@ static void r79RetrySchedule(
     uint8_t originKind, uint32_t now, uint32_t expectedGeneration = 0u) {
   const uint16_t delayMs = r79RetryDelayMsPure(0);
   if (!delayMs) return;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return;
+  const bool current = r79FastReactiveGateOpen() &&
+      (originKind == R79LAB_TX_IMMEDIATE
+          ? r79ApGateGenerationSnapshot() == expectedGeneration
+          : r79Mode1PostMux2GenerationCurrent(expectedGeneration));
+  if (!current) { xSemaphoreGive(canTxBarrierMutex); return; }
   portENTER_CRITICAL(&r79LabMux);
   r79RetryPending = true;
   r79RetryIndex = 0;
@@ -3862,6 +3782,7 @@ static void r79RetrySchedule(
   r79RetryGeneration = expectedGeneration;
   r79RetryScheduled++;
   portEXIT_CRITICAL(&r79LabMux);
+  xSemaphoreGive(canTxBarrierMutex);
 }
 
 // Minimal authorization gate for the d2 receive-synchronized fast path. This
@@ -3933,7 +3854,6 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
   bit18Policy = r79Bit18Policy;
   portEXIT_CRITICAL(&r79LabMux);
   r79FixedApplyBitsPure(out.data, bit18Policy, r79Hw3Active());
-  r79DmsApplyFinal(out.data);
 
   const esp_err_t err = generation
       ? r79LabDirectTwaiTransmitGuarded(
@@ -4032,6 +3952,9 @@ static void r79LabRetryTick() {
   retryGeneration = r79RetryGeneration;
   portEXIT_CRITICAL(&r79LabMux);
   if (!pending || (int32_t)(now - dueMs) < 0) return;
+  if (originKind == R79LAB_TX_IMMEDIATE && r79ApGateGenerationSnapshot() != retryGeneration) {
+    r79RetryCancel(); return;
+  }
 
   const uint8_t priority = summonPriorityStateSnapshot(now);
   const R79RuntimeStatus runtime = r79RuntimeStatusSnapshot(now);
@@ -4091,7 +4014,7 @@ static void r79LabRetryTick() {
   portEXIT_CRITICAL(&r79LabMux);
   const bool ok = r79LabTransmitOnce(
       stock, attemptNow, R79LAB_TX_RETRY, &err, waitMs,
-      originKind == R79LAB_TX_PERIODIC ? &r79Mode1PostMux2Generation : nullptr,
+      originKind == R79LAB_TX_PERIODIC ? &r79Mode1PostMux2Generation : &r79ApGateGeneration,
       retryGeneration);
 
   if (ok) {
@@ -4108,7 +4031,16 @@ static void r79LabRetryTick() {
   const bool deadlineAllowsRetry = originKind != R79LAB_TX_PERIODIC ||
       r79FixedDeadlineWaitBudgetPure(
           retryNow, hardDeadlineMs, nextDelayMs) == nextDelayMs;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return;
+  const bool generationCurrent = r79FastReactiveGateOpen() &&
+      (originKind == R79LAB_TX_PERIODIC
+          ? r79Mode1PostMux2GenerationCurrent(retryGeneration)
+          : r79ApGateGenerationSnapshot() == retryGeneration);
+  if (!generationCurrent) { xSemaphoreGive(canTxBarrierMutex); return; }
   portENTER_CRITICAL(&r79LabMux);
+  if (!r79RetryPending || r79RetryGeneration != retryGeneration) {
+    portEXIT_CRITICAL(&r79LabMux); xSemaphoreGive(canTxBarrierMutex); return;
+  }
   r79RetryTxFail++;
   if (nextIndex >= 3U || !deadlineAllowsRetry) {
     r79RetryExhausted++;
@@ -4123,6 +4055,7 @@ static void r79LabRetryTick() {
     r79RetryScheduled++;
   }
   portEXIT_CRITICAL(&r79LabMux);
+  xSemaphoreGive(canTxBarrierMutex);
 }
 
 // Mode 1 production transport. Accepted stock MUX1 uses the selected historical
@@ -4147,7 +4080,6 @@ static bool r79FixedFastEcho(const twai_message_t &src) {
   out.flags = 0;
   memcpy(out.data, src.data, 8);
   r79FixedApplyBitsPure(out.data, bit18Policy, r79Hw3Active());
-  r79DmsApplyFinal(out.data);
 
   const esp_err_t err = r79ApGateTransmitGuarded(&out, waitMs, apGeneration);
 
@@ -4191,7 +4123,7 @@ static bool r79FixedFastEcho(const twai_message_t &src) {
   if (summonPriorityAllowsR79FlushPure(priority) &&
       recoveryErr != ESP_ERR_INVALID_STATE &&
       r79FastReactiveGateOpen()) {
-    r79RetrySchedule(R79LAB_TX_IMMEDIATE, retryNow);
+    r79RetrySchedule(R79LAB_TX_IMMEDIATE, retryNow, apGeneration);
   }
   // R79 claimed this stock generation even when queue admission failed; its
   // recovery/retry machinery remains the sole owner of follow-up work.
@@ -4261,7 +4193,6 @@ static bool r79Mode2FastEcho(const twai_message_t &src) {
   out.flags = 0;
   memcpy(out.data, src.data, 8);
   (void)r79Mode2ApplyBitsPure(out.data, r79Hw3Active());
-  r79DmsApplyFinal(out.data);
 
   const esp_err_t err = r79ApGateTransmitGuarded(&out, 0u, apGeneration);
   portENTER_CRITICAL(&r79LabMux);
@@ -4297,11 +4228,12 @@ static bool r79DmsWorkPendingSnapshot() {
 
 static bool r79DmsOnlyTransmit(const twai_message_t &src) {
   if (src.data_length_code < 8u || readMuxID(src.data) != 1u ||
-      !r79DmsNagActive() || canTxAdministrativeHold || !twaiReady) return false;
+      !r79DmsControlActive() || canTxAdministrativeHold || !twaiReady) return false;
   twai_message_t out = src;
   out.flags = 0;
-  if (!r79DmsApplyFinal(out.data)) return false;
-  const esp_err_t err = mux1DisplayTransmit(&out, canTxEpochSnapshot(), CAN_TX_FRESH_VH, false);
+  if (!getBit(out.data, R79LAB_ENABLE_CABIN_CAMERA_BIT)) return false;
+  const esp_err_t err = mux1DisplayTransmit(&out, canTxEpochSnapshot(), CAN_TX_FRESH_VH, false,
+      (uint32_t)millis(), true);
   portENTER_CRITICAL(&r79LabMux);
   if (err == ESP_OK) r79DmsOnlyTxOk++; else r79DmsOnlyTxFail++;
   portEXIT_CRITICAL(&r79LabMux);
@@ -4327,11 +4259,11 @@ static bool r79ProcessStockFrame(const twai_message_t &src, uint8_t mux,
     const bool r79WorkPending = r79DmsWorkPendingSnapshot();
     const R79DmsStockDispositionPure disposition =
         r79DmsStockDispositionPure(
-            true, r79DmsNagActive(), r79Claimed, r79WorkPending);
+            true, r79DmsControlActive(), r79Claimed, r79WorkPending);
     if (disposition == R79_DMS_STOCK_DMS_ONLY_PURE) {
       r79Claimed = r79DmsOnlyTransmit(src);
     } else if (disposition == R79_DMS_STOCK_NONE_PURE &&
-               r79DmsNagActive() && r79WorkPending) {
+               r79DmsControlActive() && r79WorkPending) {
       portENTER_CRITICAL(&r79LabMux);
       r79DmsOnlyBlockedByR79++;
       portEXIT_CRITICAL(&r79LabMux);
@@ -4340,45 +4272,38 @@ static bool r79ProcessStockFrame(const twai_message_t &src, uint8_t mux,
   return r79Claimed;
 }
 
-static void laneGraphObserveBody(const struct can_frame &src, uint32_t txEpoch,
+static void visionControlObserveBody(const struct can_frame &src, uint32_t txEpoch,
                                  uint32_t receivedMs = (uint32_t)millis()) {
   if ((src.can_id & ~0x7FFu) != 0u || src.can_id != 0x3FDu ||
       src.can_dlc != 8u || readMuxID(src.data) != 1u ||
-      !laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, LANE_GRAPH_BODY_PURE)) return;
-  const uint32_t laneGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
-  laneGraphCacheStock(LANE_GRAPH_BODY_PURE, src.data, txEpoch, receivedMs);
+      !visionControlBusSupported(VISION_CONTROL_BODY_PURE)) return;
+  const uint32_t displayGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
   visionControlCacheStock(VISION_CONTROL_BODY_PURE, src.data, txEpoch, receivedMs);
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return;
   struct can_frame out = src;
-  const bool generationValid = laneGeneration ==
+  const bool generationValid = displayGeneration ==
       __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
   const McpTxResultReason ready = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH :
       !mcpReady ? MCP_TX_MCP_NOT_READY : canTxBarrierState.epoch != txEpoch ? MCP_TX_EPOCH_MISMATCH :
       !canTxBarrierAllowsMaskedPure(canTxBarrierState, txEpoch, CAN_TX_FRESH_PARTY) ? MCP_TX_FRESH_MASK : MCP_TX_OK;
   if (generationValid && ready == MCP_TX_OK &&
-      (uint32_t)((uint32_t)millis() - receivedMs) <= LANE_GRAPH_AP_FRESH_MS_PURE &&
-      laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, LANE_GRAPH_BODY_PURE)) {
-    const bool laneChanged = laneGraphBusSnapshot() == LANE_GRAPH_BODY_PURE &&
-        laneGraphApplyPure(out.data, out.can_dlc, laneGraphActive());
+      (uint32_t)((uint32_t)millis() - receivedMs) <= VISION_CONTROL_FRESH_MS_PURE &&
+      visionControlBusSupported(VISION_CONTROL_BODY_PURE)) {
     const bool visionChanged = visionControlApplyFinal(out.data, VISION_CONTROL_BODY_PURE);
-    if (!laneChanged && !visionChanged) { xSemaphoreGive(canTxBarrierMutex); return; }
+    if (!visionChanged) { xSemaphoreGive(canTxBarrierMutex); return; }
     const MCP2515::ERROR result = Can_A.sendMessage(&out);
     const bool ok = result == MCP2515::ERROR_OK;
     visionControlRecordTx(visionChanged, VISION_CONTROL_BODY_PURE, ok);
     canATraceRecordTx(&out, ok ? MCP_TX_OK : MCP_TX_SEND_ERROR, result, CAN_TX_TRACE_SOURCE_DEFAULT);
-    twai_message_t diagnostic = {};
-    diagnostic.identifier = 0x3FDu; diagnostic.data_length_code = 8u;
-    memcpy(diagnostic.data, out.data, 8u);
-    laneGraphRecordTx(diagnostic, ok ? ESP_OK : ESP_FAIL, LANE_GRAPH_BODY_PURE);
+
   }
   xSemaphoreGive(canTxBarrierMutex);
 }
 
-static void laneGraphObserveStock(const twai_message_t &src, uint32_t txEpoch,
+static void visionControlObserveStock(const twai_message_t &src, uint32_t txEpoch,
                                   bool stockClaimed,
                                   uint32_t receivedMs = (uint32_t)millis()) {
   if (src.extd || src.rtr || src.identifier != 0x3FDu || src.data_length_code != 8u || readMuxID(src.data) != 1u) return;
-  laneGraphCacheStock(LANE_GRAPH_CHASSIS_PURE, src.data, txEpoch, receivedMs);
   if (stockClaimed || r79DmsWorkPendingSnapshot()) return;
   (void)mux1DisplayTransmit(&src, txEpoch, CAN_TX_FRESH_VH, true, receivedMs);
 }
@@ -4410,8 +4335,7 @@ static void r79Mode2Tick() {
   memcpy(out.data, stock, 8);
   if (readMuxID(out.data) != 1u) return;
   (void)r79Mode2ApplyBitsPure(out.data, r79Hw3Active());
-  r79DmsApplyFinal(out.data);
-  const esp_err_t err = r79ApGateTransmitGuarded(&out, 0u, apGeneration, laneGraphCachedStockFresh());
+  const esp_err_t err = r79ApGateTransmitGuarded(&out, 0u, apGeneration);
   r79LabRecordTxResult(err == ESP_OK, out, R79LAB_TX_PERIODIC);
   r79FastReactiveRecordTxState(err, now);
 }
@@ -4502,6 +4426,21 @@ static bool requestTurnSignalPulseFromButton(uint8_t dir) {
                           eventToken, now);
 }
 
+// Keep ordinary TLSSC transport admission under the enqueue barrier.
+static esp_err_t tlsscTransmitGuarded(const twai_message_t *out,
+    uint32_t epoch) {
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return ESP_ERR_INVALID_STATE;
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (!canTxAdministrativeHold && twaiReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch, CAN_TX_FRESH_BOTH) &&
+      twaiNonSummonAdmissionOpen()) {
+    err = twai_transmit(out, 0);
+    canBTraceRecordTx(out, err);
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return err;
+}
+
 static void injectTLSSC(const twai_message_t &src) {
     const uint32_t now = (uint32_t)millis();
     const uint32_t txEpoch = canTxEpochSnapshot();
@@ -4561,7 +4500,7 @@ static void injectTLSSC(const twai_message_t &src) {
       sumTxFail++;
       return;
     }
-    const esp_err_t err = canTxTwaiTransmit(&out, txEpoch);
+    const esp_err_t err = tlsscTransmitGuarded(&out, txEpoch);
     portENTER_CRITICAL(&stateMux);
     if (tlsscClearTx) {
       if (err == ESP_OK) {
@@ -4679,11 +4618,33 @@ static void nvsSchemaFinalize() {
   T2CAN_SERIAL_PRINTLN("NVS schema marker write failed; will retry next boot");
 }
 
+static bool driverMonitoringControlApply(bool enabled) {
+    if (!canTxBarrierMutex ||
+        xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+    Preferences p;
+    bool saved = false;
+    if (p.begin("features", false)) {
+      saved = p.putBool("dmsDisable", enabled) > 0u;
+      p.end();
+      if (saved) {
+        portENTER_CRITICAL(&driverMonitoringControlMux);
+        driverMonitoringDisableEnabled = enabled;
+        portEXIT_CRITICAL(&driverMonitoringControlMux);
+      }
+    }
+    xSemaphoreGive(canTxBarrierMutex);
+    return saved;
+}
+
 static void featureCfgLoad() {
-    prefs.begin("features", false);
-    labMenuEnabled = prefs.getBool("lab", false);
-    const uint8_t persistedCanARxMode = prefs.getUChar("canARxMode", CAN_A_RX_PREFETCH_4);
-    canARxSavedMode = canARxModeValidPure(persistedCanARxMode) ? persistedCanARxMode : CAN_A_RX_PREFETCH_4;
+    const bool featuresOpened = prefs.begin("features", false);
+    labMenuEnabled = featuresOpened && prefs.getBool("lab", false);
+    const bool hasDriverMonitoringControl =
+        featuresOpened && prefs.isKey("dmsDisable");
+    const bool persistedDriverMonitoringControl =
+        featuresOpened && prefs.getBool("dmsDisable", false);
+    const bool legacyFeatureDriverMonitoringControl =
+        featuresOpened && prefs.getBool("dmsNag43", false);
     const uint8_t persistedBlinkerTx = prefs.getUChar("blinkTx", 0xFFu);
     portENTER_CRITICAL(&blinkAMux);
     blinkerTxMode = blinkerTxStoredModePure(
@@ -4747,7 +4708,31 @@ static void featureCfgLoad() {
       tlsscRestoreEnabled = false;
       prefs.putBool("tlRestore", false);
     }
-    prefs.end();
+    if (featuresOpened) prefs.end();
+    if (!featuresOpened) {
+      // A source read failure is not evidence that the previous setting was
+      // OFF. Stay fail-closed without creating the new key so boot can retry.
+      portENTER_CRITICAL(&driverMonitoringControlMux);
+      driverMonitoringDisableEnabled = false;
+      portEXIT_CRITICAL(&driverMonitoringControlMux);
+      return;
+    }
+    if (hasDriverMonitoringControl) {
+      portENTER_CRITICAL(&driverMonitoringControlMux);
+      driverMonitoringDisableEnabled = persistedDriverMonitoringControl;
+      portEXIT_CRITICAL(&driverMonitoringControlMux);
+    } else {
+      bool migrated = legacyFeatureDriverMonitoringControl;
+      Preferences oldNag;
+      // Read-write begin distinguishes an absent legacy namespace (which may
+      // be created empty) from an unavailable NVS backend.
+      if (!oldNag.begin("nag", false)) return;
+      migrated = oldNag.getBool("dms43", migrated);
+      oldNag.end();
+      // Publish only after the standalone key is durable. A failed migration
+      // remains safely OFF and retries on the next boot.
+      (void)driverMonitoringControlApply(migrated);
+    }
 }
 
 static bool blinkerTxModePersist(uint8_t requested) {
@@ -4755,15 +4740,6 @@ static bool blinkerTxModePersist(uint8_t requested) {
     Preferences p;
     if (!p.begin("features", false)) return false;
     const bool ok = p.putUChar("blinkTx", requested) > 0;
-    p.end();
-    return ok;
-}
-
-static bool canARxModePersist(uint8_t requested) {
-    if (!canARxModeValidPure(requested)) return false;
-    Preferences p;
-    if (!p.begin("features", false)) return false;
-    const bool ok = p.putUChar("canARxMode", requested) > 0;
     p.end();
     return ok;
 }
@@ -5135,55 +5111,6 @@ static void countryOverrideCfgLoad() {
   countryOverrideMode = mode;
   countryOverrideMapMode = map;
   portEXIT_CRITICAL(&countryOverrideMux);
-}
-
-static void laneGraphCfgLoad() {
-  Preferences p;
-  uint8_t mode = LANE_GRAPH_OFF_PURE, bus = LANE_GRAPH_CHASSIS_PURE;
-  if (p.begin("lanegraph", true)) {
-    if (p.isKey("selection")) {
-      const uint16_t packed = p.getUShort("selection", 0u);
-      mode = (uint8_t)packed; bus = (uint8_t)(packed >> 8);
-      if (!laneGraphModeValidPure(mode) || !laneGraphBusValidPure(bus)) {
-        mode = LANE_GRAPH_OFF_PURE; bus = LANE_GRAPH_CHASSIS_PURE;
-      }
-    } else {
-      mode = p.getUChar("mode", LANE_GRAPH_OFF_PURE);
-      if (!laneGraphModeValidPure(mode)) mode = LANE_GRAPH_OFF_PURE;
-    }
-    p.end();
-  }
-  // Y L has no selectable Body route; retain its established VH path.
-  if (activeVehicleProfile == VEHICLE_MODEL_YL) bus = LANE_GRAPH_CHASSIS_PURE;
-  portENTER_CRITICAL(&r79LabMux);
-  laneGraphMode = mode; laneGraphBus = bus;
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
-static bool laneGraphApplySelection(uint8_t mode, uint8_t bus) {
-  if (!laneGraphModeValidPure(mode) || !laneGraphBusValidPure(bus) || !canTxBarrierMutex) return false;
-  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
-  Preferences p;
-  if (!p.begin("lanegraph", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
-  const uint16_t packed = (uint16_t)mode | ((uint16_t)bus << 8);
-  const bool saved = p.putUShort("selection", packed) == sizeof(uint16_t);
-  p.end();
-  if (saved) {
-    portENTER_CRITICAL(&r79LabMux);
-    if (laneGraphBus != bus) {
-      laneGraphLastTxValid = false; laneGraphLastTxBit45 = 0u;
-      laneGraphTxOk = 0u; laneGraphTxFail = 0u;
-    }
-    laneGraphMode = mode; laneGraphBus = bus;
-    portEXIT_CRITICAL(&r79LabMux);
-    laneGraphCancelPendingLocked();
-  }
-  xSemaphoreGive(canTxBarrierMutex);
-  return saved;
-}
-
-static bool laneGraphApplyMode(uint8_t mode) {
-  return laneGraphApplySelection(mode, laneGraphBusSnapshot());
 }
 
 static void r79CfgLoad() {

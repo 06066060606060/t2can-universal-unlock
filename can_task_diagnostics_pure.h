@@ -67,6 +67,22 @@ struct CanARxDiagnosticsPure {
   uint32_t budgetExhaustedAtLastOverflow;
 };
 
+// Compare concurrent millisecond snapshots without interpreting a heartbeat
+// published just after the caller's `now` sample as an almost-2^32 ms age.
+// Unsigned half-range arithmetic remains valid across the normal uint32 rollover.
+static inline uint32_t canTaskTimestampAgeMsPure(uint32_t nowMs,
+                                                 uint32_t timestampMs) {
+  const uint32_t elapsed = nowMs - timestampMs;
+  return elapsed <= 0x7FFFFFFFu ? elapsed : 0u;
+}
+
+static inline bool canTaskHeartbeatTimedOutPure(uint32_t nowMs,
+                                                uint32_t heartbeatMs,
+                                                uint32_t timeoutMs) {
+  return heartbeatMs == 0u ||
+      canTaskTimestampAgeMsPure(nowMs, heartbeatMs) > timeoutMs;
+}
+
 static inline void canTaskDiagnosticsResetPure(volatile CanTaskLiveDiagnosticsPure &d) {
   d.stage = CAN_TASK_STAGE_NEVER_STARTED;
   d.stageEnteredMs = 0;
@@ -123,9 +139,9 @@ static inline CanTaskTimeoutSnapshotPure canTaskDiagnosticsSnapshotPure(
   out.stage = d.stage;
   out.taskState = taskState;
   out.heartbeatAgeMs = d.heartbeatCount != 0
-      ? nowMs - d.lastHeartbeatMs : UINT32_MAX;
+      ? canTaskTimestampAgeMsPure(nowMs, d.lastHeartbeatMs) : UINT32_MAX;
   out.stageAgeMs = d.stage != CAN_TASK_STAGE_NEVER_STARTED
-      ? nowMs - d.stageEnteredMs : UINT32_MAX;
+      ? canTaskTimestampAgeMsPure(nowMs, d.stageEnteredMs) : UINT32_MAX;
   out.heartbeatCount = d.heartbeatCount;
   out.maxHeartbeatGapMs = d.maxHeartbeatGapMs;
   out.loopCount = d.loopCount;

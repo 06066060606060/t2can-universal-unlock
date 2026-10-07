@@ -212,7 +212,13 @@ enum CanTxTraceSource : uint8_t {
   CAN_TX_TRACE_SOURCE_DEFAULT = 0,
   CAN_TX_TRACE_SOURCE_AUTO_BLINKER = 1,
   CAN_TX_TRACE_SOURCE_S3XY_BUTTON = 2,
-  CAN_TX_TRACE_SOURCE_DRIVER_WINDOW_LAB = 3
+  CAN_TX_TRACE_SOURCE_DRIVER_WINDOW_LAB = 3,
+  CAN_TX_TRACE_SOURCE_TLSSC = 4,
+  CAN_TX_TRACE_SOURCE_TLSSC_CLEAR = 5,
+  CAN_TX_TRACE_SOURCE_R79 = 6,
+  CAN_TX_TRACE_SOURCE_R79_REINJECT = 7,
+  CAN_TX_TRACE_SOURCE_DMS = 8,
+  CAN_TX_TRACE_SOURCE_DISPLAY = 9
 };
 
 static constexpr uint8_t CAN_B_TX_TRACE_CAPACITY = 64;
@@ -613,6 +619,27 @@ struct CanTwaiRecoverySnapshot {
   uint32_t rxOverrunCount;
   uint32_t arbLostCount;
   uint32_t busErrorCount;
+  uint32_t alertSeenMask;
+  uint32_t alertBatchMask;
+  uint32_t txFailedAlertAgeMs;
+  uint32_t errPassAlertAgeMs;
+  uint32_t busErrorAlertAgeMs;
+};
+
+struct CanTwaiErrorAlertWindow {
+  uint32_t seenMask;
+  uint32_t lastTxFailedMs;
+  uint32_t lastErrPassMs;
+  uint32_t lastBusErrorMs;
+};
+
+struct CanTwaiBusOffAlertEvidence {
+  bool valid;
+  uint32_t seenMask;
+  uint32_t batchMask;
+  uint32_t txFailedAgeMs;
+  uint32_t errPassAgeMs;
+  uint32_t busErrorAgeMs;
 };
 
 static portMUX_TYPE canRecoveryMux = portMUX_INITIALIZER_UNLOCKED;
@@ -687,6 +714,8 @@ static volatile uint32_t canTwaiLastEventMs = 0;
 static volatile uint32_t canBLastRxGapMs = 0;
 static volatile uint32_t canBMaxRxGapMs = 0;
 static CanTwaiRecoverySnapshot canTwaiLastBusOffSnapshot = {};
+static CanTwaiErrorAlertWindow canTwaiErrorAlertWindow = {};
+static CanTwaiBusOffAlertEvidence canTwaiBusOffAlertEvidence = {};
 
 static bool mcpSpiStarted = false;
 static bool recoveryEverBothActive = false;
@@ -746,7 +775,6 @@ struct NagConfig {
   uint8_t  tsl9InputMode;
   bool     tsl9IsaChimeSuppress;
   uint8_t  tsl9LegacyRoute;
-  bool     dmsControlEnabled;
   bool     pauseAtZeroSpeed;
   uint8_t  modeHStopBehavior;
   uint8_t  mode;
@@ -1197,7 +1225,6 @@ static void nagCfgSetCommonDefaults(NagConfig& c) {
   c.tsl9InputMode  = TSL9_INPUT_MODE_DEFAULT_PURE;
   c.tsl9IsaChimeSuppress = false;
   c.tsl9LegacyRoute = TSL9_LEGACY_ROUTE_DEFAULT_PURE;
-  c.dmsControlEnabled = false;
   c.pauseAtZeroSpeed = false;
   c.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
   c.burstMs        = 1000;
@@ -1324,7 +1351,6 @@ static void nagCfgLoad() {
     return;
   }
   const uint8_t nagCfgVersion = prefs.getUChar("v", 0u);
-  const bool hadDmsControlKey = prefs.isKey("dms43");
   nagCfgSetCommonDefaults(nagCfg);
   nagCfg.enabled        = prefs.getBool("en", false);
   nagCfg.ignoreApState  = prefs.getBool("iap", false);
@@ -1339,7 +1365,6 @@ static void nagCfgLoad() {
   nagCfg.tsl9IsaChimeSuppress = prefs.getBool("tsl9isa", false);
   nagCfg.tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(
       prefs.getUChar("tsl9rt", TSL9_LEGACY_ROUTE_DEFAULT_PURE));
-  nagCfg.dmsControlEnabled = prefs.getBool("dms43", false);
   nagCfg.pauseAtZeroSpeed = prefs.getBool("p0", false);
   const uint8_t storedStopDefault = nagCfgVersion < 18u
       ? H_STOP_STOCK_CARRIER : nagModeHDefaultStopBehaviorPure();
@@ -1383,13 +1408,6 @@ static void nagCfgLoad() {
   rev4Cfg.visualRescueDelayMs = prefs.getUShort("h4vdly", rev4Defaults.visualRescueDelayMs);
   prefs.end();
 
-  // v3.7.2-v3.8.4 stored bit43 under the LAB/features namespace. Promote an
-  // existing explicit ON selection once when the production NAG key is absent.
-  if (!hadDmsControlKey && prefs.begin("features", true)) {
-    nagCfg.dmsControlEnabled = prefs.getBool("dmsNag43", false);
-    prefs.end();
-  }
-
   // Schema v17 promotes only the exact v16 Rev.4 defaults. Custom Rev.4
   // tuning survives unchanged while all profiles gain the new HO defaults.
   const bool migratedRev4V17 = nagCfgVersion < 17u && nagHumanV4MigrateV16DefaultPure(rev4Cfg);
@@ -1425,7 +1443,6 @@ static void nagCfgLoad() {
     prefs.putBool("tsl9isa", nagCfg.tsl9IsaChimeSuppress);
     prefs.putUChar("tsl9rt", tsl9LegacyRouteSanitizePure(
         nagCfg.tsl9LegacyRoute));
-    prefs.putBool("dms43", nagCfg.dmsControlEnabled);
     prefs.putUChar("hv", humanVariant);
     prefs.putUChar("hsb", nagCfg.modeHStopBehavior);
 
@@ -1491,7 +1508,6 @@ static void nagCfgSave() {
   prefs.putBool("tsl9isa", snapshot.tsl9IsaChimeSuppress);
   prefs.putUChar("tsl9rt", tsl9LegacyRouteSanitizePure(
       snapshot.tsl9LegacyRoute));
-  prefs.putBool("dms43", snapshot.dmsControlEnabled);
   prefs.putBool("p0",     snapshot.pauseAtZeroSpeed);
   prefs.putUChar("hsb",   snapshot.modeHStopBehavior);
   prefs.putUChar("mode",  snapshot.mode);
@@ -1665,11 +1681,14 @@ static void nagUpdateVehicleSpeed(const uint8_t* data, uint8_t dlc) {
   uint16_t raw = 0;
   const bool valid = nagDecodePartySpeedRawPure(data, dlc, raw);
   const unsigned long now = millis();
+  const bool locked = canTxBarrierMutex &&
+      xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE;
   portENTER_CRITICAL(&nagCtxMux);
   nagCtx.vehicleSpeedValid = valid;
   if (valid) nagCtx.vehicleSpeedRaw = raw;
   nagCtx.lastVehicleSpeedMs = now;
   portEXIT_CRITICAL(&nagCtxMux);
+  if (locked) xSemaphoreGive(canTxBarrierMutex);
 }
 
 static void nagUpdateSteering(const uint8_t* data, uint8_t dlc) {

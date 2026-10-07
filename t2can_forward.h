@@ -209,7 +209,6 @@ static void httpPedalMapStats();
 static void httpPedalMapSet();
 static void httpUlcUpdate();
 static void httpAutoLaneChangeLabUpdate();
-static void httpUlcMonitorLabStats();
 static esp_err_t canTxTwaiTransmitWithMask(const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask);
 static inline uint32_t readBitsLE(const uint8_t *data, int startBit, int len);
 static inline void writeBitsLE(uint8_t *data, int startBit, int len, uint32_t value);

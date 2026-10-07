@@ -10,18 +10,9 @@ enum R79DmsStockDispositionPure : uint8_t {
   R79_DMS_STOCK_DMS_ONLY_PURE = 2,
 };
 
-static inline bool r79DmsTorqueModeSupportedPure(uint8_t mode) {
-  return mode == 0u || mode == 1u || mode == 3u || mode == 7u;
-}
-
-static inline bool r79DmsPolicyActivePure(
-    bool nagMasterEnabled, bool dmsEnabled, bool profileSupported,
-    bool apStateValid, bool apActive, uint8_t nagMethod,
-    uint8_t torqueMode) {
-  if (!nagMasterEnabled || !dmsEnabled || !profileSupported ||
-      !apStateValid || !apActive) return false;
-  if (nagMethod == 1u) return true;  // TSL9
-  return nagMethod == 0u && r79DmsTorqueModeSupportedPure(torqueMode);
+static inline bool driverMonitoringDisablePolicyActivePure(
+    bool dmsEnabled, bool profileSupported, bool apStateValid, bool apActive) {
+  return dmsEnabled && profileSupported && apStateValid && apActive;
 }
 
 static inline bool r79DmsApplyFinalOverlayPure(uint8_t data[8], bool active) {

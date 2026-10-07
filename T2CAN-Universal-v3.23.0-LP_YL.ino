@@ -1,4 +1,4 @@
-// T2CAN Universal v3.21.0 - Model 3/Y / Model YL firmware
+// T2CAN Universal v3.23.0 - Model 3/Y / Model YL firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -71,7 +71,7 @@
 #include "fixed_point_arduino.h"
 #include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.21.0"
+#define FW_VERSION "v3.23.0"
 
 #include "t2can_core_state.h"
 #include "t2can_forward.h"
@@ -200,7 +200,6 @@ void setup() {
   autoLaneChangeLabCfgLoadAndMigrate();
   countryOverrideCfgLoad();
   r79CfgLoad();
-  laneGraphCfgLoad();
   s3xyAutoLoadConfig();
   nvsSchemaFinalize();
   canBusOffPersistenceLoad();
@@ -283,6 +282,7 @@ void setup() {
     T2CAN_SERIAL_PRINTLN("[CAN B] TWAI alerts configured");
   }
 
+  canTwaiResetErrorAlertWindow();
   canInitTime = millis();
   twaiReady = true;
   bootCaptureMarkOnce(&bootCapCanInitDoneMs);

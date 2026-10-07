@@ -355,7 +355,6 @@ html:has(.rebootScreen.show),body.t2-2027:has(.rebootScreen.show){background:var
   body.t2-2027 .page[data-page="lab"] .labDirectionCell .driveStateValue{font-size:13px}
   body.t2-2027 .page[data-page="lab"] #alcStateBig.driveStateValue{font-size:14px}
 }
-@media(max-width:380px){body.t2-2027 #panelLabCanARx .labControlRow{flex-direction:column;align-items:stretch}body.t2-2027 #panelLabCanARx .labSelect{width:100%;min-width:0;max-width:none;flex:none}}
 body.t2-2027 .homeInjectionGrid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;grid-template-rows:auto auto!important;grid-template-areas:"cana canb" "r79 r79"!important;gap:10px!important;align-items:stretch!important}
 body.t2-2027 .homeInjectionGrid .homeCanACard{grid-area:cana!important}
 body.t2-2027 .homeInjectionGrid .homeCanBCard{grid-area:canb!important}
@@ -559,6 +558,8 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="sectionhead"><div class="sectiontitle">Features</div><div class="sectionnote">Vehicle functions</div></div>
 <section class="card">
 <div class="listrow clickable" data-panel="panelNag" id="nagSettingsRow"><div><div class="listkey">Nag Killer</div><div class="listdesc" id="setNagDesc">Mode — · AP active gate</div></div><span class="chev">›</span></div>
+<div class="listrow" id="driverMonitoringRow"><div><div class="listkey">Disable Driver Monitoring</div><div class="listdesc" id="driverMonitoringDesc">OFF · independent of Nag Killer</div></div><label class="toggle"><input id="driverMonitoringToggle" type="checkbox" disabled/><span class="track"></span></label></div>
+<div class="listrow clickable" data-panel="panelVisionControl"><div><div class="listkey">Visual Speed Control</div><div class="listdesc">AP active · saved across reboots</div></div><div class="rowRight"><span class="value" id="visionControlRowState">OFF</span><span class="chev">›</span></div></div>
 <div class="listrow clickable" data-panel="panelBlink" id="blinkSettingsRow"><div><div class="listkey">Auto Blinker</div><div class="listdesc" id="setBlinkDesc">NOA + ALC</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelSummon"><div><div class="listkey">Summon Monitor</div><div class="listdesc" id="setSumDesc">Confirmed RX session</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelR79"><div><div class="listkey">R79 Mode</div><div class="listdesc">Mode 1 / Mode 2</div></div><span class="chev">›</span></div>
@@ -598,30 +599,20 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 </section>
 <div class="sectionhead labResearchHead"><div class="sectiontitle">Research Tools</div></div>
 <section class="card labToolsCard">
-<div class="listrow clickable" data-panel="panelLabLaneGraph"><div><div class="listkey">LaneGraph</div><div class="listdesc">OFF / during AP / always</div></div><span class="chev">›</span></div>
-<div class="listrow clickable" data-panel="panelLabVisionControl"><div><div class="listkey">Vision Speed Control — 0x3FD</div><div class="listdesc">Independent bit49 request · experimental</div></div><div class="rowRight"><span class="value" id="visionControlRowState">OFF</span><span class="chev">›</span></div></div>
 <div class="listrow clickable" data-panel="panelLabR79ApControl"><div><div class="listkey">R79 AP Control</div><div class="listdesc">Block during AP or delay after AP activation</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelLabR79"><div><div class="listkey">R79 Status</div><div class="listdesc">Read-only fixed production transport status</div></div><span class="chev">›</span></div>
-<div class="listrow clickable" data-panel="panelLabCanARx"><div><div class="listkey">CAN A RX Method</div><div class="listdesc" id="labCanARxDesc">Saved 4 FRAMES · immediate</div></div><div class="rowRight"><span class="value" id="labCanARxValue">4 FRAMES</span><span class="chev">›</span></div></div>
 <div class="listrow clickable" data-panel="panelLabAutoLaneChange"><div><div class="listkey">Auto Lane Change Enable</div><div class="listdesc">0x293 experimental injection</div></div><div class="rowRight"><span class="value">EXP</span><span class="chev">›</span></div></div>
 <div class="listrow clickable" data-panel="panelLabDriverWindow" id="driverWindowLabRow"><div><div class="listkey">Driver Window Test</div><div class="listdesc">Model YL · parked one-shot Auto Down</div></div><div class="rowRight"><span class="value" id="driverWindowRowState">TEST</span><span class="chev">›</span></div></div>
-<div class="listrow clickable" data-panel="panelLabUlcMonitor"><div><div class="listkey">Blind Spot Injection Monitor</div><div class="listdesc">Read-only 0x3F8 compositor monitor</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelLabCapture"><div><div class="listkey">CAN Research Capture</div><div class="listdesc">Snapshot and RAW transition capture</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelLabDriverMonitor" id="labDriverMonitorRow"><div><div class="listkey">Driver Monitoring Capture</div><div class="listdesc">Dual-CAN driver / DMS · read only</div></div><span class="chev">›</span></div>
 </section>
 </main>
 </div>
-<section class="panel" id="panelLabLaneGraph"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">LAB</div></div><div class="panelHero">LaneGraph</div><div class="panelSub">Choose when to show the lane graph. Active while LAB is enabled.</div>
-<section class="card"><div class="labControlRow"><div><div class="labControlTitle">LaneGraph policy</div><div class="labControlSub">Saved across reboots</div></div><select aria-label="LaneGraph policy" class="selectArrow labSelect" id="laneGraphMode" disabled><option value="0">OFF</option><option value="1">During AP</option><option value="2">Always</option></select></div><div class="labControlRow tuUiHidden" id="laneGraphBusWrap"><div><div class="labControlTitle">Injection Bus</div><div class="labControlSub">Saved across reboots</div></div><select aria-label="LaneGraph injection bus" class="selectArrow labSelect" id="laneGraphBus" disabled><option value="0">Chassis</option><option value="1">Body</option></select></div><div class="softNote tuUiHidden" id="laneGraphBusUnavailable">Saved Body is unavailable for this topology. Select Chassis to use LaneGraph.</div><div class="body"><div class="r"><span class="rk2">Effective state</span><span id="laneGraphState">—</span></div><div class="r"><span class="rk2">Selected bus · RX / age</span><span id="laneGraphStockRoute">—</span></div><div class="r"><span class="rk2">Stock → effective bit45</span><span id="laneGraphBit45">—</span></div><div class="r"><span class="rk2">TX OK / FAIL</span><span id="laneGraphTx">0 / 0</span></div></div><div class="softNote">OFF keeps the original lane graph setting. During AP applies only while AP is active and restores the original setting when AP disengages.</div><div class="softNote" id="laneGraphSaveState" role="status">Loading saved settings…</div></section>
-</div></section>
-<section class="panel" id="panelLabVisionControl"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">LAB</div></div><div class="panelHero">Vision Speed Control — 0x3FD</div><div class="panelSub">0x3FD MUX1 bit49=0 · AP active · EXPERIMENTAL</div>
-<section class="card"><div class="labControlRow"><div><div class="labControlTitle">Disable Vision Speed Control</div><div class="labControlSub">Saved across reboots · default OFF</div></div><label class="toggle"><input aria-label="Disable 0x3FD Vision Speed Control" id="visionControlDisableToggle" type="checkbox" disabled/><span class="track"></span></label></div><div class="labControlRow tuUiHidden" id="visionControlBusWrap"><div><div class="labControlTitle">Injection Bus</div><div class="labControlSub">Saved independently of toggle</div></div><select aria-label="0x3FD vision control injection bus" class="selectArrow labSelect" id="visionControlBus" disabled><option value="0">Chassis</option><option value="1">Body</option></select></div><div class="softNote tuUiHidden" id="visionControlBusUnavailable">Saved Body is unavailable for this topology. Select Chassis to use this request.</div><div class="body"><div class="r"><span class="rk2">Request state</span><span id="visionControlState">—</span></div><div class="r"><span class="rk2">Stock → requested bit49</span><span id="visionControlStock">— → —</span></div><div class="r"><span class="rk2">Selected bus · RX / age</span><span id="visionControlRoute">—</span></div><div class="r"><span class="rk2">TX OK / FAIL</span><span id="visionControlTx">0 / 0</span></div></div><div class="softNote">Requests 0x3FD MUX1 bit49=0 while LAB is enabled and fresh AP state is active. OFF preserves stock. Vehicle acceptance and sign-related slowing effects are unverified.</div><div class="softNote" id="visionControlSaveState" role="status">Loading saved settings…</div></section>
+<section class="panel" id="panelVisionControl"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">Settings</div></div><div class="panelHero">Visual Speed Control</div><div class="panelSub">AP active · saved across reboots · default OFF</div>
+<section class="card"><div class="labControlRow"><div><div class="labControlTitle">Disable Visual Speed Control</div><div class="labControlSub">Saved across reboots · default OFF</div></div><label class="toggle"><input aria-label="Disable Visual Speed Control" id="visionControlDisableToggle" type="checkbox" disabled/><span class="track"></span></label></div><div class="labControlRow tuUiHidden" id="visionControlBusWrap"><div><div class="labControlTitle">Injection Bus</div><div class="labControlSub">Saved independently of toggle</div></div><select aria-label="Visual Speed Control injection bus" class="selectArrow labSelect" id="visionControlBus" disabled><option value="0">Chassis</option><option value="1">Body</option></select></div><div class="softNote tuUiHidden" id="visionControlBusUnavailable">Saved Body is unavailable for this topology. Select Chassis to use this request.</div><div class="body"><div class="r"><span class="rk2">Request state</span><span id="visionControlState">—</span></div><div class="r"><span class="rk2">Stock → requested bit49</span><span id="visionControlStock">— → —</span></div><div class="r"><span class="rk2">Selected bus · RX / age</span><span id="visionControlRoute">—</span></div><div class="r"><span class="rk2">TX OK / FAIL</span><span id="visionControlTx">0 / 0</span></div></div><div class="softNote">Requests 0x3FD MUX1 bit49=0 while fresh AP state is active. OFF preserves stock. Vehicle acceptance and sign-related slowing effects are unverified.</div><div class="softNote" id="visionControlSaveState" role="status">Loading saved settings…</div></section>
 </div></section>
 <section class="panel" id="panelLabR79ApControl"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">LAB</div></div><div class="panelHero">R79 AP Control</div><div class="panelSub">Saved across reboots · AP policy and manual-driving permission are independent.</div>
 <section class="card"><div class="labControlRow"><div><div class="labControlTitle">R79 AP Control</div><div class="labControlSub">OFF preserves the existing AP policy</div></div><label class="toggle"><input aria-label="R79 AP Control" id="r79ApControlToggle" type="checkbox" disabled/><span class="track"></span></label></div><div class="labControlRow"><div><div class="labControlTitle">Allow R79 During Manual Driving</div><div class="labControlSub">Saved independently · default OFF</div></div><label class="toggle"><input aria-label="Allow R79 During Manual Driving" id="r79AllowManualDriving" type="checkbox" disabled/><span class="track"></span></label></div><div class="tuUiHidden" id="r79ApControls"><div class="labControlRow"><div><div class="labControlTitle">AP Policy</div></div><select aria-label="R79 AP policy" class="selectArrow labSelect" id="r79ApControlMode" disabled><option value="0">Block during AP</option><option value="1">Delay after AP</option></select></div><div class="fieldgrid tuUiHidden" id="r79ApDelayWrap"><div class="field full"><label for="r79ApDelaySeconds">AP DELAY (S)</label><input aria-label="R79 AP delay in seconds" id="r79ApDelaySeconds" inputmode="numeric" min="2" max="10" step="1" type="number" value="2" disabled/></div></div></div><div class="body"><div class="r"><span class="rk2">Gate state</span><span id="r79ApGateState">—</span></div><div class="r"><span class="rk2">Remaining</span><span id="r79ApRemaining">—</span></div></div><div class="softNote">ON bypasses only manual D/R suppression. Existing AP policy and transport safety remain active.</div><div class="softNote" id="r79ApSaveState" role="status">Loading saved settings…</div></section>
-</div></section>
-<section class="panel" id="panelLabCanARx"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">LAB</div></div><div class="panelHero">CAN A RX Method</div><div class="panelSub">Select how CAN A frames are processed. The selection is saved across reboot.</div>
-<section class="card"><div class="labControlRow"><div><div class="labControlTitle">Receive method</div><div class="labControlSub" id="labCanARxDetailDesc">4 FRAMES · saved</div></div><select aria-label="CAN A receive method" class="labSelect" id="labCanARxMode"><option value="0">4 FRAMES</option><option value="1">IMMEDIATE</option></select></div></section>
 </div></section>
 <section class="panel" id="panelLabDriverWindow"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">LAB</div></div><div class="panelHero">Driver Window Test</div><div class="panelSub">Model YL only · PARK required · clones fresh CAN B 0x3C2 MUX0 and sets byte 6 bits [3:2] to Auto Down value 2.</div>
 <section class="card"><div class="labValueGrid"><div class="labValue"><div class="labValueK">ACTION STATE</div><div class="labValueV" id="driverWindowState">WAITING</div></div><div class="labValue"><div class="labValueK">AVAILABILITY</div><div class="labValueV" id="driverWindowAvailability">—</div></div></div><div class="body"><div class="r"><span class="rk2">Stock 0x3C2 age</span><span id="driverWindowStockAge">—</span></div><div class="r"><span class="rk2">Requests / completed / blocked</span><span id="driverWindowCounts">—</span></div><div class="r"><span class="rk2">TX OK / FAIL</span><span id="driverWindowTx">—</span></div><div class="r"><span class="rk2">Stock raw</span><span class="labRaw" id="driverWindowStockRaw">—</span></div><div class="r"><span class="rk2">Last TX raw</span><span id="driverWindowLastTxRaw" class="labRaw">—</span></div></div><div class="controlgrid"><button class="btn primary" id="driverWindowOpenButton" style="grid-column:1/-1">OPEN DRIVER WINDOW · AUTO DOWN</button></div><div class="softNote">Experimental actuator test · 0x3C2 MUX0 · byte 6 bits [3:2] · two stock-synchronized press frames. Keep the driver window path clear. No setting is saved.</div></section>
@@ -633,7 +624,7 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="r"><span class="rk2">Transport</span><span id="r79FixedTransportValue">—</span></div>
 <div class="r"><span class="rk2">Periodic</span><span id="r79FixedPeriodicValue">—</span></div>
 <div class="r"><span class="rk2">Bit 18 policy</span><span id="r79FixedBit18Value">—</span></div>
-<div class="r"><span class="rk2">DMS bit43 (NAG KILL)</span><span id="r79DmsBit43Value">—</span></div>
+<div class="r"><span class="rk2">Driver Monitoring bit43</span><span id="r79DmsBit43Value">—</span></div>
 <div class="r"><span class="rk2">Runtime / template</span><span id="r79FixedRuntimeValue">—</span></div>
 <div class="r"><span class="rk2">MUX1 RX / TX OK / FAIL</span><span id="r79FixedTotalsValue">—</span></div>
 <div class="r"><span class="rk2">Fast attempts / OK / FAIL</span><span id="r79FixedFastValue">—</span></div>
@@ -726,20 +717,6 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="labValueGrid"><div class="labValue"><div class="labValueK">STOCK BIT19</div><div class="labValueV" id="countryR79StockBit19">—</div></div><div class="labValue"><div class="labValueK">STOCK BIT47</div><div class="labValueV" id="countryR79StockBit47">—</div></div></div>
 <div class="body"><div class="r"><span class="rk2">Template / age / RX</span><span id="countryR79StockMeta">WAITING FOR 0x3FD MUX1</span></div><div class="r"><span class="rk2">Stock raw</span><span class="labRaw" id="countryR79StockRaw">—</span></div></div>
 <div class="softNote">Monitoring only. Values are sampled before the R79 overlay applies bit19=0 and the selected bit47 policy.</div></section>
-</div></section>
-<section class="panel" id="panelLabUlcMonitor"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">LAB</div></div><div class="panelHero">Blind Spot Injection Monitor</div><div class="panelSub">Read-only view of the stock CAN B template and the last 0x3F8 frame submitted by the shared compositor.</div>
-<section class="card">
-<div class="monitorHeader"><div class="labControlTitle">ULC Blind Spot Injection Monitor</div><div class="labControlSub" style="margin-top:4px">Actual bits 52–53 from the last 0x3F8 frame submitted to TWAI.</div></div>
-<div class="body" style="margin-top:10px">
-<div class="r"><span class="rk2">Selected</span><span id="labBlindSelected">—</span></div>
-<div class="r"><span class="rk2">Stock RX</span><span id="labBlindStockMonitor">—</span></div>
-<div class="r"><span class="rk2">Last TX</span><span id="labBlindLastTx">—</span></div>
-<div class="r"><span class="rk2">TX result</span><span id="labBlindTxResult">—</span></div>
-<div class="r"><span class="rk2">Blind changed</span><span id="labBlindChanged">—</span></div>
-<div class="r"><span class="rk2">Last TX age</span><span id="labBlindTxAge">—</span></div>
-</div>
-</section>
-<div class="softNote">Monitor only. Configuration remains under Settings → Lane Change / ULC.</div>
 </div></section>
 <section class="panel" id="panelLabCapture"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">LAB</div></div><div class="panelHero">CAN Research Capture</div><div class="panelSub" id="researchCaptureTopology">CAN A + CAN B research recorder with automatic multi-segment re-arm.</div>
 <section class="card">
@@ -884,7 +861,6 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div id="tsl9RightPeriodicWrap" class="tuUiHidden"><div class="settingToggleRow"><div><div class="listkey">Periodic Right Speed</div><div class="listdesc">Keep warning assist · add a regular AP-active injection</div></div><label class="toggle"><input id="tsl9RightPeriodicToggle" type="checkbox"/><span class="track"></span></label></div><div class="fieldgrid"><div class="field full"><label>PERIODIC INTERVAL (S)</label><input aria-label="TSL9 periodic right speed interval in seconds" id="tsl9RightPeriodicInterval" inputmode="numeric" max="600" min="1" step="1" type="number" value="30"/></div></div></div>
 <div class="settingToggleRow tuUiHidden" id="tsl9IsaWrap"><div><div class="listkey">ISA Chime Suppression</div><div class="listdesc">TSL9 AP warning frames only</div></div><label class="toggle"><input id="tsl9IsaToggle" type="checkbox"/><span class="track"></span></label></div>
 <div class="labControlRow tuUiHidden" id="tsl9LegacyRouteWrap"><div><div class="labControlTitle">Legacy TSL9 Route</div><div class="labControlSub">One route only · Chassis state observation remains active</div></div><select aria-label="Legacy TSL9 route" class="selectArrow labSelect" id="tsl9LegacyRoute"><option value="0">Body 0x39B</option><option value="1">Chassis 0x399</option></select></div>
-<div class="settingToggleRow" id="nagDmsWrap"><div><div class="listkey">Disable Driver Monitoring</div><div class="listdesc" id="nagDmsDesc">0x3FD MUX1 bit43 · TSL9 + Torque A/B/C/H · R79 priority</div></div><label class="toggle"><input id="nagDmsToggle" type="checkbox"/><span class="track"></span></label></div>
 <div class="settingToggleRow"><div><div class="listkey">Pause at 0 km/h</div><div class="listdesc">Torque only · pause at a fresh 0.00 km/h · default OFF</div></div><label class="toggle"><input id="nagPauseZeroToggle" type="checkbox"/><span class="track"></span></label></div>
 </section>
 <div id="nagTorqueModeControls"><div class="nagSectionLabel">Mode</div>
@@ -1070,7 +1046,6 @@ function renderNagCfg(){
   $('tsl9RightPeriodicWrap').classList.toggle('tuUiHidden',!tsl9||!ss||!im);$('tsl9RightPeriodicToggle').checked=!!nagCfg.tsl9RightPeriodicEnabled;$('tsl9RightPeriodicToggle').disabled=!tsl9||!ss||!im;$('tsl9RightPeriodicInterval').value=String(nagCfg.tsl9RightPeriodicIntervalSeconds??30);$('tsl9RightPeriodicInterval').disabled=!tsl9||!ss||!im;
   $('tsl9IsaWrap').classList.toggle('tuUiHidden',!tsl9||!ss);$('tsl9IsaToggle').checked=!!nagCfg.tsl9IsaChimeSuppress;$('tsl9IsaToggle').disabled=!ss||!tsl9;
   $('tsl9LegacyRouteWrap').classList.toggle('tuUiHidden',!tsl9||!legacyRoute);$('tsl9LegacyRoute').value=String(lr);$('tsl9LegacyRoute').disabled=!tsl9||!legacyRoute;
-  $('nagDmsToggle').checked=!!nagCfg.dmsControlEnabled;$('nagDmsToggle').disabled=nagCfg.dmsControlSupported===false;$('nagDmsDesc').textContent=nagCfg.dmsControlSupported===false?'Unavailable on active 0x3FD route':'0x3FD MUX1 bit43 · TSL9 + Torque A/B/C/H · R79 priority';
   $('nagTorqueModeControls').classList.toggle('tuUiHidden',tsl9);$('nagTorqueLinks').classList.toggle('tuUiHidden',tsl9);if(tsl9){$('nagAdvancedCard').classList.add('tuUiHidden');$('nagAdvancedOpen').setAttribute('aria-expanded','false')}
   for(const id of ['nagToggle','nagToggle2'])$(id).disabled=!window.__t2NagSupported;
   $('nagIgnoreApStateWrap').classList.toggle('tuUiHidden',tsl9||!ts);$('nagIgnoreApStateToggle').checked=!!nagCfg.ignoreApState;$('nagIgnoreApStateToggle').disabled=tsl9||!ts;
@@ -1140,17 +1115,11 @@ async function fetchLab(prefetched=null){try{const s=prefetched||await jget('/ap
   const blindGateText=policyGate?'OPEN · AP':'BLOCKED',blindGateClass=policyGate?'good':'';
   if($('labUlcGate')){$('labUlcGate').textContent=blindGateText;$('labUlcGate').className='labValueV '+blindGateClass}
   const bs={0:'STANDARD',1:'AGGRESSIVE',2:'MAD MAX',3:'SNA'},blindName=v=>bs[Number(v)]??String(v);
-  const stockBlind=Number(s.stockUlcBlindSpot),selectedBlind=Number(s.ulcBlindMode);
+  const stockBlind=Number(s.stockUlcBlindSpot);
   if($('labStockBlind'))$('labStockBlind').textContent=blindName(stockBlind);
   if($('labUlcRxAge'))$('labUlcRxAge').textContent=fmtMs(s.rxAgeMs);
   if($('labUlcTx'))$('labUlcTx').textContent=s.txOk+' / '+s.txFail;
   if($('labUlcBlocked'))$('labUlcBlocked').textContent=s.gateBlocked;
-  if($('labBlindSelected'))$('labBlindSelected').textContent=selectedBlind===255?'STOCK':blindName(selectedBlind);
-  if($('labBlindStockMonitor'))$('labBlindStockMonitor').textContent=blindName(stockBlind);
-  if($('labBlindLastTx'))$('labBlindLastTx').textContent=s.lastTxValid?blindName(s.lastTxBlind):'—';
-  const currentBlindTx=selectedBlind!==255&&selectedBlind!==stockBlind&&s.lastTxValid&&Number(s.lastTxSelectedBlind)===selectedBlind&&Number(s.lastTxBlind)===selectedBlind;
-  if($('labBlindTxResult')){if(selectedBlind===255)$('labBlindTxResult').textContent='STOCK · NO BLIND OVERRIDE';else if(selectedBlind===stockBlind)$('labBlindTxResult').textContent='MATCHES STOCK · NO BLIND CHANGE';else if(currentBlindTx)$('labBlindTxResult').textContent=Number(s.lastTxResult)===1?'QUEUED':'FAILED';else $('labBlindTxResult').textContent='WAITING FOR CURRENT TX'}
-  if($('labBlindChanged'))$('labBlindChanged').textContent=s.lastTxValid?(s.lastTxBlindChanged?'YES':'NO'):'—';if($('labBlindTxAge'))$('labBlindTxAge').textContent=s.lastTxValid?fmtMs(s.lastTxAgeMs):'—';
 }catch(e){}}
 let countryOverrideSaved=null,countryOverrideSaving=false,countryOverrideEpoch=0;
 function renderCountryOverrideLab(s){s=s||{};if(!countryOverrideSaving)countryOverrideSaved=s;const raw=Number(s.countryMode),mode=raw===1||raw===2||raw===3?raw:0,mapRaw=Number(s.mapMode),map=mapRaw===1||mapRaw===2?mapRaw:0,name=['STOCK','US','KOREA','NEW ZEALAND'][mode],supported=s.countrySupported===true,gate=supported&&(mode!==0||map!==0)&&(s.gateAllowed===true||s.countryGateOpen===true),sel=$('countryOverrideMode'),mapSel=$('countryMapMode');if(!countryOverrideSaving){if(sel&&document.activeElement!==sel)sel.value=String(mode);if(mapSel&&document.activeElement!==mapSel)mapSel.value=String(map)}if(sel)sel.disabled=countryOverrideSaving||!supported;if(mapSel)mapSel.disabled=countryOverrideSaving||!supported;$('countryOverrideRowState').textContent=(mode===3?'NZ':name)+' / '+['STOCK','US 0','KR 7'][map];$('countryOverrideGate').textContent=!supported?'UNSUPPORTED':mode===0&&map===0?'OFF · STOCK':gate?'OPEN · R79 ACTIVE':'BLOCKED';$('countryOverrideGate').className='labValueV '+(gate?'good':mode||map?'warn':'');$('countryOverrideRx').textContent=(s.countryRx238||0)+' / '+(s.countryRx7ffA||0)+' / '+(s.countryRx7ffB||0);$('countryOverrideBlocked').textContent=s.countryBlocked||0;$('countryOverrideTx').textContent=(s.countryTxOk||0)+' / '+(s.countryTxFail||0);const bus=Number(s.countryLastBus)===1?'CAN A'+(s.countryCanAName?' · '+s.countryCanAName:''):Number(s.countryLastBus)===2?'CAN B'+(s.countryCanBName?' · '+s.countryCanBName:''):'UNKNOWN BUS',id=Number(s.countryLastId)===0x238?'0x238':'0x7FF',page=Number(s.countryLastPage)>=0?(' · PAGE '+s.countryLastPage):'',result=s.countryLastResult||'NONE';$('countryOverrideLast').textContent=s.countryLastValid?(result+' · '+bus+' · '+id+page+' · '+(s.countryLastRaw||'—')+' · '+fmtMs(s.countryLastAgeMs)):'—';const stock=!!s.r79StockValid;$('countryR79StockBit19').textContent=stock?String(Number(s.r79StockBit19)?1:0):'—';$('countryR79StockBit47').textContent=stock?String(Number(s.r79StockBit47)?1:0):'—';$('countryR79StockMeta').textContent=stock?('VALID · '+fmtMs(s.r79StockAgeMs)+' · RX '+(s.r79StockRx||0)):'WAITING FOR 0x3FD MUX1';$('countryR79StockRaw').textContent=stock?(s.r79StockRaw||'—'):'—'}
@@ -1164,50 +1133,35 @@ async function updateCountryOverrideMode(key='countryMode'){
   catch(e){try{countryOverrideSaved=await jget('/api/country/stats')}catch(x){}$('countryOverrideSaveState').textContent='Save failed · restored saved settings'}
   finally{countryOverrideSaving=false;countryOverrideEpoch++;$('countryOverrideMode').blur();$('countryMapMode').blur();renderCountryOverrideLab(countryOverrideSaved)}
 }
-let laneGraphSaved=null,laneGraphSaving=false,laneGraphEpoch=0;
-function renderLaneGraphLab(s){
-  if(!s)return;
-  const available=s.supported===true,lab=labEnabled&&s.labEnabled===true,mode=Number(s.mode),bus=Number(s.bus)===1?1:0,visible=s.busSelectorVisible===true,route=s.busSupported!==false;
-  $('laneGraphMode').disabled=laneGraphSaving||!available||!route||!lab;
-  $('laneGraphBusWrap').classList.toggle('tuUiHidden',!visible);$('laneGraphBus').disabled=laneGraphSaving||!available||!lab||!visible;
-  $('laneGraphBus').querySelector('option[value="1"]').disabled=s.bodySupported!==true;
-  if(!laneGraphSaving){$('laneGraphMode').value=String(mode===1||mode===2?mode:0);$('laneGraphBus').value=String(bus)}
-  $('laneGraphBusUnavailable').classList.toggle('tuUiHidden',!visible||bus!==1||route);
-  $('laneGraphState').textContent=!lab?'LAB OFF':!available||!route?'UNSUPPORTED':s.state==='WAITING'?'Waiting for stock':s.state==='STOCK_STALE'?'Stock stale':s.state==='TRANSPORT_BLOCKED'?'Transport blocked':s.active?'ACTIVE':'STOCK';
-  const age=Number(s.stockAgeMs);$('laneGraphStockRoute').textContent=(s.selectedBusName||'CHASSIS')+' · RX '+(s.selectedBusRx||0)+' · '+(Number.isFinite(age)&&age<999999?fmtMs(age):'—');
-  $('laneGraphBit45').textContent=(s.stockValid?Number(s.stockBit45):'—')+' → '+(s.effectiveBit45Valid?Number(s.effectiveBit45):'—');$('laneGraphTx').textContent=(s.txOk||0)+' / '+(s.txFail||0)
+let driverMonitoringControlSaved=null,driverMonitoringControlSaving=false;
+function renderDriverMonitoringControl(s){
+  if(!s)return;driverMonitoringControlSaved=s;const supported=s.supported===true,enabled=s.enabled===true,toggle=$('driverMonitoringToggle');toggle.checked=enabled;toggle.disabled=driverMonitoringControlSaving||!supported;$('driverMonitoringDesc').textContent=!supported?'Unavailable on active vehicle route':enabled?(s.active?'ON · active':'ON · AP gated'):'OFF · independent of Nag Killer';
 }
-async function fetchLaneGraphLab(){const epoch=laneGraphEpoch;try{const s=await jget('/api/lab/lane-graph/stats');if(epoch!==laneGraphEpoch||laneGraphSaving)return;laneGraphSaved=s;renderLaneGraphLab(s);$('laneGraphSaveState').textContent='Saved across reboots'}catch(e){if(!laneGraphSaved)$('laneGraphSaveState').textContent='Settings unavailable · retrying'}}
-async function updateLaneGraphLab(key='mode'){
-  if(laneGraphSaving||!laneGraphSaved||!labEnabled||laneGraphSaved.labEnabled!==true||laneGraphSaved.supported!==true)return;
-  const value=Number($(key==='bus'?'laneGraphBus':'laneGraphMode').value);
-  if(key==='bus'){if(![0,1].includes(value)||laneGraphSaved.busSelectorVisible!==true||value===1&&laneGraphSaved.bodySupported!==true){renderLaneGraphLab(laneGraphSaved);return}}
-  else if(![0,1,2].includes(value)||laneGraphSaved.busSupported===false){renderLaneGraphLab(laneGraphSaved);return}
-  laneGraphSaving=true;laneGraphEpoch++;renderLaneGraphLab(laneGraphSaved);$('laneGraphSaveState').textContent='Saving…';
-  try{laneGraphSaved=await featurePostJson('/api/lab/lane-graph/update?'+key+'='+value);$('laneGraphSaveState').textContent='Saved across reboots'}
-  catch(e){try{laneGraphSaved=await jget('/api/lab/lane-graph/stats')}catch(x){}$('laneGraphSaveState').textContent='Save failed · restored saved settings'}
-  finally{laneGraphSaving=false;laneGraphEpoch++;renderLaneGraphLab(laneGraphSaved)}
+async function fetchDriverMonitoringControl(){try{renderDriverMonitoringControl(await jget('/api/driver-monitoring/config'))}catch(e){if(!driverMonitoringControlSaved){$('driverMonitoringToggle').disabled=true;$('driverMonitoringDesc').textContent='Settings unavailable · retrying'}}}
+async function updateDriverMonitoringControl(){
+  if(driverMonitoringControlSaving||!driverMonitoringControlSaved||driverMonitoringControlSaved.supported!==true){renderDriverMonitoringControl(driverMonitoringControlSaved);return}
+  const enabled=$('driverMonitoringToggle').checked;driverMonitoringControlSaving=true;renderDriverMonitoringControl({...driverMonitoringControlSaved,enabled});
+  try{const s=await featurePostJson('/api/driver-monitoring/config?enabled='+(enabled?1:0));renderDriverMonitoringControl(s)}catch(e){await fetchDriverMonitoringControl()}finally{driverMonitoringControlSaving=false;renderDriverMonitoringControl(driverMonitoringControlSaved)}
 }
-$('laneGraphMode').onchange=()=>updateLaneGraphLab('mode');$('laneGraphBus').onchange=()=>updateLaneGraphLab('bus');
+$('driverMonitoringToggle').onchange=updateDriverMonitoringControl;
 let visionControlSaved=null,visionControlSaving=false,visionControlEpoch=0;
 function renderVisionControlLab(s){
-  if(!s)return;const available=s.supported===true,lab=labEnabled&&s.labEnabled===true,selected=s.requestDisabled===true,bus=Number(s.bus)===1?1:0,route=s.busSupported===true,visible=s.busSelectorVisible===true,stock=Number(s.stockBit),valid=s.stockValid===true&&(stock===0||stock===1),gate=selected&&lab&&available&&route&&valid&&s.gateOpen===true;
-  $('visionControlDisableToggle').disabled=visionControlSaving||!available||!route||!lab;$('visionControlBusWrap').classList.toggle('tuUiHidden',!visible);$('visionControlBus').disabled=visionControlSaving||!available||!lab||!visible;$('visionControlBus').querySelector('option[value="1"]').disabled=s.bodySupported!==true;
+  if(!s)return;const available=s.supported===true,selected=s.requestDisabled===true,bus=Number(s.bus)===1?1:0,route=s.busSupported===true,visible=s.busSelectorVisible===true,stock=Number(s.stockBit),valid=s.stockValid===true&&(stock===0||stock===1),gate=selected&&available&&route&&valid&&s.gateOpen===true;
+  $('visionControlDisableToggle').disabled=visionControlSaving||!available||!route;$('visionControlBusWrap').classList.toggle('tuUiHidden',!visible);$('visionControlBus').disabled=visionControlSaving||!available||!visible;$('visionControlBus').querySelector('option[value="1"]').disabled=s.bodySupported!==true;
   if(!visionControlSaving){$('visionControlDisableToggle').checked=selected;$('visionControlBus').value=String(bus)}$('visionControlBusUnavailable').classList.toggle('tuUiHidden',!visible||bus!==1||route);$('visionControlRowState').textContent=selected?'ON':'OFF';
-  $('visionControlState').textContent=!lab?'LAB OFF':!available||!route?'UNSUPPORTED':!selected?'OFF · STOCK':s.state==='WAIT_STOCK'?'Waiting for stock':s.state==='WAIT_AP'?'Waiting for AP':s.state==='STOCK_ZERO'?'Stock already 0 · no TX':gate?'READY · AP ACTIVE':'BLOCKED';
+  $('visionControlState').textContent=!available||!route?'UNSUPPORTED':!selected?'OFF · STOCK':s.state==='WAIT_STOCK'?'Waiting for stock':s.state==='WAIT_AP'?'Waiting for AP':s.state==='STOCK_ZERO'?'Stock already 0 · no TX':gate?'READY · AP ACTIVE':'BLOCKED';
   $('visionControlStock').textContent=(valid?stock:'—')+' → '+(valid?(gate?0:stock):'—');const age=Number(s.rxAgeMs);$('visionControlRoute').textContent=(visible?(bus?'BODY':'CHASSIS'):'VH')+' · RX '+(s.rxCount||0)+' · '+(valid&&Number.isFinite(age)&&age<999999?fmtMs(age):'—');$('visionControlTx').textContent=(s.txOk||0)+' / '+(s.txFail||0);
 }
-async function fetchVisionControlLab(){const epoch=visionControlEpoch;try{const s=await jget('/api/lab/vision-control/stats');if(epoch!==visionControlEpoch||visionControlSaving)return;visionControlSaved=s;renderVisionControlLab(s);$('visionControlSaveState').textContent='Saved across reboots'}catch(e){if(!visionControlSaved)$('visionControlSaveState').textContent='Settings unavailable · retrying'}}
+async function fetchVisionControlLab(){const epoch=visionControlEpoch;try{const s=await jget('/api/vision-control/stats');if(epoch!==visionControlEpoch||visionControlSaving)return;visionControlSaved=s;renderVisionControlLab(s);$('visionControlSaveState').textContent='Saved across reboots'}catch(e){if(!visionControlSaved)$('visionControlSaveState').textContent='Settings unavailable · retrying'}}
 async function updateVisionControlLab(key='disabled'){
-  if(visionControlSaving||!visionControlSaved||!labEnabled||visionControlSaved.labEnabled!==true||visionControlSaved.supported!==true){if(visionControlSaved)renderVisionControlLab(visionControlSaved);return}
+  if(visionControlSaving||!visionControlSaved||visionControlSaved.supported!==true){if(visionControlSaved)renderVisionControlLab(visionControlSaved);return}
   const value=key==='bus'?Number($('visionControlBus').value):$('visionControlDisableToggle').checked?1:0;
   if(key==='bus'&&(![0,1].includes(value)||visionControlSaved.busSelectorVisible!==true||value===1&&visionControlSaved.bodySupported!==true)||key!=='bus'&&visionControlSaved.busSupported!==true){renderVisionControlLab(visionControlSaved);return}
   visionControlSaving=true;visionControlEpoch++;renderVisionControlLab(visionControlSaved);$('visionControlSaveState').textContent='Saving…';
-  try{visionControlSaved=await featurePostJson('/api/lab/vision-control/update?'+key+'='+value);$('visionControlSaveState').textContent='Saved across reboots'}catch(e){try{visionControlSaved=await jget('/api/lab/vision-control/stats')}catch(x){}$('visionControlSaveState').textContent='Save failed · restored saved settings'}finally{visionControlSaving=false;visionControlEpoch++;renderVisionControlLab(visionControlSaved)}
+  try{visionControlSaved=await featurePostJson('/api/vision-control/update?'+key+'='+value);$('visionControlSaveState').textContent='Saved across reboots'}catch(e){try{visionControlSaved=await jget('/api/vision-control/stats')}catch(x){}$('visionControlSaveState').textContent='Save failed · restored saved settings'}finally{visionControlSaving=false;visionControlEpoch++;renderVisionControlLab(visionControlSaved)}
 }
 $('visionControlDisableToggle').onchange=()=>updateVisionControlLab('disabled');$('visionControlBus').onchange=()=>updateVisionControlLab('bus');
 async function fetchAutoLaneChangeLab(){try{await fetchLab(await jget('/api/lab/auto-lane-change/stats'))}catch(e){}}
-async function fetchUlcMonitorLab(){try{await fetchLab(await jget('/api/lab/ulc-monitor/stats'))}catch(e){}}
 async function toggleUlcNoConfirm(v){try{const r=await post('/api/ulc/update?confirm='+(v?1:0)),s=await r.json();if(!r.ok)throw new Error(s?.error||'blocked');await fetchLab(s);}catch(e){;fetchLab()}}
 async function updateUlcNoConfirmTiming(v){try{const r=await post('/api/ulc/update?timing='+(v?1:0)),s=await r.json();if(!r.ok)throw new Error(s?.error||'blocked');await fetchLab(s);}catch(e){;fetchLab()}}
 async function toggleAutoLaneChange293(v){try{const r=await post('/api/lab/auto-lane-change/update?enabled='+(v?1:0)),s=await r.json();if(!r.ok)throw new Error(s?.error||'blocked');await fetchLab(s);}catch(e){;fetchAutoLaneChangeLab()}}
@@ -1229,9 +1183,6 @@ function renderR79Summary(r){
   if($('r79TxBig')){$('r79TxBig').textContent=displayState;$('r79TxBig').className='driveStateValue '+cls}
   if($('r79TxSub'))$('r79TxSub').textContent='R79 TX · '+reason;if($('labGearBig'))$('labGearBig').textContent=gear;
 }
-let canARxSaving=false;
-function renderCanARxLab(d){d=d||{};const t=$('labCanARxMode'),desc=$('labCanARxDesc'),value=$('labCanARxValue'),detail=$('labCanARxDetailDesc'),saved=Number(d.savedMode)===1?1:0,effective=Number(d.effectiveMode)===1?1:0,savedName=saved?'IMMEDIATE':'4 FRAMES',effectiveName=effective?'IMMEDIATE':'4 FRAMES';if(t&&!canARxSaving)t.value=String(saved);if(value)value.textContent=savedName;if(desc)desc.textContent='Saved '+savedName+' · '+(saved&&!effective?'LAB OFF':saved?'4 FRAMES':'immediate');if(detail)detail.textContent='Effective '+effectiveName+' · saved '+savedName}
-async function updateCanARxLab(){const t=$('labCanARxMode');if(!t||canARxSaving)return;canARxSaving=true;t.disabled=true;try{const d=await featurePostJson('/api/lab/can-a-rx/update?mode='+encodeURIComponent(t.value));canARxSaving=false;renderCanARxLab(d);}catch(e){canARxSaving=false;;try{renderCanARxLab(await jget('/api/lab/can-a-rx/stats'))}catch(x){}}finally{t.disabled=false}}
 let driverWindowOpening=false;
 function renderDriverWindowLab(s){s=s||{};const pending=!!s.pending,state=s.lastResult||'WAITING',available=!!s.available;$('driverWindowState').textContent=state;$('driverWindowState').className='labValueV '+(state==='COMPLETED'?'good':pending?'warn':available?'good':'bad');$('driverWindowAvailability').textContent=s.availability||'—';$('driverWindowAvailability').className='labValueV '+(available?'good':'bad');$('driverWindowStockAge').textContent=Number(s.stockAgeMs)>=999999?'—':fmtMs(s.stockAgeMs);$('driverWindowCounts').textContent=(s.requests||0)+' / '+(s.completed||0)+' / '+(s.blocked||0);$('driverWindowTx').textContent=(s.txOk||0)+' / '+(s.txFail||0);$('driverWindowStockRaw').textContent=s.stockRaw||'—';$('driverWindowLastTxRaw').textContent=s.lastTxRaw||'—';$('driverWindowRowState').textContent=pending?'BUSY':available?'READY':'BLOCKED';$('driverWindowOpenButton').disabled=driverWindowOpening||!s.available}
 async function fetchDriverWindowLab(prefetched=null){try{renderDriverWindowLab(prefetched||await jget('/api/lab/driver-window/stats'))}catch(e){}}
@@ -1429,7 +1380,7 @@ async function updateTsl9Sequence(){const sequence=Number($('tsl9Sequence')?.val
 $('nagIgnoreApStateToggle').onchange=e=>toggleNag(e.target.checked,'ignoreApState');$('nagToggle').onchange=e=>toggleNag(e.target.checked);$('nagToggle2').onchange=e=>toggleNag(e.target.checked);$('nagPauseZeroToggle').onchange=e=>toggleNagPauseZero(e.target.checked);
 if($('nagMethod'))$('nagMethod').onchange=updateNagMethod;if($('tsl9Sequence'))$('tsl9Sequence').onchange=updateTsl9Sequence;if($('tsl9Window'))$('tsl9Window').onchange=e=>toggleNag(e.target.checked,'tsl9Window');
 if($('tsl9InputMode'))$('tsl9InputMode').onchange=e=>updateNagValue('tsl9InputMode',e.target.value);if($('torqueRightScrollToggle'))$('torqueRightScrollToggle').onchange=e=>updateNagValue('torqueRightScrollEnabled',e.target.checked?1:0);if($('torqueRightScrollInterval'))$('torqueRightScrollInterval').onchange=e=>{const v=Number(e.target.value);if(Number.isInteger(v)&&v>=1&&v<=600)updateNagValue('torqueRightScrollIntervalSeconds',v);else renderNagCfg()};if($('torqueRightScrollPattern'))$('torqueRightScrollPattern').onchange=e=>updateNagValue('torqueRightScrollPattern',e.target.value);if($('tsl9RightPeriodicToggle'))$('tsl9RightPeriodicToggle').onchange=e=>updateNagValue('tsl9RightPeriodicEnabled',e.target.checked?1:0);if($('tsl9RightPeriodicInterval'))$('tsl9RightPeriodicInterval').onchange=e=>{const v=Number(e.target.value);if(Number.isInteger(v)&&v>=1&&v<=600)updateNagValue('tsl9RightPeriodicIntervalSeconds',v);else renderNagCfg()};if($('tsl9IsaToggle'))$('tsl9IsaToggle').onchange=e=>toggleNag(e.target.checked,'tsl9IsaChimeSuppress');
-if($('tsl9LegacyRoute'))$('tsl9LegacyRoute').onchange=e=>updateNagValue('tsl9LegacyRoute',e.target.value);if($('nagDmsToggle'))$('nagDmsToggle').onchange=e=>toggleNag(e.target.checked,'dmsControlEnabled');
+if($('tsl9LegacyRoute'))$('tsl9LegacyRoute').onchange=e=>updateNagValue('tsl9LegacyRoute',e.target.value);
 async function toggleBlink(v){try{await post(v?'/api/blinkA/enable':'/api/blinkA/disable');fetchBlink()}catch(e){}}$('blinkToggle').onchange=e=>toggleBlink(e.target.checked);$('blinkToggle2').onchange=e=>toggleBlink(e.target.checked);
 async function toggleTlssc(v){try{await post(v?'/api/summon/tlssc-enable':'/api/summon/tlssc-disable');fetchSum()}catch(e){}}$('tlsscToggle').onchange=e=>toggleTlssc(e.target.checked);$('tlsscToggle2').onchange=e=>toggleTlssc(e.target.checked);
 async function toggleTlsscHighway(v){try{await post('/api/summon/tlssc-highway-gate?enabled='+(v?'1':'0'));fetchSum()}catch(e){;fetchSum()}}$('tlsscHighwayToggle').onchange=e=>toggleTlsscHighway(e.target.checked);
@@ -1446,7 +1397,7 @@ $('alcQuickToggle').onchange=e=>toggleOffHighwayAlc(e.target.checked);$('alcSett
 if($('blinkTxMode'))$('blinkTxMode').onchange=updateBlinkerTx;
 for(const id of ['humanV4Ho1Nm','humanV4Ho2Nm'])if($(id))$(id).oninput=markHumanPeakDirty;
 if($('humanV4HoPolicy'))$('humanV4HoPolicy').onchange=markHumanPeakDirty;
-if($('r79Bit18Mode'))$('r79Bit18Mode').onchange=updateR79Bit18;if($('r79Mode'))$('r79Mode').onchange=updateR79Settings;if($('r79Mode1TxWait'))$('r79Mode1TxWait').onchange=updateR79Settings;if($('r79Mode1Reinject'))$('r79Mode1Reinject').onchange=updateR79Settings;if($('r79Mode1Apply'))$('r79Mode1Apply').onclick=updateR79Settings;if($('r79Mode2Reinject'))$('r79Mode2Reinject').onchange=updateR79Settings;if($('r79Mode2Apply'))$('r79Mode2Apply').onclick=updateR79Settings;if($('labCanARxMode'))$('labCanARxMode').onchange=updateCanARxLab;
+if($('r79Bit18Mode'))$('r79Bit18Mode').onchange=updateR79Bit18;if($('r79Mode'))$('r79Mode').onchange=updateR79Settings;if($('r79Mode1TxWait'))$('r79Mode1TxWait').onchange=updateR79Settings;if($('r79Mode1Reinject'))$('r79Mode1Reinject').onchange=updateR79Settings;if($('r79Mode1Apply'))$('r79Mode1Apply').onclick=updateR79Settings;if($('r79Mode2Reinject'))$('r79Mode2Reinject').onchange=updateR79Settings;if($('r79Mode2Apply'))$('r79Mode2Apply').onclick=updateR79Settings;
 if($('driverWindowOpenButton'))$('driverWindowOpenButton').onclick=openDriverWindowLab;
 async function fetchDriverMonitor(){
   try{
@@ -1530,7 +1481,7 @@ function renderHomeSlow(s){
 }
 function renderLabLite(s){
   const r=s?.r79||{},a=s?.alc||{};
-  renderR79Summary(r);renderCanARxLab(s?.canARx);
+  renderR79Summary(r);
   const valid=!!a.alcValid,arv=Number(a.alcRaw),lav=valid&&[6,8].includes(arv),rav=valid&&[7,8].includes(arv),bigAlc=!valid?'OFF · —':arv===8?'READY · 8':arv===6?'LEFT · 6':arv===7?'RIGHT · 7':'OFF · '+arv;$('alcStateBig').textContent=bigAlc;$('alcStateSub').textContent=valid?('0x399 0x'+arv.toString(16).padStart(2,'0').toUpperCase()):'0x399 —';$('lane239AgeSub').textContent=a.lane239Valid?('0x239 age '+fmtMs(a.lane239AgeMs)):'0x239 age —';
   const usage={0:'INVALID',1:'ESTIMATED',2:'FUSED',3:'SNA'},fork={0:'NONE',1:'LEFT',2:'RIGHT',3:'SNA'};const lane=side=>{const ex=Number(a[side+'LaneExists']),u=Number(a[side+'LineUsageRaw']),f=Number(a[side+'ForkRaw']);return a.lane239Valid?('Lane '+(ex===1?'YES':ex===0?'NO':'—')+' · '+(usage[u]||u)+' · '+(fork[f]||f)):'Lane —'};for(const [id,side,available] of [['alcLeftBig','left',lav],['alcRightBig','right',rav]]){const el=$(id);el.textContent='Lane';el.title=lane(side)+' · '+(available?'AVAILABLE':'BLOCKED');el.parentElement.style.opacity=available?'1':'.72'}
 }
@@ -1555,7 +1506,7 @@ async function fetchLabSnapshot(){const s=await fetchPageSnapshot('lab-lite');if
 async function fetchSettingsSnapshot(){const s=await fetchPageSnapshot('settings-lite');if(s){renderSettingsLite(s);settingsLiteValid=true}}
 async function fetchHeartbeat(){await fetchPageSnapshot('heartbeat')}
 if($('countryOverrideMode'))$('countryOverrideMode').onchange=()=>updateCountryOverrideMode('countryMode');if($('countryMapMode'))$('countryMapMode').onchange=()=>updateCountryOverrideMode('mapMode');
-const pollLast={nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,laneGraph:0,ulcMonitor:0,r79:0,humanLab:0,pedalMap:0,driverMon:0,homeSnap:0,labSnap:0,settingsSnap:0,heartbeat:0};
+const pollLast={nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,driverMon:0,homeSnap:0,labSnap:0,settingsSnap:0,heartbeat:0};
 function activePanelId(){return document.querySelector('.panel.show')?.id||''}
 function pollDue(k,ms,fn,now,force=false){if(force||now-pollLast[k]>=ms){pollLast[k]=now;fn()}}
 function pollTick(force=false){
@@ -1571,8 +1522,7 @@ function pollTick(force=false){
     else if(p==='panelWireless')pollDue('s3',1000,fetchS3,now,force);
     else if(p==='panelDevice'||p==='panelDeviceDiag'||p==='panelPair')pollDue('s3',800,fetchS3,now,force);
     else if(p==='panelOta')pollDue('sys',2500,fetchSys,now,force);
-    else if(p==='panelLabLaneGraph')pollDue('laneGraph',800,fetchLaneGraphLab,now,force);
-    else if(p==='panelLabVisionControl')pollDue('visionControl',800,fetchVisionControlLab,now,force);
+    else if(p==='panelVisionControl')pollDue('visionControl',800,fetchVisionControlLab,now,force);
     else if(p==='panelLabR79ApControl')pollDue('r79ApControl',800,fetchR79ApControl,now,force);
     else if(p==='panelLabR79')pollDue('r79',800,fetchR79,now,force);
     else if(p==='panelCountry')pollDue('country',800,fetchCountryOverrideLab,now,force);
@@ -1581,7 +1531,6 @@ function pollTick(force=false){
     else if(p==='panelUlc')pollDue('ulc',800,fetchLab,now,force);
     else if(p==='panelLabAutoLaneChange')pollDue('autoLc',800,fetchAutoLaneChangeLab,now,force);
     else if(p==='panelLabDriverWindow')pollDue('driverWindow',500,fetchDriverWindowLab,now,force);
-    else if(p==='panelLabUlcMonitor')pollDue('ulcMonitor',800,fetchUlcMonitorLab,now,force);
     else if(p==='panelLabCapture')pollDue('lab',700,fetchResearchCapture,now,force);
     else if(p==='panelLabDriverMonitor')pollDue('driverMon',500,fetchDriverMonitor,now,force);
     return;
@@ -1696,7 +1645,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   turnChoices.forEach(b=>b.onclick=()=>{pendingTurn=b.dataset.turn==='STALKLESS'?2:1;setupUpdate()});q('saveProfileBtn').onclick=saveProfile;q('cancelProfileChangeBtn').onclick=()=>{document.body.classList.remove('setup-active');pendingProfile=0;pendingTopology=0;pendingTurn=0};q('changeProfileBtn').onclick=()=>enterSetup(true);
 
   function applyFeatures(f){
-    featureStatus=f;labEnabled=!!f.lab;s3xyEnabled=!!f.s3xy;if(r79ApSaved)renderR79ApControl(r79ApSaved);if(laneGraphSaved)renderLaneGraphLab(laneGraphSaved);if(visionControlSaved)renderVisionControlLab(visionControlSaved);
+    featureStatus=f;labEnabled=!!f.lab;s3xyEnabled=!!f.s3xy;if(r79ApSaved)renderR79ApControl(r79ApSaved);if(visionControlSaved)renderVisionControlLab(visionControlSaved);
     q('labMenuToggle').checked=labEnabled;q('labMenuDesc').textContent=labEnabled?'ON · LAB visible and enabled':'OFF · LAB hidden and disabled';q('labNavBtn')?.classList.toggle('hiddenByProfile',!labEnabled);q('bottomNav')?.classList.toggle('labHidden',!labEnabled);
     q('s3xyFeatureToggle').checked=s3xyEnabled;q('s3xyFeatureDesc').textContent=s3xyEnabled?'ON · Bluetooth functions enabled':'OFF · Bluetooth functions disabled';q('devicesNavBtn')?.classList.toggle('hiddenByProfile',!s3xyEnabled);q('bottomNav')?.classList.toggle('devicesHidden',!s3xyEnabled);
     if(!labEnabled&&currentPage==='lab')showPage('settings');if(!s3xyEnabled&&currentPage==='devices')showPage('settings');
@@ -1740,7 +1689,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   q('migrationContinueBtn').onclick=()=>closeModal('migrationNoticeModal');
 
   async function boot(){
-    try{const s=await jget('/api/profile/status');profileStatus=s;if(s.setupMode){universalBootReady=false;enterSetup(false);if(s.migrationNotice)openModal('migrationNoticeModal');return}applyProfile(s);document.body.classList.remove('setup-active');await refreshFeatures();universalBootReady=true;otaUiPhase='idle';if(s.nagSupported)await loadNag();forceHomeTop();forcePoll();if(otaJustUpdated){try{const snap=await jget('/api/snapshot?groups=system'),v=snap?.system?.fwVersion||'new firmware';}catch(x){}history.replaceState(null,'',location.pathname)}}catch(e){document.body.classList.add('setup-active');q('setupTitle').textContent='Profile status unavailable.';q('setupSub').textContent='T-2CAN is in a safe web-only state. Reboot or use Factory Reset if NVS is unavailable.';q('saveProfileBtn').disabled=true}
+    try{const s=await jget('/api/profile/status');profileStatus=s;if(s.setupMode){universalBootReady=false;enterSetup(false);if(s.migrationNotice)openModal('migrationNoticeModal');return}applyProfile(s);document.body.classList.remove('setup-active');await refreshFeatures();await fetchDriverMonitoringControl();await fetchVisionControlLab();universalBootReady=true;otaUiPhase='idle';if(s.nagSupported)await loadNag();forceHomeTop();forcePoll();if(otaJustUpdated){try{const snap=await jget('/api/snapshot?groups=system'),v=snap?.system?.fwVersion||'new firmware';}catch(x){}history.replaceState(null,'',location.pathname)}}catch(e){document.body.classList.add('setup-active');q('setupTitle').textContent='Profile status unavailable.';q('setupSub').textContent='T-2CAN is in a safe web-only state. Reboot or use Factory Reset if NVS is unavailable.';q('saveProfileBtn').disabled=true}
   }
   boot();
 })();</script>
@@ -1784,9 +1733,35 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
     selected.focus({preventScroll:true});selected.scrollIntoView({block:'nearest'});
   }
   document.querySelectorAll('select').forEach(select=>{
-    const intercept=event=>{if(select.disabled)return;event.preventDefault();event.stopPropagation();openSelectSheet(select)};
-    for(const type of [window.PointerEvent?'pointerdown':'touchstart','click'])select.addEventListener(type,intercept,{passive:false});
-    select.addEventListener('keydown',event=>{if([' ','Enter','ArrowDown','ArrowUp'].includes(event.key))intercept(event)});
+    const suppress=event=>{if(select.disabled)return false;event.preventDefault();event.stopPropagation();return true};
+    const activate=event=>{if(suppress(event))openSelectSheet(select)};
+    // Opening on pointerdown lets the same touch's click hit the new backdrop.
+    if(window.PointerEvent){
+      select.addEventListener('pointerdown',suppress,{passive:false});
+    }else{
+      // Legacy touchstart cancellation suppresses click, so activate on touchend.
+      let pendingTouch=null;
+      select.addEventListener('touchstart',event=>{
+        pendingTouch=null;
+        if(!suppress(event)||event.touches.length!==1)return;
+        const touch=event.touches[0];
+        pendingTouch={id:touch.identifier,x:touch.clientX,y:touch.clientY};
+      },{passive:false});
+      select.addEventListener('touchmove',event=>{
+        if(!pendingTouch)return;
+        const touch=[...event.touches].find(t=>t.identifier===pendingTouch.id);
+        if(event.touches.length!==1||!touch||Math.hypot(touch.clientX-pendingTouch.x,touch.clientY-pendingTouch.y)>10)pendingTouch=null;
+      },{passive:true});
+      select.addEventListener('touchcancel',()=>{pendingTouch=null},{passive:true});
+      select.addEventListener('touchend',event=>{
+        const pending=pendingTouch;pendingTouch=null;
+        if(!suppress(event)||!pending||event.touches.length)return;
+        const touch=[...event.changedTouches].find(t=>t.identifier===pending.id);
+        if(touch&&Math.hypot(touch.clientX-pending.x,touch.clientY-pending.y)<=10)openSelectSheet(select);
+      },{passive:false});
+    }
+    select.addEventListener('click',activate,{passive:false});
+    select.addEventListener('keydown',event=>{if([' ','Enter','ArrowDown','ArrowUp'].includes(event.key))activate(event)});
   });
   sheet.addEventListener('keydown',event=>{
     if(event.key==='Escape'){event.preventDefault();closeSelectSheet();return}

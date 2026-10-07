@@ -238,7 +238,50 @@ static void recordTwaiBusOffSnapshot(const twai_status_info_t &st, uint32_t now)
   snap.arbLostCount = st.arb_lost_count;
   snap.busErrorCount = st.bus_error_count;
   portENTER_CRITICAL(&canRecoveryMux);
+  if (canTwaiBusOffAlertEvidence.valid) {
+    snap.alertSeenMask = canTwaiBusOffAlertEvidence.seenMask;
+    snap.alertBatchMask = canTwaiBusOffAlertEvidence.batchMask;
+    snap.txFailedAlertAgeMs = canTwaiBusOffAlertEvidence.txFailedAgeMs;
+    snap.errPassAlertAgeMs = canTwaiBusOffAlertEvidence.errPassAgeMs;
+    snap.busErrorAlertAgeMs = canTwaiBusOffAlertEvidence.busErrorAgeMs;
+  }
   canTwaiLastBusOffSnapshot = snap;
+  portEXIT_CRITICAL(&canRecoveryMux);
+}
+
+static void canTwaiResetErrorAlertWindow() {
+  portENTER_CRITICAL(&canRecoveryMux);
+  canTwaiErrorAlertWindow = {};
+  portEXIT_CRITICAL(&canRecoveryMux);
+}
+
+static void canTwaiObserveErrorAlerts(uint32_t errorMask, bool busOff,
+                                      uint32_t now) {
+  portENTER_CRITICAL(&canRecoveryMux);
+  canTwaiErrorAlertWindow.seenMask |= errorMask;
+  if (errorMask & TWAI_ALERT_TX_FAILED)
+    canTwaiErrorAlertWindow.lastTxFailedMs = now;
+  if (errorMask & TWAI_ALERT_ERR_PASS)
+    canTwaiErrorAlertWindow.lastErrPassMs = now;
+  if (errorMask & TWAI_ALERT_BUS_ERROR)
+    canTwaiErrorAlertWindow.lastBusErrorMs = now;
+  if (busOff) {
+    canTwaiBusOffAlertEvidence.valid = true;
+    canTwaiBusOffAlertEvidence.seenMask = canTwaiErrorAlertWindow.seenMask;
+    canTwaiBusOffAlertEvidence.batchMask = errorMask;
+    canTwaiBusOffAlertEvidence.txFailedAgeMs =
+        (canTwaiErrorAlertWindow.seenMask & TWAI_ALERT_TX_FAILED)
+            ? (uint32_t)(now - canTwaiErrorAlertWindow.lastTxFailedMs)
+            : 999999UL;
+    canTwaiBusOffAlertEvidence.errPassAgeMs =
+        (canTwaiErrorAlertWindow.seenMask & TWAI_ALERT_ERR_PASS)
+            ? (uint32_t)(now - canTwaiErrorAlertWindow.lastErrPassMs)
+            : 999999UL;
+    canTwaiBusOffAlertEvidence.busErrorAgeMs =
+        (canTwaiErrorAlertWindow.seenMask & TWAI_ALERT_BUS_ERROR)
+            ? (uint32_t)(now - canTwaiErrorAlertWindow.lastBusErrorMs)
+            : 999999UL;
+  }
   portEXIT_CRITICAL(&canRecoveryMux);
 }
 
@@ -319,11 +362,17 @@ static bool mcpReinit() {
 static void canTwaiHandleAlerts() {
   uint32_t twaiAlerts = 0;
   if (twai_read_alerts(&twaiAlerts, 0) != ESP_OK || twaiAlerts == 0) return;
-  if (twaiAlerts & TWAI_ALERT_BUS_OFF) {
-    const uint32_t alertNow = (uint32_t)millis();
+  const uint32_t errorAlerts = twaiAlerts &
+      (TWAI_ALERT_TX_FAILED | TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR);
+  const bool busOff = (twaiAlerts & TWAI_ALERT_BUS_OFF) != 0;
+  if (!(errorAlerts || busOff)) return;
+  const uint32_t alertNow = (uint32_t)millis();
+  canTwaiObserveErrorAlerts(errorAlerts, busOff, alertNow);
+  if (busOff) {
     twai_status_info_t alertSt = {};
     canBTraceFreezeBusOff(alertNow);
-    if (twai_get_status_info(&alertSt) == ESP_OK) recordTwaiBusOffSnapshot(alertSt, alertNow);
+    if (twai_get_status_info(&alertSt) == ESP_OK)
+      recordTwaiBusOffSnapshot(alertSt, alertNow);
   }
 }
 
@@ -345,13 +394,12 @@ static void canTaskMcp(void* arg) {
       continue;
     }
     // ── BOUNDED READ LOOP ──
-    // The default d3 path prefetches up to four MCP2515 frames before decoding.
-    // LAB can select the c7-style path, which processes each frame immediately.
-    // Both modes retain the 32-frame yield budget and task priority.
-    static constexpr uint8_t MCP_PREFETCH_CAPACITY = 4;
-    const uint8_t readBatchBudget = canARxReadBatchBudgetPure(labMenuEnabled, canARxSavedMode);
+    // Process each MCP2515 frame before reading the next. The 32-frame yield
+    // budget and task priority remain unchanged; saved settings cannot batch RX.
+    static constexpr uint8_t MCP_PREFETCH_CAPACITY = 1;
+    const uint8_t readBatchBudget = canARxReadBatchBudgetPure();
     struct can_frame prefetched[MCP_PREFETCH_CAPACITY];
-    uint32_t lanePrefetchedRxMs[MCP_PREFETCH_CAPACITY];
+    uint32_t prefetchedRxMs[MCP_PREFETCH_CAPACITY];
     uint8_t processed = 0;
     bool noMoreFrames = false;
     canTaskDiagnosticsEnterStagePure(canTaskMcpDiagnostics,
@@ -363,7 +411,7 @@ static void canTaskMcp(void* arg) {
       while (batch < readBatchBudget &&
              processed + batch < MCP_RX_BUDGET &&
              Can_A.readMessage(&prefetched[batch]) == MCP2515::ERROR_OK) {
-        lanePrefetchedRxMs[batch] = (uint32_t)millis();
+        prefetchedRxMs[batch] = (uint32_t)millis();
         batch++;
       }
       if (batch == 0) break;
@@ -393,7 +441,7 @@ static void canTaskMcp(void* arg) {
       if (partyId == 0x238 && rxf.can_dlc == 8)
         countryOverrideObserve238CanA(rxf, countryRxEpoch);
       if (partyId == 0x3FD && rxf.can_dlc == 8)
-        laneGraphObserveBody(rxf, countryRxEpoch, lanePrefetchedRxMs[bi]);
+        visionControlObserveBody(rxf, countryRxEpoch, prefetchedRxMs[bi]);
       if (activeCanAIsParty()) {
         // Party CAN on CAN A: Nag Killer is topology-gated. Keep YL-only
         // DAS/Summon/visual-debug behavior explicitly model-gated so selecting
@@ -526,7 +574,7 @@ static void canTaskTwai(void* arg) {
                                      (uint32_t)millis());
     uint32_t countryRxEpoch = canTxEpochSnapshot();
     esp_err_t rxResult = twai_receive(&f, pdMS_TO_TICKS(2));
-    uint32_t laneRxMs = (uint32_t)millis();
+    uint32_t stockRxMs = (uint32_t)millis();
     while (rxBudget < TWAI_RX_DRAIN_BUDGET && rxResult == ESP_OK) {
       rxBudget++;
       canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
@@ -539,7 +587,7 @@ static void canTaskTwai(void* arg) {
       if (!f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
         const uint8_t timingMux = readMuxID(f.data);
         if (f.data_length_code == 8u && timingMux == 1u)
-          visionControlCacheStock(VISION_CONTROL_CHASSIS_PURE, f.data, countryRxEpoch, laneRxMs);
+          visionControlCacheStock(VISION_CONTROL_CHASSIS_PURE, f.data, countryRxEpoch, stockRxMs);
         const uint32_t r79FrameNowMs = (uint32_t)millis();
         mux1StockClaimed = r79ProcessStockFrame(f, timingMux, r79FrameNowMs);
       }
@@ -623,7 +671,7 @@ static void canTaskTwai(void* arg) {
         case DRIVER_ASSIST_ID:
           // Always retain stock telemetry before applying the production/research overlay.
           handle1016(f.data, f.data_length_code);
-          lab3f8FrameRxMs = laneRxMs;
+          lab3f8FrameRxMs = stockRxMs;
           lab3f8FrameRxEpoch = countryRxEpoch;
           injectDriverAssistControl(f);
           break;
@@ -633,7 +681,7 @@ static void canTaskTwai(void* arg) {
             if (mux == 1) {
               r79LabObserve3fdMux1(f.data, f.data_length_code);
               const bool ulcCloneClaimed = injectUlcSnooze3fdMux1(f);
-              laneGraphObserveStock(f, countryRxEpoch, mux1StockClaimed || ulcCloneClaimed, laneRxMs);
+              visionControlObserveStock(f, countryRxEpoch, mux1StockClaimed || ulcCloneClaimed, stockRxMs);
             } else if (mux == 0) injectTLSSC(f);
           }
           break;
@@ -647,7 +695,7 @@ static void canTaskTwai(void* arg) {
                                        (uint32_t)millis());
       countryRxEpoch = canTxEpochSnapshot();
       rxResult = rxBudget < TWAI_RX_DRAIN_BUDGET ? twai_receive(&f, 0) : ESP_ERR_TIMEOUT;
-      laneRxMs = (uint32_t)millis();
+      stockRxMs = (uint32_t)millis();
     }
 
     // Refresh Summon evidence before R79 retry/periodic servicing. The 5 s
@@ -693,15 +741,32 @@ static void canTaskTwai(void* arg) {
           canTwaiBusOffCount++;
           canTwaiLastEventReason = CAN_REC_TWAI_BUS_OFF;
           canTwaiLastEventMs = (uint32_t)now;
-          uint32_t frozenOrdinal = 0;
+          uint32_t frozenOrdinal = 0, frozenMs = 0;
           portENTER_CRITICAL(&canBTxTraceMux);
           frozenOrdinal = canBTxTraceFrozenBusOffOrdinal;
+          frozenMs = canBTxTraceFrozenMs;
           portEXIT_CRITICAL(&canBTxTraceMux);
+          bool snapshotValid = false;
+          uint32_t snapshotCapturedMs = 0;
+          portENTER_CRITICAL(&canRecoveryMux);
+          snapshotValid = canTwaiLastBusOffSnapshot.valid;
+          snapshotCapturedMs = canTwaiLastBusOffSnapshot.capturedMs;
+          portEXIT_CRITICAL(&canRecoveryMux);
+          bool snapshotMatchesFrozen = snapshotValid &&
+              snapshotCapturedMs == frozenMs &&
+              frozenOrdinal == canTwaiBusOffCount;
           if (frozenOrdinal != canTwaiBusOffCount) {
             // Alert delivery is normally immediate. If it was missed, preserve
             // the old poll-based behavior as a fail-safe and freeze now.
+            canTwaiObserveErrorAlerts(0u, true, (uint32_t)now);
             canBTraceFreezeBusOff((uint32_t)now);
-            recordTwaiBusOffSnapshot(st, (uint32_t)now);
+            frozenMs = (uint32_t)now;
+            snapshotMatchesFrozen = false;
+          }
+          if (!snapshotMatchesFrozen) {
+            // The alert path may have frozen trace/evidence while its immediate
+            // status read failed. Complete that snapshot from this poll.
+            recordTwaiBusOffSnapshot(st, frozenMs);
           }
           canBusOffPersistenceMarkDirty(CAN_BUS_OFF_BUS_B_PURE);
           T2CAN_SERIAL_PRINTLN("[CAN B] TWAI bus-off -> recovery started");
@@ -727,6 +792,7 @@ static void canTaskTwai(void* arg) {
           esp_err_t rs = twai_start();
           if (rs == ESP_OK) {
             canTwaiRestartOkCount++;
+            canTwaiResetErrorAlertWindow();
             twaiReady = true;
             T2CAN_SERIAL_PRINTLN("[CAN B] TWAI recovery complete -> restarted");
           } else {
@@ -860,6 +926,7 @@ static bool recoveryTwaiInstallFresh() {
                     TWAI_ALERT_BUS_ERROR | TWAI_ALERT_BUS_OFF |
                     TWAI_ALERT_RX_DATA | TWAI_ALERT_RX_QUEUE_FULL;
   twai_reconfigure_alerts(alerts, NULL);
+  canTwaiResetErrorAlertWindow();
   twaiReady = true;
   return true;
 }
@@ -1077,16 +1144,23 @@ static void canSupervisorTask(void* arg) {
     }
     canRecoverySupervisorTick(now);
 
+    // BUS-OFF persistence performs synchronous NVS write/read-back work.
+    // Re-sample time afterwards, then use half-range age handling so a
+    // concurrently published heartbeat can never look almost 2^32 ms old.
+    now = (uint32_t)millis();
+
     if (!canSubsystemBusy) {
       // Independent task heartbeat: still advances while the vehicle is asleep.
       // Therefore silence on the CAN wires is not confused with a wedged task.
       bool graceDone = (uint32_t)(now - canInitTime) >= RECOVERY_TASK_START_GRACE_MS;
       bool aTaskDead = canTaskMcpHandle && graceDone &&
-                       (canTaskMcpHeartbeatMs == 0 ||
-                        (uint32_t)(now - canTaskMcpHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
+                       canTaskHeartbeatTimedOutPure(
+                           now, canTaskMcpHeartbeatMs,
+                           RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
       bool bTaskDead = canTaskTwaiHandle && graceDone &&
-                       (canTaskTwaiHeartbeatMs == 0 ||
-                        (uint32_t)(now - canTaskTwaiHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
+                       canTaskHeartbeatTimedOutPure(
+                           now, canTaskTwaiHeartbeatMs,
+                           RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
       if (aTaskDead || bTaskDead) {
         T2CAN_SERIAL_PRINTF("[CAN SUP] task heartbeat stale A=%u B=%u\n", aTaskDead ? 1 : 0, bTaskDead ? 1 : 0);
         recordCanTaskHeartbeatTimeout(now, aTaskDead, bTaskDead);
