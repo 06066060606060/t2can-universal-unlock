@@ -23,6 +23,7 @@
  - Made Disable Driver Monitoring a standalone production feature, independent of Nag Killer.  
  - Promoted Visual Speed Control from LAB to Settings and removed 0x3FD from its name.  
  - Preserved existing AP, CAN health, signal freshness, routing, and transport safety checks.  
+ - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
 
 **v3.21**
 - Added Vision Speed Control — 0x3FD, which requests UI_enableVisionSpeedControl=0.
@@ -30,7 +31,7 @@
 - Improved CAN task diagnostics and Research Capture reliability.
 - Fixed several CAN synchronization and transmission safety issues.
 - New nag-killer mode tsl9 (work on some model with Body + Chassis profile)
-- And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
+
 - 
 **v3.7.2**
 - Lane-change instant cancel hotfix
