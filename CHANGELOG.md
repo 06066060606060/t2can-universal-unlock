@@ -1,3 +1,54 @@
+# T2CAN Universal v3.23.0
+
+## Standalone Driver Monitoring and production Visual Speed Control — 2026-10-08
+- Moves `Disable Driver Monitoring` out of Nag Killer into its own Settings toggle, storage key and API. Its runtime policy now depends only on the standalone selection, supported vehicle route and valid active AP state; Nag master, method and torque mode no longer participate.
+- Migrates the prior `features/dmsNag43` or `nag/dms43` selection into `features/dmsDisable` on first boot. A failed migration remains safely OFF and retries on a later boot; updates publish to live runtime only after the standalone value is durably saved.
+- Promotes `Visual Speed Control` from LAB to Settings, removes `0x3FD` from the feature name and makes its API/runtime independent of the LAB master. Existing supported routes, saved selection, stock-template freshness, active-AP gating, final transport checks and default-OFF behavior remain unchanged.
+- Adds canonical `/api/driver-monitoring/config` and `/api/vision-control/*` endpoints. The former LAB Vision endpoint aliases remain registered for compatibility, while the dashboard uses only the canonical production endpoints.
+- Adds pure, extracted-runtime, API/static and source/embedded browser regressions for standalone ownership, Nag/LAB independence, persistence and responsive Settings layouts. Technical diagnostics continue identifying the underlying CAN fields without using protocol identifiers as feature names.
+
+# T2CAN Universal v3.22.0
+
+## Retired LAB controls and fixed immediate CAN A receive — 2026-10-07
+- Removes Lane Graph selection, storage loaders, stock override, UI, API and feature-exclusive tests. Stock lane data is preserved; surviving Vision Control cache helpers retain equivalent freshness/epoch/profile/topology checks under independent names.
+- Removes Parked Injection Test sessions, parked AP bypasses, UI, APIs and dedicated CAN3FD timing capture rings/transport instrumentation. Ordinary AP and final transport gates remain active; normal BUS-OFF diagnostics/persistence/recovery remain intact.
+- Fixes CAN A RX to immediate single-frame processing. Removes the 4-frame batch option, saved-mode load/update API and LAB selector; previously saved values cannot reactivate batch processing.
+- Removes Blind Spot Injection Monitor UI, API and monitor-only capture fields. Existing Blind Spot injection policy remains unchanged.
+- Preserves previous DMS/Nag dependency and Vision Control LAB gating; standalone driver-monitoring disable and Vision promotion/renaming are outside the implemented scope.
+- Preserves completed v3.21.4. Updates retained regressions and offline preview; adds removal/fixed-RX and normal-AP gating regressions.
+
+# T2CAN Universal v3.21.4
+
+## Touch dropdown activation hotfix — 2026-10-07
+- Keeps native select suppression on pointerdown but opens the custom choice sheet only on completed click. This prevents the opening touch's click from hitting the newly inserted backdrop and immediately dismissing the sheet.
+- Supports browsers without PointerEvent by activating on completed single-touch touchend, cancelling moved, cancelled or multi-touch gestures and suppressing the subsequent compatibility click.
+- Preserves keyboard activation, independent backdrop/cancel dismissal, existing dashboard design, saved settings and all CAN behavior. Completed v3.21.3 remains unchanged.
+- Adds real Chromium touch-pipeline regressions for short/long touches, option selection/change ownership, drag/cancel, disabled controls, mouse/keyboard and legacy fallback. Updates the obsolete native-select guard contract to require completed activation.
+
+# T2CAN Universal v3.21.3
+
+## Parked test activation JSON hotfix — 2026-10-06
+- Fixes the parked status API's duplicated opening JSON brace, which prevented the dashboard from decoding state and left every parked-test toggle disabled.
+- Adds a regression that compiles the production status serializer with the real JSON writer and parses its output across ready, active, moving and LAB-disabled states.
+- Initializes the parked panel's polling clock and clears loading/error text after successful automatic retry; obsolete failed polls cannot overwrite a newer session action. Browser regressions exercise actual menu entry and timer-driven recovery.
+- Keeps all CAN injection policies, payloads, timing, masks and vehicle safety gates unchanged. Completed v3.21.2 remains unchanged.
+
+# T2CAN Universal v3.21.2
+
+## Parked 0x3FD injection diagnostic — 2026-10-06
+- Adds a volatile LAB parked test session with independent TLSSC/R79/DMS/Lane Graph/Vision selections. Fresh P and zero speed, inactive Summon, valid topology and healthy CAN are required; session expires after ten minutes and is not persisted.
+- Preserves actual AP state and existing feature choices. Selection changes, automatic stop, latest invalid gear/speed, pending work, final enqueue and post-send result ownership are protected by cancellation generations and the shared TX barrier.
+- Captures CAN B 0x3FD RX-dequeue, driver enqueue request/result and error-alert timestamps in a 256-event microsecond RAM ring. BUS-OFF freezes the ring; manual capture and CSV download are available in LAB.
+- Timestamps represent software observation and queue admission, not on-wire start/end or ACK. Parked traffic differs from active AP traffic; non-reproduction in P cannot exclude driving-only timing faults.
+
+# T2CAN Universal v3.21.1
+
+## CAN B BUS-OFF recovery race fix and alert evidence — 2026-10-06
+- Prevents synchronous BUS-OFF persistence from making newer CAN task heartbeats appear almost `2^32` ms old. The supervisor re-samples time after persistence and uses rollover-safe half-range age checks before requesting a full CAN reinitialization.
+- Captures whether `TX_FAILED`, `ERR_PASS` and `BUS_ERROR` alerts were observed before BUS-OFF, which relevant alerts shared the BUS-OFF read batch, and each alert's last age. These diagnostics do not change CAN IDs, payloads, timing, queues or transmit flags.
+- Extends the dual-slot BUS-OFF persistence record to v2 for the new alert evidence while retaining v1 decode compatibility.
+- Keeps completed v3.21.0 unchanged. The initial TX-side cause still requires controller/vehicle evidence; generic `BUS_ERROR` cannot distinguish ACK, bit, stuff, CRC or form errors.
+
 # T2CAN Universal v3.21.0
 
 ## LAB R79 manual-driving injection — 2026-10-05

@@ -84,8 +84,6 @@ static String nagCfgToJson() {
   jw.string("tsl9EffectiveRoute", activeProfileIsYl()
       ? "PARTY_0x399" : nagTsl9Body39BSelected()
           ? "BODY_0x39B" : "CHASSIS_0x399");
-  jw.boolean("dmsControlEnabled", c.dmsControlEnabled);
-  jw.boolean("dmsControlSupported", activeProfileDmsNagSupported());
   jw.boolean("pauseAtZeroSpeed", c.pauseAtZeroSpeed);
   jw.u32("modeHStopBehavior", c.modeHStopBehavior);
   jw.string("modeHStopBehaviorName", nagModeHStopBehaviorNamePure(c.modeHStopBehavior));
@@ -740,14 +738,12 @@ static String lab3f8RawHex(const uint8_t *data, uint8_t dlc) {
 static String ulcStatsToJson() {
   const uint32_t now = (uint32_t)millis();
   uint8_t alcMode, blindMode, ulcOffHighwayMode;
-  uint8_t lastTxBlind, lastTxStockBlind, lastTxSelectedBlind, lastTxResult;
-  bool lastTxValid, lastTxBlindChanged, lastTxBit56;
   uint32_t ulcOffTxOk, ulcOffTxFail, ulcOffBlocked, ulcOffLastTxMs;
   bool ulcOffLastTxValid;
   uint8_t ulcOffLastTxRaw;
   bool noConfirmEnabled, stockStalkConfirm, stockStalkConfirmValid, noConfirmLastTxValid, noConfirmLastTxBit1;
   uint8_t noConfirmTimingMode;
-  uint32_t lastTxMs, txOk, txFail, blocked, driverAssistLast;
+  uint32_t txOk, txFail, blocked, driverAssistLast;
   uint32_t noConfirmTxOk, noConfirmTxFail, noConfirmTxBOk, noConfirmTxBFail;
   uint32_t noConfirmBlocked, noConfirmBlockedB, noConfirmLastTxMs;
   bool driverAssistBValid;
@@ -763,14 +759,6 @@ static String ulcStatsToJson() {
   txOk = lab3f8TxOk;
   txFail = lab3f8TxFail;
   blocked = lab3f8GateBlocked;
-  lastTxValid = lab3f8LastTxValid;
-  lastTxBlind = lab3f8LastTxBlind;
-  lastTxStockBlind = lab3f8LastTxStockBlind;
-  lastTxSelectedBlind = lab3f8LastTxSelectedBlind;
-  lastTxBlindChanged = lab3f8LastTxBlindChanged;
-  lastTxResult = lab3f8LastTxResult;
-  lastTxMs = lab3f8LastTxMs;
-  lastTxBit56 = lab3f8LastTxBit56;
   ulcOffTxOk = ulcOffHighwayTxOk;
   ulcOffTxFail = ulcOffHighwayTxFail;
   ulcOffBlocked = ulcOffHighwayGateBlocked;
@@ -837,7 +825,6 @@ static String ulcStatsToJson() {
   const bool autoLcGate = uiAutoLaneChangeGateOpen();
   const uint32_t dasAge = dasLast == 0 ? 999999UL : (uint32_t)(now - dasLast);
   const uint32_t rxAge = driverAssistLast == 0 ? 999999UL : (uint32_t)(now - driverAssistLast);
-  const uint32_t lastTxAge = (!lastTxValid || lastTxMs == 0) ? 999999UL : (uint32_t)(now - lastTxMs);
   const uint32_t noConfirmLastTxAge = (!noConfirmLastTxValid || noConfirmLastTxMs == 0) ? 999999UL : (uint32_t)(now - noConfirmLastTxMs);
   const uint32_t ulcOffLastTxAge = (!ulcOffLastTxValid || ulcOffLastTxMs == 0) ? 999999UL : (uint32_t)(now - ulcOffLastTxMs);
   const uint32_t autoLcAAge = (!autoLcAValid || autoLcAMs == 0) ? 999999UL : (uint32_t)(now - autoLcAMs);
@@ -877,14 +864,6 @@ static String ulcStatsToJson() {
   jw.u32("txOk", (uint32_t)(txOk));
   jw.u32("txFail", (uint32_t)(txFail));
   jw.u32("gateBlocked", (uint32_t)(blocked));
-  jw.boolean("lastTxValid", lastTxValid);
-  jw.i32("lastTxBlind", (int32_t)(lastTxBlind));
-  jw.i32("lastTxStockBlind", (int32_t)(lastTxStockBlind));
-  jw.i32("lastTxSelectedBlind", (int32_t)(lastTxSelectedBlind));
-  jw.boolean("lastTxBlindChanged", lastTxBlindChanged);
-  jw.i32("lastTxResult", (int32_t)(lastTxResult));
-  jw.boolean("lastTxBit56", lastTxBit56);
-  jw.u32("lastTxAgeMs", (uint32_t)(lastTxAge));
   jw.boolean("stalkConfirmSupported", noConfirmSupported);
   jw.boolean("stalkConfirmEnabled", noConfirmEnabled);
   jw.i32("stalkConfirmTimingMode", (int32_t)(noConfirmTimingMode));
@@ -1014,9 +993,7 @@ static String r79StatsToJson() {
   dmsOnlyFail = r79DmsOnlyTxFail;
   dmsBlockedByR79 = r79DmsOnlyBlockedByR79;
   portEXIT_CRITICAL(&r79LabMux);
-  portENTER_CRITICAL(&nagCfgMux);
-  dmsNagEnabled = nagCfg.dmsControlEnabled;
-  portEXIT_CRITICAL(&nagCfgMux);
+  dmsNagEnabled = driverMonitoringControlSnapshot();
 
   String s;
   s.reserve(760);
@@ -1062,7 +1039,7 @@ static String r79StatsToJson() {
   jw.u32("bit47", hw3Active ? stockBit47 : 1u);
   jw.boolean("dmsNagSupported", activeProfileDmsNagSupported());
   jw.boolean("dmsNagEnabled", dmsNagEnabled);
-  jw.boolean("dmsNagActive", r79DmsNagActive());
+  jw.boolean("dmsNagActive", r79DmsControlActive());
   jw.boolean("stockBit43Valid", stockValid);
   jw.u32("stockBit43", stockBit43);
   jw.boolean("effectiveBit43Valid", lastTxValid);
@@ -1141,7 +1118,7 @@ static String canTrafficStatsToJson() {
 
 static String systemStatsToJson() {
   String s;
-  s.reserve(4600);
+  s.reserve(5200);
   JsonWriterArduino jw(s);
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t minFreeHeap = ESP.getMinFreeHeap();
@@ -1327,6 +1304,17 @@ static String systemStatsToJson() {
   jw.u32("twaiBusOffSnapshotRxOverrun", (uint32_t)(busOffSnap.rxOverrunCount));
   jw.u32("twaiBusOffSnapshotArbLost", (uint32_t)(busOffSnap.arbLostCount));
   jw.u32("twaiBusOffSnapshotBusError", (uint32_t)(busOffSnap.busErrorCount));
+  jw.u32("twaiBusOffSnapshotAlertSeenMask", busOffSnap.alertSeenMask);
+  jw.u32("twaiBusOffSnapshotAlertBatchMask", busOffSnap.alertBatchMask);
+  jw.u32("twaiBusOffSnapshotTxFailedAlertAgeMs",
+         (busOffSnap.alertSeenMask & TWAI_ALERT_TX_FAILED)
+             ? busOffSnap.txFailedAlertAgeMs : 999999UL);
+  jw.u32("twaiBusOffSnapshotErrPassAlertAgeMs",
+         (busOffSnap.alertSeenMask & TWAI_ALERT_ERR_PASS)
+             ? busOffSnap.errPassAlertAgeMs : 999999UL);
+  jw.u32("twaiBusOffSnapshotBusErrorAlertAgeMs",
+         (busOffSnap.alertSeenMask & TWAI_ALERT_BUS_ERROR)
+             ? busOffSnap.busErrorAlertAgeMs : 999999UL);
   uint8_t txTraceFrozenCount = 0;
   uint32_t txTraceFrozenMs = 0, txTraceBusOffOrdinal = 0;
   portENTER_CRITICAL(&canBTxTraceMux);
@@ -2900,6 +2888,37 @@ static void httpProfileStatus() {
   server.send(200, "application/json", vehicleProfileStatusJson());
 }
 
+static String driverMonitoringControlJson() {
+  String json;
+  JsonWriterArduino jw(json);
+  jw.boolean("enabled", driverMonitoringControlSnapshot());
+  jw.boolean("supported", activeProfileDmsNagSupported());
+  jw.boolean("active", r79DmsControlActive());
+  jw.finish();
+  return json;
+}
+
+static void httpDriverMonitoringControlConfig() {
+  server.send(200, "application/json", driverMonitoringControlJson());
+}
+
+static void httpDriverMonitoringControlUpdate() {
+  bool enabled;
+  if (server.args() != 1 || !httpBoolArg("enabled", enabled)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
+    return;
+  }
+  if (enabled && !activeProfileDmsNagSupported()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"driver monitoring control unavailable for current profile\"}");
+    return;
+  }
+  if (!driverMonitoringControlApply(enabled)) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"save failed\"}");
+    return;
+  }
+  server.send(200, "application/json", driverMonitoringControlJson());
+}
+
 static void httpFeatureStatus() {
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
@@ -3338,7 +3357,6 @@ static void httpNagSetMode() {
   uint8_t tsl9InputMode = TSL9_INPUT_MODE_DEFAULT_PURE;
   bool tsl9IsaChimeSuppress = false;
   uint8_t tsl9LegacyRoute = TSL9_LEGACY_ROUTE_DEFAULT_PURE;
-  bool dmsControlEnabled = false;
   portENTER_CRITICAL(&nagCfgMux);
   enabled = nagCfg.enabled;
   ignoreApState = nagCfg.ignoreApState;
@@ -3350,7 +3368,6 @@ static void httpNagSetMode() {
   tsl9InputMode = tsl9InputModeSanitizePure(nagCfg.tsl9InputMode);
   tsl9IsaChimeSuppress = nagCfg.tsl9IsaChimeSuppress;
   tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(nagCfg.tsl9LegacyRoute);
-  dmsControlEnabled = nagCfg.dmsControlEnabled;
   portEXIT_CRITICAL(&nagCfgMux);
 
   NagConfig nc;
@@ -3369,7 +3386,6 @@ static void httpNagSetMode() {
   nc.tsl9InputMode = tsl9InputMode;
   nc.tsl9IsaChimeSuppress = tsl9IsaChimeSuppress;
   nc.tsl9LegacyRoute = tsl9LegacyRoute;
-  nc.dmsControlEnabled = dmsControlEnabled;
   nagCfgCommit(nc);
   nagCfgSave();
   server.send(200, "application/json", nagCfgToJson());
@@ -3493,9 +3509,6 @@ static void httpNagUpdate() {
   if (server.hasArg("tsl9IsaChimeSuppress"))
     nc.tsl9IsaChimeSuppress = server.arg("tsl9IsaChimeSuppress") == "1" ||
         server.arg("tsl9IsaChimeSuppress") == "true";
-  if (server.hasArg("dmsControlEnabled"))
-    nc.dmsControlEnabled = server.arg("dmsControlEnabled") == "1" ||
-        server.arg("dmsControlEnabled") == "true";
   if (server.hasArg("tsl9LegacyRoute")) {
     const String raw = server.arg("tsl9LegacyRoute");
     if (raw != "0" && raw != "1") {
@@ -3722,6 +3735,7 @@ static bool httpRequireLab() {
   return false;
 }
 
+
 static String driverWindowLabStatsToJson() {
   const uint32_t now = (uint32_t)millis();
   const DriverWindowArmResultPure availability = driverWindowLabAvailability(now);
@@ -3790,50 +3804,6 @@ static void httpDriverWindowLabOpen() {
   server.send(result == DRIVER_WINDOW_ARM_OK ? 202 : 409,
               "application/json", driverWindowLabStatsToJson());
 }
-
-static void writeCanARxLabJson(JsonWriterArduino &jw) {
-  const uint8_t savedMode = canARxSavedMode;
-  jw.u32("savedMode", savedMode);
-  jw.u32("effectiveMode", canARxReadBatchBudgetPure(labMenuEnabled, savedMode) == 1
-                            ? CAN_A_RX_IMMEDIATE : CAN_A_RX_PREFETCH_4);
-  jw.boolean("labEnabled", labMenuEnabled);
-}
-
-static String canARxLabStatsToJson() {
-  String j;
-  j.reserve(96);
-  JsonWriterArduino jw(j);
-  jw.boolean("ok", true);
-  writeCanARxLabJson(jw);
-  jw.finish();
-  return j;
-}
-
-static void httpCanARxLabStats() {
-  if (!httpRequireLab()) return;
-  server.send(200, "application/json", canARxLabStatsToJson());
-}
-
-static void httpCanARxLabUpdate() {
-  if (!httpRequireLab()) return;
-  if (!server.hasArg("mode")) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing mode\"}");
-    return;
-  }
-  const String mode = server.arg("mode");
-  if (mode != "0" && mode != "1") {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid mode\"}");
-    return;
-  }
-  const uint8_t requested = mode == "1" ? CAN_A_RX_IMMEDIATE : CAN_A_RX_PREFETCH_4;
-  if (!canARxModePersist(requested)) {
-    server.send(500, "application/json", "{\"ok\":false,\"error\":\"CAN A RX mode NVS write failed\"}");
-    return;
-  }
-  canARxSavedMode = requested;
-  server.send(200, "application/json", canARxLabStatsToJson());
-}
-
 
 static void writeNagHumanV1ConfigJson(JsonWriterArduino &jw,
                                       const NagHumanV1ConfigPure &config) {
@@ -4267,12 +4237,10 @@ static void httpAutoLaneChangeLabStats() {
 
 
 static void httpVisionControlStats() {
-  if (!httpRequireLab()) return;
   server.send(200, "application/json", getVisionControlStatsJson());
 }
 
 static void httpVisionControlUpdate() {
-  if (!httpRequireLab()) return;
   if (!visionControlSupported()) {
     server.send(409, "application/json", "{\"error\":\"unsupported-profile\"}"); return;
   }
@@ -4452,100 +4420,6 @@ static void httpCountryOverrideUpdate() {
   }
   server.send(200, "application/json", countryOverrideStatsToJson());
 }
-
-static String laneGraphStatsToJson() {
-  const uint32_t now = (uint32_t)millis(), epoch = canTxEpochSnapshot();
-  uint8_t mode, bus, lastBit; bool lastValid; uint32_t ok, fail;
-  LaneGraphStockPure stock = {};
-  portENTER_CRITICAL(&r79LabMux);
-  mode = laneGraphMode; bus = laneGraphBus;
-  if (laneGraphBusValidPure(bus)) stock = laneGraphStock[bus];
-  lastBit = laneGraphLastTxBit45; lastValid = laneGraphLastTxValid;
-  ok = laneGraphTxOk; fail = laneGraphTxFail;
-  portEXIT_CRITICAL(&r79LabMux);
-  portENTER_CRITICAL(&stateMux);
-  const bool ap = dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4);
-  const bool fresh = dasAutopilotStateValid && (uint32_t)(now - lastDASStatusMillis) <= LANE_GRAPH_AP_FRESH_MS_PURE;
-  portEXIT_CRITICAL(&stateMux);
-  const bool supported = vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology);
-  const bool busSupported = laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus);
-  const bool stockCurrent = stock.valid && stock.epoch == epoch &&
-      stock.profile == activeVehicleProfile && stock.topology == activeVehicleTopology;
-  const bool stockValid = busSupported && laneGraphStockFreshPure(stock, now, epoch, activeVehicleProfile, activeVehicleTopology);
-  const uint8_t stockBit = stockCurrent ? ((stock.raw[5] >> 5) & 1u) : 0u;
-  const bool transportReady = !canTxAdministrativeHold &&
-      (bus == LANE_GRAPH_BODY_PURE ? mcpReady : twaiReady) &&
-      canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch,
-          bus == LANE_GRAPH_BODY_PURE ? CAN_TX_FRESH_PARTY : CAN_TX_FRESH_VH);
-  const bool active = laneGraphActive() && stockValid && transportReady;
-  const char *state = !busSupported ? "UNSUPPORTED" : mode == 0u || !labMenuEnabled ? "OFF" :
-      !transportReady ? "TRANSPORT_BLOCKED" : !stockCurrent ? "WAITING" :
-      !stockValid ? "STOCK_STALE" : !active ? "AP_INACTIVE" : "ACTIVE";
-  String out; out.reserve(600); JsonWriterArduino jw(out);
-  jw.u32("mode", mode);
-  jw.string("modeName", mode == 1u ? "AP_ACTIVE" : mode == 2u ? "ALWAYS" : "OFF");
-  jw.u32("bus", bus); jw.string("busName", bus == 1u ? "BODY" : "CHASSIS");
-  jw.boolean("busSelectorVisible", activeVehicleProfile != VEHICLE_MODEL_YL);
-  jw.boolean("bodySupported", laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, LANE_GRAPH_BODY_PURE));
-  jw.boolean("busSupported", busSupported);
-  jw.string("selectedBusName", bus == LANE_GRAPH_BODY_PURE ? "BODY" : activeVehicleProfile == VEHICLE_MODEL_YL ? "VH" : "CHASSIS");
-  jw.u32("selectedBusRx", stock.rx);
-  jw.u32("stockAgeMs", stockCurrent ? (uint32_t)(now - stock.lastMs) : 999999u);
-  jw.string("state", state);
-  jw.boolean("supported", supported); jw.boolean("labEnabled", labMenuEnabled);
-  jw.boolean("apActive", ap); jw.boolean("apFresh", fresh); jw.boolean("active", active);
-  jw.boolean("stockValid", stockValid); jw.u32("stockBit45", stockBit);
-  jw.boolean("effectiveBit45Valid", stockValid); jw.u32("effectiveBit45", active ? 1u : stockBit);
-  jw.boolean("lastTxValid", lastValid); jw.u32("lastTxBit45", lastBit);
-  jw.u32("txOk", ok); jw.u32("txFail", fail); jw.finish(); return out;
-}
-
-static void httpLaneGraphStats() {
-  if (!httpRequireLab()) return;
-  server.send(200, "application/json", laneGraphStatsToJson());
-}
-
-static void httpLaneGraphUpdate() {
-  if (!httpRequireLab()) return;
-  if (!vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology)) {
-    server.send(409, "application/json", "{\"error\":\"unsupported-profile\"}"); return;
-  }
-  const bool hasMode = server.hasArg("mode"), hasBus = server.hasArg("bus");
-  if (!hasMode && !hasBus) {
-    server.send(400, "application/json", "{\"error\":\"mode-or-bus-required\"}"); return;
-  }
-  uint8_t mode, bus;
-  portENTER_CRITICAL(&r79LabMux);
-  mode = laneGraphMode; bus = laneGraphBus;
-  portEXIT_CRITICAL(&r79LabMux);
-  if (hasMode) {
-    const String raw = server.arg("mode");
-    if (raw != "0" && raw != "1" && raw != "2") {
-      server.send(400, "application/json", "{\"error\":\"invalid-mode\"}"); return;
-    }
-    mode = (uint8_t)raw.toInt();
-  }
-  if (hasBus) {
-    const String raw = server.arg("bus");
-    if (raw != "0" && raw != "1") {
-      server.send(400, "application/json", "{\"error\":\"invalid-bus\"}"); return;
-    }
-    bus = (uint8_t)raw.toInt();
-  }
-  if (!laneGraphBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus)) {
-    server.send(409, "application/json", "{\"error\":\"unsupported-bus\"}"); return;
-  }
-  if (!laneGraphApplySelection(mode, bus)) {
-    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
-  }
-  server.send(200, "application/json", laneGraphStatsToJson());
-}
-
-static void httpUlcMonitorLabStats() {
-  if (!httpRequireLab()) return;
-  server.send(200, "application/json", ulcStatsToJson());
-}
-
 
 static void httpBlinkAStats() {
   server.send(200, "application/json", blinkAStatsToJson());
@@ -4890,9 +4764,7 @@ static String labLiteSnapshotToJson() {
   const char *r79TxReason = r79RuntimeReasonNameForUi(r79Runtime);
   bool dmsNagEnabled, dmsStockValid, dmsTxValid;
   uint8_t dmsStockBit43, dmsTxBit43;
-  portENTER_CRITICAL(&nagCfgMux);
-  dmsNagEnabled = nagCfg.dmsControlEnabled;
-  portEXIT_CRITICAL(&nagCfgMux);
+  dmsNagEnabled = driverMonitoringControlSnapshot();
   portENTER_CRITICAL(&r79LabMux);
   dmsStockValid = r79LabStockValid;
   dmsTxValid = r79LabLastTxValid;
@@ -4933,14 +4805,11 @@ static String labLiteSnapshotToJson() {
   jw.beginObject("dmsNag");
   jw.boolean("supported", activeProfileDmsNagSupported());
   jw.boolean("enabled", dmsNagEnabled);
-  jw.boolean("active", r79DmsNagActive());
+  jw.boolean("active", r79DmsControlActive());
   jw.boolean("stockValid", dmsStockValid);
   jw.u32("stockBit43", dmsStockBit43);
   jw.boolean("txValid", dmsTxValid);
   jw.u32("txBit43", dmsTxBit43);
-  jw.endObject();
-  jw.beginObject("canARx");
-  writeCanARxLabJson(jw);
   jw.endObject();
   jw.beginObject("alc");
   jw.boolean("alcValid", alcValid);
@@ -5423,6 +5292,8 @@ static bool resetRuntimeStats() {
   canBLastRxGapMs = 0;
   canBMaxRxGapMs = 0;
   canTwaiLastBusOffSnapshot = {};
+  canTwaiErrorAlertWindow = {};
+  canTwaiBusOffAlertEvidence = {};
   portEXIT_CRITICAL(&canRecoveryMux);
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
   canTaskDiagnosticsResetPure(canTaskTwaiDiagnostics);
@@ -5487,6 +5358,10 @@ static void webTask(void *arg) {
       server.on("/api/nag/update", HTTP_POST, httpNagUpdate);
       server.on("/api/nag/reset", HTTP_POST, httpNagReset);
     }
+    server.on("/api/driver-monitoring/config", HTTP_GET,
+              httpDriverMonitoringControlConfig);
+    server.on("/api/driver-monitoring/config", HTTP_POST,
+              httpDriverMonitoringControlUpdate);
     server.on("/api/summon/stats", HTTP_GET, httpSummonStats);
     server.on("/api/summon/tlssc-enable", HTTP_POST, httpSummonTlsscEnable);
     server.on("/api/summon/tlssc-disable", HTTP_POST, httpSummonTlsscDisable);
@@ -5498,8 +5373,6 @@ static void webTask(void *arg) {
     server.on("/api/blinkA/delay", HTTP_POST, httpBlinkADelay);
     server.on("/api/blinkA/timing", HTTP_POST, httpBlinkATiming);
     server.on("/api/blinkA/tx-mode", HTTP_POST, httpBlinkATxMode);
-    server.on("/api/lab/can-a-rx/stats", HTTP_GET, httpCanARxLabStats);
-    server.on("/api/lab/can-a-rx/update", HTTP_POST, httpCanARxLabUpdate);
     server.on("/api/lab/driver-window/stats", HTTP_GET, httpDriverWindowLabStats);
     server.on("/api/lab/driver-window/open", HTTP_POST, httpDriverWindowLabOpen);
     server.on("/api/features/status", HTTP_GET, httpFeatureStatus);
@@ -5521,15 +5394,14 @@ static void webTask(void *arg) {
     server.on("/api/ulc/update", HTTP_POST, httpUlcUpdate);
     server.on("/api/lab/auto-lane-change/stats", HTTP_GET, httpAutoLaneChangeLabStats);
     server.on("/api/lab/auto-lane-change/update", HTTP_POST, httpAutoLaneChangeLabUpdate);
+    server.on("/api/vision-control/stats", HTTP_GET, httpVisionControlStats);
+    server.on("/api/vision-control/update", HTTP_POST, httpVisionControlUpdate);
     server.on("/api/lab/vision-control/stats", HTTP_GET, httpVisionControlStats);
     server.on("/api/lab/vision-control/update", HTTP_POST, httpVisionControlUpdate);
     server.on("/api/country/stats", HTTP_GET, httpCountryOverrideStats);
     server.on("/api/country/update", HTTP_POST, httpCountryOverrideUpdate);
-    server.on("/api/lab/lane-graph/stats", HTTP_GET, httpLaneGraphStats);
-    server.on("/api/lab/lane-graph/update", HTTP_POST, httpLaneGraphUpdate);
     server.on("/api/lab/country/stats", HTTP_GET, httpCountryOverrideStats);
     server.on("/api/lab/country/update", HTTP_POST, httpCountryOverrideUpdate);
-    server.on("/api/lab/ulc-monitor/stats", HTTP_GET, httpUlcMonitorLabStats);
     server.on("/api/researchcapture/stats", HTTP_GET, httpResearchCaptureStats);
     server.on("/api/researchcapture/start", HTTP_POST, httpResearchCaptureStart);
     server.on("/api/researchcapture/labels", HTTP_POST, httpResearchCaptureLabels);

@@ -137,10 +137,11 @@ static volatile uint8_t dasAutoLaneChangeState = 0xFF;
 static volatile bool dasAutoLaneChangeStateValid = false;
 // v3.3 top-level feature switches loaded before CAN/BLE runtime starts.
 static volatile bool labMenuEnabled = false;
-static volatile uint8_t canARxSavedMode = CAN_A_RX_PREFETCH_4;
 static volatile bool bannedCar = false;
 static volatile bool tlsscRestoreEnabled = false;
 static volatile bool doorOpenCancelEnabled = false;
+static portMUX_TYPE driverMonitoringControlMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool driverMonitoringDisableEnabled = false;
 static SemaphoreHandle_t canTxBarrierMutex = nullptr;
 static CanTxBarrierState canTxBarrierState = {1, 0};
 

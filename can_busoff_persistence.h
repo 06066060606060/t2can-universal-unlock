@@ -150,6 +150,11 @@ static void canBusOffPersistenceRestoreRecord(const CanBusOffRecordPure &record)
     canTwaiLastBusOffSnapshot.rxOverrunCount = record.snapshot.rxOverrunCount;
     canTwaiLastBusOffSnapshot.arbLostCount = record.snapshot.arbLostCount;
     canTwaiLastBusOffSnapshot.busErrorCount = record.snapshot.busErrorCount;
+    canTwaiLastBusOffSnapshot.alertSeenMask = record.snapshot.alertSeenMask;
+    canTwaiLastBusOffSnapshot.alertBatchMask = record.snapshot.alertBatchMask;
+    canTwaiLastBusOffSnapshot.txFailedAlertAgeMs = record.snapshot.txFailedAlertAgeMs;
+    canTwaiLastBusOffSnapshot.errPassAlertAgeMs = record.snapshot.errPassAlertAgeMs;
+    canTwaiLastBusOffSnapshot.busErrorAlertAgeMs = record.snapshot.busErrorAlertAgeMs;
     portEXIT_CRITICAL(&canRecoveryMux);
     portENTER_CRITICAL(&canBTxTraceMux);
     canBTxTraceFrozenCount = record.traceCount;
@@ -269,6 +274,11 @@ static void canBusOffPersistenceSnapshot(uint8_t bus,
     record.snapshot.rxOverrunCount = canTwaiLastBusOffSnapshot.rxOverrunCount;
     record.snapshot.arbLostCount = canTwaiLastBusOffSnapshot.arbLostCount;
     record.snapshot.busErrorCount = canTwaiLastBusOffSnapshot.busErrorCount;
+    record.snapshot.alertSeenMask = canTwaiLastBusOffSnapshot.alertSeenMask;
+    record.snapshot.alertBatchMask = canTwaiLastBusOffSnapshot.alertBatchMask;
+    record.snapshot.txFailedAlertAgeMs = canTwaiLastBusOffSnapshot.txFailedAlertAgeMs;
+    record.snapshot.errPassAlertAgeMs = canTwaiLastBusOffSnapshot.errPassAlertAgeMs;
+    record.snapshot.busErrorAlertAgeMs = canTwaiLastBusOffSnapshot.busErrorAlertAgeMs;
     portEXIT_CRITICAL(&canRecoveryMux);
     portENTER_CRITICAL(&canBTxTraceMux);
     record.traceCount = canBTxTraceFrozenCount > CAN_BUS_OFF_TRACE_CAPACITY_PURE
