@@ -13,12 +13,15 @@ struct UlcCompositeSelectionPure {
   uint8_t ulcOffHighwayMode;
   uint8_t blindSpotMode;
   bool confirmFreeEnabled;
+  bool summonHeartbeatOverrideEnabled;
+  uint8_t summonHeartbeatValue;
 };
 
 struct UlcCompositeGatesPure {
   bool alcAutosteerOpen;
   bool ulcApOpen;
   bool confirmFreeOpen;
+  bool summonHeartbeatOverrideOpen;
 };
 
 struct UlcCompositeResultPure {
@@ -27,6 +30,7 @@ struct UlcCompositeResultPure {
   bool ulcOffHighwayChanged;
   bool blindSpotChanged;
   bool confirmFreeChanged;
+  bool summonHeartbeatApplied;
 };
 
 static inline UlcCompositeResultPure ulcCompose3f8Pure(
@@ -37,7 +41,9 @@ static inline UlcCompositeResultPure ulcCompose3f8Pure(
       (selected.ulcOffHighwayMode != ULC_COMPOSITE_STOCK_PURE &&
        selected.ulcOffHighwayMode > 1u) ||
       (selected.blindSpotMode != ULC_COMPOSITE_STOCK_PURE &&
-       selected.blindSpotMode > 2u)) {
+       selected.blindSpotMode > 2u) ||
+      (selected.summonHeartbeatOverrideEnabled &&
+       selected.summonHeartbeatValue > 3u)) {
     return result;
   }
 
@@ -74,8 +80,18 @@ static inline UlcCompositeResultPure ulcCompose3f8Pure(
     result.confirmFreeChanged = true;
   }
 
+  // UI_summonHeartbeat is a two-bit raw field at bits 2-3. Mark it applied
+  // whenever its session override gate is open so the caller mirrors every
+  // valid stock 0x3F8 frame, even when the selected raw value already matches.
+  if (selected.summonHeartbeatOverrideEnabled &&
+      gates.summonHeartbeatOverrideOpen) {
+    data[0] = (uint8_t)((data[0] & 0xF3u) |
+        (uint8_t)(selected.summonHeartbeatValue << 2));
+    result.summonHeartbeatApplied = true;
+  }
+
   result.changed = result.alcOffHighwayChanged ||
       result.ulcOffHighwayChanged || result.blindSpotChanged ||
-      result.confirmFreeChanged;
+      result.confirmFreeChanged || result.summonHeartbeatApplied;
   return result;
 }

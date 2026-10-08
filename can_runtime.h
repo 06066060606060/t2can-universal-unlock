@@ -110,6 +110,7 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   // scheduler will retry only after a fresh route-local MUX1 template arrives.
   tsl9InputRequestCancel(TSL9_INPUT_FAILURE_CAN_UNAVAILABLE_PURE, true);
   driverWindowLabResetRuntimeUnderTxBarrier();
+  summonHeartbeatOverrideResetUnderTxBarrier();
 
   // These transient feature requests are inexpensive to restart and are cleared
   // at either controller recovery so they cannot cross a changed CAN epoch.
@@ -338,7 +339,7 @@ static bool mcpInitChecked() {
                                    ? Can_A.setBitrate(CAN_500KBPS, MCP_CLOCK)
                                    : resetErr;
   const MCP2515::ERROR modeErr = (rateErr == MCP2515::ERROR_OK)
-                                   ? Can_A.setNormalMode()
+                                   ? (canUsbPassive() ? Can_A.setListenOnlyMode() : Can_A.setNormalMode())
                                    : rateErr;
   const bool ok = resetErr == MCP2515::ERROR_OK &&
                   rateErr == MCP2515::ERROR_OK &&
@@ -412,6 +413,10 @@ static void canTaskMcp(void* arg) {
              processed + batch < MCP_RX_BUDGET &&
              Can_A.readMessage(&prefetched[batch]) == MCP2515::ERROR_OK) {
         prefetchedRxMs[batch] = (uint32_t)millis();
+        const struct can_frame &raw = prefetched[batch];
+        canUsbObserve(0, raw.can_id & ((raw.can_id & 0x80000000UL) ? 0x1FFFFFFFUL : 0x7FFUL),
+            ((raw.can_id & 0x80000000UL) ? 1 : 0) | ((raw.can_id & 0x40000000UL) ? 2 : 0),
+            raw.can_dlc, raw.data);
         batch++;
       }
       if (batch == 0) break;
@@ -426,6 +431,7 @@ static void canTaskMcp(void* arg) {
       lastCanAFrameMs = frameNow;
       mcpRxCount++;
       canRxObserve(CAN_RX_BUS_PARTY, frameNow);
+      if (canUsbPassive()) continue;
       // All downstream Model YL decoders and TX decisions expect standard
       // 11-bit DATA frames. Aggregate telemetry still counts rejected frames.
       if ((rxf.can_id & 0xC0000000UL) != 0) continue;
@@ -577,6 +583,8 @@ static void canTaskTwai(void* arg) {
     uint32_t stockRxMs = (uint32_t)millis();
     while (rxBudget < TWAI_RX_DRAIN_BUDGET && rxResult == ESP_OK) {
       rxBudget++;
+      canUsbObserve(1, f.identifier, (f.extd ? 1 : 0) | (f.rtr ? 2 : 0),
+                    f.data_length_code, f.data);
       canTaskDiagnosticsEnterStagePure(canTaskTwaiDiagnostics,
                                        CAN_TASK_STAGE_PROCESS,
                                        (uint32_t)millis());
@@ -584,7 +592,7 @@ static void canTaskTwai(void* arg) {
       // accounting, capture, and normal decoding. Preserve the existing d1
       // fail-open/manual-latch authorization policy inside the fast function.
       bool mux1StockClaimed = false;
-      if (!f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
+      if (!canUsbPassive() && !f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
         const uint8_t timingMux = readMuxID(f.data);
         if (f.data_length_code == 8u && timingMux == 1u)
           visionControlCacheStock(VISION_CONTROL_CHASSIS_PURE, f.data, countryRxEpoch, stockRxMs);
@@ -604,7 +612,7 @@ static void canTaskTwai(void* arg) {
       lastCanBFrameMs = frameNow;
       canRxObserve(CAN_RX_BUS_VH, frameNow);
       // Only standard 11-bit DATA frames may reach Tesla decoders or TX paths.
-      if (!f.extd && !f.rtr) {
+      if (!canUsbPassive() && !f.extd && !f.rtr) {
         canTxMarkFresh(CAN_TX_FRESH_VH);
         bootCaptureObserveVhFrame(f.identifier, f.data_length_code);
         researchCaptureObserveVh((uint16_t)f.identifier, f.data_length_code, f.data);
@@ -903,7 +911,8 @@ static bool recoveryMcpColdInit() {
 
 static bool recoveryTwaiInstallFresh() {
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
-      (gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX, TWAI_MODE_NORMAL);
+      (gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX,
+      canUsbPassive() ? TWAI_MODE_LISTEN_ONLY : TWAI_MODE_NORMAL);
   g.rx_queue_len = 256;
   g.tx_queue_len = TWAI_TX_QUEUE_LEN;
   twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
@@ -928,6 +937,7 @@ static bool recoveryTwaiInstallFresh() {
   twai_reconfigure_alerts(alerts, NULL);
   canTwaiResetErrorAlertWindow();
   twaiReady = true;
+  __atomic_fetch_add(&canUsbControllerEpoch, 1U, __ATOMIC_RELAXED);
   return true;
 }
 
@@ -994,6 +1004,9 @@ static bool prepareCanForMaintenance() {
     return ok;
   };
   if (__atomic_load_n(&canMaintenanceStopped, __ATOMIC_ACQUIRE)) return finish(true);
+  canMaintenanceObservedCanRuntime = canMaintenanceObservedCanRuntime ||
+      mcpReady || twaiReady || canSupervisorHandle ||
+      canTaskMcpHandle || canTaskTwaiHandle;
   // Publish the hold first; then drain any sender that already owns the barrier.
   canTxAdministrativeHold = true;
   if (canTxBarrierMutex) {
@@ -1013,6 +1026,14 @@ static bool prepareCanForMaintenance() {
     if ((uint32_t)((uint32_t)millis() - started) >= 500u) return finish(false);
     vTaskDelay(pdMS_TO_TICKS(5));
   }
+  // Web-only setup never starts CAN. Capture this before clearing readiness:
+  // ESP-IDF 5.5.5 returns INVALID_ARG for the legacy TWAI API's null driver
+  // handle, whereas earlier drivers report INVALID_STATE. Do not extend this
+  // exception to configured operation or a partially initialized controller.
+  const bool setupOnly = !canMaintenanceObservedCanRuntime &&
+      (vehicleProfileSetupMode || vehicleProfileNvsError) &&
+      !canSupervisorHandle && !canTaskMcpHandle && !canTaskTwaiHandle &&
+      !mcpReady && !twaiReady;
   // All CAN owners are parked; reset holds CAN A inactive and discards TX buffers.
   mcpReady = false;
   pinMode(MCP2515_RST, OUTPUT);
@@ -1025,7 +1046,8 @@ static bool prepareCanForMaintenance() {
     if (st.state == TWAI_STATE_RECOVERING) return finish(false);
     // Uninstall is legal in STOPPED or BUS_OFF; no bus recovery/start is needed.
     if (twai_driver_uninstall() != ESP_OK) return finish(false);
-  } else if (status != ESP_ERR_INVALID_STATE) {
+  } else if (status != ESP_ERR_INVALID_STATE &&
+             !(setupOnly && status == ESP_ERR_INVALID_ARG)) {
     return finish(false);
   }
   // Driver uninstall discards both queues and disables the peripheral.
@@ -1133,12 +1155,81 @@ static void canRecoverySupervisorTick(uint32_t now) {
   canBusOffPersistenceService(now);
 }
 
+// Hardware mode changes have one owner: the CAN supervisor. USB waits for the
+// acknowledgement and starts a capture only after both controllers are ready.
+static void canUsbModeService() {
+  if (!__atomic_exchange_n(&canUsbModePending, false, __ATOMIC_ACQ_REL)) return;
+  bool ok = false;
+  if (!canMaintenanceActive() && !canSubsystemBusy) {
+    canSubsystemBusy = true;
+    canTasksStopping = true;
+    const uint32_t started = (uint32_t)millis();
+    while ((!canTaskMcpQuiesced || !canTaskTwaiQuiesced) &&
+           (uint32_t)((uint32_t)millis() - started) < 1000U)
+      vTaskDelay(pdMS_TO_TICKS(5));
+    // Never delete a task that may still own SPI or touch the TWAI driver.
+    if (canTaskMcpQuiesced && canTaskTwaiQuiesced) {
+      if (canTaskMcpHandle) vTaskDelete(canTaskMcpHandle);
+      if (canTaskTwaiHandle) vTaskDelete(canTaskTwaiHandle);
+      canTaskMcpHandle = canTaskTwaiHandle = nullptr;
+      invalidateCanTxStateForFullRecovery();
+      const bool aOk = recoveryMcpColdInit();
+      const bool bOk = recoveryTwaiFullReinit();
+      canTasksStopping = false;
+      canTaskMcpQuiesced = canTaskTwaiQuiesced = false;
+      lastCanAFrameMs = lastCanBFrameMs = 0;
+      canInitTime = (uint32_t)millis();
+      ok = aOk && bOk && recoveryStartCanTasks();
+      // Leaving PASSIVE is persisted only after the hardware transition succeeds.
+      if (ok && !canUsbPassive()) ok = canUsbSaveMode(false);
+    }
+    canSubsystemBusy = false;
+  }
+  if (ok && canTxBarrierMutex && xSemaphoreTake(canTxBarrierMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    __atomic_store_n(&canUsbTransitionHeld, false, __ATOMIC_RELEASE);
+    canTxAdministrativeHold = canTxAdministrativeRequested ||
+                              canMaintenanceActive() || canUsbTxHeld();
+    xSemaphoreGive(canTxBarrierMutex);
+  } else ok = false;
+  __atomic_store_n(&canUsbModeResult, ok, __ATOMIC_RELEASE);
+  __atomic_store_n(&canUsbModeFinished, true, __ATOMIC_RELEASE);
+}
+
+static bool canUsbRequestMode(bool passive) {
+  if (canMaintenanceActive() || !mcpReady || !twaiReady || !canSupervisorHandle ||
+      !canTaskMcpHandle || !canTaskTwaiHandle ||
+      __atomic_load_n(&canUsbModePending, __ATOMIC_ACQUIRE)) return false;
+  if (passive == canUsbPassive() &&
+      !__atomic_load_n(&canUsbTransitionHeld, __ATOMIC_ACQUIRE)) return true;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, pdMS_TO_TICKS(500)) != pdTRUE)
+    return false;
+  __atomic_store_n(&canUsbTransitionHeld, true, __ATOMIC_RELEASE);
+  canTxAdministrativeHold = true;
+  xSemaphoreGive(canTxBarrierMutex);
+  if (passive && !canUsbSaveMode(true)) return false;
+  __atomic_store_n(&canUsbPassiveMode, passive, __ATOMIC_RELEASE);
+  __atomic_store_n(&canUsbModeFinished, false, __ATOMIC_RELEASE);
+  __atomic_store_n(&canUsbModeResult, false, __ATOMIC_RELEASE);
+  __atomic_store_n(&canUsbModePending, true, __ATOMIC_RELEASE);
+  const uint32_t start = (uint32_t)millis();
+  while (!__atomic_load_n(&canUsbModeFinished, __ATOMIC_ACQUIRE) &&
+         (uint32_t)((uint32_t)millis() - start) < 5000U)
+    vTaskDelay(pdMS_TO_TICKS(10));
+  return __atomic_load_n(&canUsbModeFinished, __ATOMIC_ACQUIRE) &&
+         __atomic_load_n(&canUsbModeResult, __ATOMIC_ACQUIRE);
+}
+
 static void canSupervisorTask(void* arg) {
   T2CAN_SERIAL_PRINTLN("[CAN SUP] recovery-only supervisor started");
   for (;;) {
     uint32_t now = (uint32_t)millis();
     if (canMaintenanceActive()) {
       __atomic_store_n(&canMaintenanceSupervisorParked, true, __ATOMIC_RELEASE);
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+    canUsbModeService();
+    if (__atomic_load_n(&canUsbTransitionHeld, __ATOMIC_ACQUIRE)) {
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
@@ -1172,7 +1263,11 @@ static void canSupervisorTask(void* arg) {
       bool bothFresh = aFresh && bFresh;
       bool anyFresh = aFresh || bFresh;
 
-      if (bothFresh) {
+      if (canUsbPassive()) {
+        // A single connected bus or sleeping vehicle is normal in survey mode.
+        recoveryOneBusStaleStartMs = 0;
+        recoveryWakeAcquireStartMs = 0;
+      } else if (bothFresh) {
         if (!recoveryEverBothActive || recoverySleeping || recoveryWakeAcquireStartMs != 0) {
           T2CAN_SERIAL_PRINTLN("[CAN SUP] CAN A+B active");
         }

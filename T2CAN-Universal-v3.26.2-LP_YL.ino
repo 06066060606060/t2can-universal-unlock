@@ -1,4 +1,4 @@
-// T2CAN Universal v3.23.0 - Model 3/Y / Model YL firmware
+// T2CAN Universal v3.26.2 - Model 3/Y / Model YL firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -30,6 +30,12 @@
 #define T2CAN_SERIAL_DIAGNOSTICS 0
 #endif
 #include "serial_diag.h"
+#if T2CAN_SERIAL_DIAGNOSTICS
+#error "USB CAN logger requires diagnostics disabled to preserve protocol framing"
+#endif
+#if !ARDUINO_USB_MODE || !ARDUINO_USB_CDC_ON_BOOT
+#error "USB CAN logger requires Hardware CDC and JTAG with CDC on boot"
+#endif
 #include "index_html.h"
 #include "lab_fonts.h"
 #include "dashboard_icon.h"
@@ -71,10 +77,11 @@
 #include "fixed_point_arduino.h"
 #include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.23.0"
+#define FW_VERSION "v3.26.2"
 
 #include "t2can_core_state.h"
 #include "t2can_forward.h"
+#include "can_usb_logger.h"
 #include "can_research_capture.h"
 #include "driver_monitor_capture.h"
 #include "s3xy_ble.h"
@@ -83,10 +90,13 @@
 #include "vehicle_logic.h"
 #include "web_api.h"
 #include "can_runtime.h"
+#include "can_usb_logger_task.h"
 
 void setup() {
   bootTime = millis();
-  T2CAN_SERIAL_BEGIN(115200);
+  Serial.begin(115200);
+  canUsbLoadMode();
+  setCanTxAdministrativeHold(false);
   delay(100); // Boot settle retained for behavior compatibility; CAN startup is not held here
 
   rtcBootCount++;
@@ -260,7 +270,8 @@ void setup() {
   // ══ Init CAN B (TWAI) ══
   T2CAN_SERIAL_PRINTLN("[CAN B] Initializing TWAI...");
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
-      (gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX, TWAI_MODE_NORMAL);
+      (gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX,
+      canUsbPassive() ? TWAI_MODE_LISTEN_ONLY : TWAI_MODE_NORMAL);
   g.rx_queue_len = 256;
   g.tx_queue_len = TWAI_TX_QUEUE_LEN;
   twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
@@ -331,6 +342,8 @@ void setup() {
   }
 
   T2CAN_SERIAL_PRINTLN("BOOT OK");
+  canUsbStartTask();
+  __atomic_fetch_add(&canUsbControllerEpoch, 1U, __ATOMIC_RELAXED);
 }
 
 void loop() {

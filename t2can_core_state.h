@@ -142,6 +142,12 @@ static volatile bool tlsscRestoreEnabled = false;
 static volatile bool doorOpenCancelEnabled = false;
 static portMUX_TYPE driverMonitoringControlMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool driverMonitoringDisableEnabled = false;
+static portMUX_TYPE isaSuppressionControlMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool isaSuppressionEnabled = false;
+static volatile uint32_t isaSuppressionGeneration = 0;
+static volatile uint32_t isaSuppressionModified = 0;
+static volatile uint32_t isaSuppressionTxOk = 0;
+static volatile uint32_t isaSuppressionTxFail = 0;
 static SemaphoreHandle_t canTxBarrierMutex = nullptr;
 static CanTxBarrierState canTxBarrierState = {1, 0};
 

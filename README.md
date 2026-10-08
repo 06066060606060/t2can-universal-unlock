@@ -8,14 +8,21 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.23
+# T2CAN Universal Unlock v3.26.2
 
 **Major Universal Release**  
-**Release date:** 7 October 2026  
+**Release date:** 8 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
-**v3.23 Highlights**  
+**v3.26 Highlights** 
+ - Fixed initial setup recovery, added clear save-error messages, and prevented duplicate saves.
+ - Added USB CAN logging and a persistent listen-only mode. (not for everyone)
+ - Added a LAB control for the Summon heartbeat value.
+ - Made ISA Suppression independent of Nag Killer.
+ - Improved long diagnostic text layout on mobile screens.
+
+**v3.23**  
  - Improved CAN reliability, including safer BUS-OFF recovery and expanded error diagnostics.  
  - Simplified CAN A reception with immediate single-frame processing.  
  - Removed completed or obsolete LAB tools, including Lane Graph, Parked 0x3FD Injection, and Blind Spot Injection Monitor.  
@@ -24,23 +31,6 @@
  - Promoted Visual Speed Control from LAB to Settings and removed 0x3FD from its name.  
  - Preserved existing AP, CAN health, signal freshness, routing, and transport safety checks.  
  - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
-
-**v3.21**
-- Added Vision Speed Control — 0x3FD, which requests UI_enableVisionSpeedControl=0.
-- Independent Country and Map Region settings
-- Improved CAN task diagnostics and Research Capture reliability.
-- Fixed several CAN synchronization and transmission safety issues.
-- New nag-killer mode tsl9 (work on some model with Body + Chassis profile)
-
-- 
-**v3.7.2**
-- Lane-change instant cancel hotfix
-- new R79 policy
-- Nag-killer Mode H Rev.4
-- Auto Blinker stabilization and cancel pause
-- AP Right Scroll warning recovery
-- Full mobile dashboard redesign
-- Performance and resource optimizations
 
 
 ## 📋3.0 Release Highlights  

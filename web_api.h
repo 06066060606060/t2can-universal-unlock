@@ -76,7 +76,6 @@ static String nagCfgToJson() {
   jw.u32("torqueRightScrollPattern", torqueRightScrollPattern);
   jw.boolean("tsl9RightPeriodicEnabled", tsl9RightPeriodicEnabled);
   jw.u32("tsl9RightPeriodicIntervalSeconds", tsl9RightPeriodicInterval);
-  jw.boolean("tsl9IsaChimeSuppress", c.tsl9IsaChimeSuppress);
   jw.u32("tsl9LegacyRoute", tsl9LegacyRouteSanitizePure(c.tsl9LegacyRoute));
   jw.boolean("tsl9LegacyRouteSelectable",
       vehicleProfileLegacyTsl9RouteSelectable(
@@ -177,13 +176,12 @@ static String nagStatsToJson() {
   const NagHumanV4ConfigPure humanV4Config = nagHumanV4RuntimeConfigSnapshot();
   const bool humanPaused = humanMode && humanV4.base.phase == H1_PAUSED_STOPPED;
   const bool stoppedGate = nagPauseAtZeroBlocksPure(pauseAtZero, c.vehicleSpeedValid, speedFresh, c.vehicleSpeedRaw) || humanPaused;
-  uint32_t tsl9Rx, tsl9Modified, tsl9HandsOnModified, tsl9IsaModified;
+  uint32_t tsl9Rx, tsl9Modified, tsl9HandsOnModified;
   uint32_t tsl9TxOk, tsl9TxFail;
   portENTER_CRITICAL(&nagTsl9Mux);
   tsl9Rx = nagTsl9Rx;
   tsl9Modified = nagTsl9Modified;
   tsl9HandsOnModified = nagTsl9HandsOnModified;
-  tsl9IsaModified = nagTsl9IsaModified;
   tsl9TxOk = nagTsl9TxOk;
   tsl9TxFail = nagTsl9TxFail;
   portEXIT_CRITICAL(&nagTsl9Mux);
@@ -220,7 +218,6 @@ static String nagStatsToJson() {
   jw.u32("tsl9Rx", tsl9Rx);
   jw.u32("tsl9Modified", tsl9Modified);
   jw.u32("tsl9HandsOnModified", tsl9HandsOnModified);
-  jw.u32("tsl9IsaModified", tsl9IsaModified);
   jw.u32("tsl9TxOk", tsl9TxOk);
   jw.u32("tsl9TxFail", tsl9TxFail);
   jw.boolean("tsl9InputActive", tsl9Input.active);
@@ -2919,6 +2916,49 @@ static void httpDriverMonitoringControlUpdate() {
   server.send(200, "application/json", driverMonitoringControlJson());
 }
 
+static String isaSuppressionControlJson() {
+  uint32_t modified, txOk, txFail;
+  portENTER_CRITICAL(&isaSuppressionControlMux);
+  modified = isaSuppressionModified;
+  txOk = isaSuppressionTxOk;
+  txFail = isaSuppressionTxFail;
+  portEXIT_CRITICAL(&isaSuppressionControlMux);
+  String json;
+  JsonWriterArduino jw(json);
+  jw.boolean("enabled", isaSuppressionControlSnapshot());
+  jw.boolean("supported", activeProfileNagTsl9Supported());
+  jw.boolean("active", isaSuppressionControlActive());
+  jw.string("route", activeProfileIsYl()
+      ? "PARTY_0x399" : nagTsl9Body39BSelected()
+          ? "BODY_0x39B" : "CHASSIS_0x399");
+  jw.u32("modified", modified);
+  jw.u32("txOk", txOk);
+  jw.u32("txFail", txFail);
+  jw.finish();
+  return json;
+}
+
+static void httpIsaSuppressionControlConfig() {
+  server.send(200, "application/json", isaSuppressionControlJson());
+}
+
+static void httpIsaSuppressionControlUpdate() {
+  bool enabled;
+  if (server.args() != 1 || !httpBoolArg("enabled", enabled)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
+    return;
+  }
+  if (enabled && !activeProfileNagTsl9Supported()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"ISA suppression unavailable for current profile\"}");
+    return;
+  }
+  if (!isaSuppressionControlApply(enabled)) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"save failed\"}");
+    return;
+  }
+  server.send(200, "application/json", isaSuppressionControlJson());
+}
+
 static void httpFeatureStatus() {
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
@@ -3355,7 +3395,6 @@ static void httpNagSetMode() {
   uint8_t tsl9Sequence = TSL9_SEQUENCE_DEFAULT_PURE;
   uint8_t tsl9Window = TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE;
   uint8_t tsl9InputMode = TSL9_INPUT_MODE_DEFAULT_PURE;
-  bool tsl9IsaChimeSuppress = false;
   uint8_t tsl9LegacyRoute = TSL9_LEGACY_ROUTE_DEFAULT_PURE;
   portENTER_CRITICAL(&nagCfgMux);
   enabled = nagCfg.enabled;
@@ -3366,7 +3405,6 @@ static void httpNagSetMode() {
   tsl9Window = tsl9DowngradeWindowSanitizePure(
       nagCfg.tsl9DowngradeWindow);
   tsl9InputMode = tsl9InputModeSanitizePure(nagCfg.tsl9InputMode);
-  tsl9IsaChimeSuppress = nagCfg.tsl9IsaChimeSuppress;
   tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(nagCfg.tsl9LegacyRoute);
   portEXIT_CRITICAL(&nagCfgMux);
 
@@ -3384,7 +3422,6 @@ static void httpNagSetMode() {
   nc.tsl9Sequence = tsl9Sequence;
   nc.tsl9DowngradeWindow = tsl9Window;
   nc.tsl9InputMode = tsl9InputMode;
-  nc.tsl9IsaChimeSuppress = tsl9IsaChimeSuppress;
   nc.tsl9LegacyRoute = tsl9LegacyRoute;
   nagCfgCommit(nc);
   nagCfgSave();
@@ -3506,9 +3543,6 @@ static void httpNagUpdate() {
     }
     tsl9RightPeriodicInterval = value;
   }
-  if (server.hasArg("tsl9IsaChimeSuppress"))
-    nc.tsl9IsaChimeSuppress = server.arg("tsl9IsaChimeSuppress") == "1" ||
-        server.arg("tsl9IsaChimeSuppress") == "true";
   if (server.hasArg("tsl9LegacyRoute")) {
     const String raw = server.arg("tsl9LegacyRoute");
     if (raw != "0" && raw != "1") {
@@ -3666,7 +3700,7 @@ static void httpNagReset() {
   portENTER_CRITICAL(&nagTsl9Mux);
   nagTsl9State = {};
   nagTsl9Rx = nagTsl9Modified = nagTsl9HandsOnModified =
-      nagTsl9IsaModified = nagTsl9TxOk = nagTsl9TxFail = 0;
+      nagTsl9TxOk = nagTsl9TxFail = 0;
   portEXIT_CRITICAL(&nagTsl9Mux);
   portENTER_CRITICAL(&nagRightScrollMux);
   nagTorqueRightScrollEnabled = false;
@@ -3803,6 +3837,99 @@ static void httpDriverWindowLabOpen() {
   const DriverWindowArmResultPure result = driverWindowLabRequestOpen();
   server.send(result == DRIVER_WINDOW_ARM_OK ? 202 : 409,
               "application/json", driverWindowLabStatsToJson());
+}
+
+static String summonHeartbeatOverrideStatsToJson() {
+  const uint32_t now = (uint32_t)millis();
+  const uint32_t epoch = canTxEpochSnapshot();
+  bool enabled, stockValid, appliedValid;
+  uint8_t selectedValue, stockValue = 0xFFu, appliedValue;
+  uint32_t stockMs, stockEpoch, appliedMs, appliedCount, txFail, blocked;
+  portENTER_CRITICAL(&lab3f8Mux);
+  enabled = summonHeartbeatOverrideEnabled;
+  selectedValue = summonHeartbeatOverrideValue;
+  stockEpoch = lab3f8CanBEpoch;
+  stockValid = lab3f8CanBValid && lab3f8CanBDlc == 8u &&
+      epoch != 0u && stockEpoch == epoch;
+  if (stockValid) stockValue = (uint8_t)((lab3f8CanBData[0] >> 2) & 0x03u);
+  stockMs = lab3f8CanBLastMs;
+  appliedValid = summonHeartbeatLastAppliedValid;
+  appliedValue = summonHeartbeatLastAppliedValue;
+  appliedMs = summonHeartbeatLastAppliedMs;
+  appliedCount = summonHeartbeatAppliedCount;
+  txFail = summonHeartbeatTxFail;
+  blocked = summonHeartbeatBlocked;
+  portEXIT_CRITICAL(&lab3f8Mux);
+
+  const bool supported = summonHeartbeatOverrideSupported();
+  const uint32_t stockAge = stockValid ? (uint32_t)(now - stockMs) : 999999u;
+  const bool stockFresh = stockValid && stockAge <= LAB3F8_FRESH_MS_PURE;
+  const bool gateOpen = labMenuEnabled && supported;
+  const char *state = !supported ? "UNSUPPORTED" : !labMenuEnabled ? "LAB_DISABLED" :
+      !enabled ? "OFF" : !stockFresh ? "WAIT_STOCK" : "ACTIVE";
+  String json;
+  JsonWriterArduino jw(json);
+  jw.boolean("ok", true);
+  jw.boolean("supported", supported);
+  jw.boolean("labEnabled", labMenuEnabled);
+  jw.boolean("enabled", enabled);
+  jw.u32("selectedValue", selectedValue);
+  jw.boolean("gateOpen", gateOpen);
+  jw.boolean("stockValid", stockValid);
+  jw.boolean("stockFresh", stockFresh);
+  jw.i32("stockValue", stockValid ? (int32_t)stockValue : -1);
+  jw.u32("stockAgeMs", stockAge);
+  jw.boolean("lastAppliedValid", appliedValid);
+  jw.i32("lastAppliedValue", appliedValid ? (int32_t)appliedValue : -1);
+  jw.u32("lastAppliedAgeMs",
+      appliedValid ? (uint32_t)(now - appliedMs) : 999999u);
+  jw.u32("appliedCount", appliedCount);
+  jw.u32("txFail", txFail);
+  jw.u32("blocked", blocked);
+  jw.string("state", state);
+  jw.finish();
+  return json;
+}
+
+static void httpSummonHeartbeatOverrideStats() {
+  server.send(200, "application/json", summonHeartbeatOverrideStatsToJson());
+}
+
+static void httpSummonHeartbeatOverrideUpdate() {
+  if (!server.hasArg("enabled") || !server.hasArg("value")) {
+    server.send(400, "application/json",
+        "{\"ok\":false,\"error\":\"enabled and value required\"}");
+    return;
+  }
+  bool enabled;
+  if (!httpBoolArg("enabled", enabled)) {
+    server.send(400, "application/json",
+        "{\"ok\":false,\"error\":\"invalid enabled\"}");
+    return;
+  }
+  const String valueArg = server.arg("value");
+  if (valueArg != "0" && valueArg != "1" &&
+      valueArg != "2" && valueArg != "3") {
+    server.send(400, "application/json",
+        "{\"ok\":false,\"error\":\"invalid value\"}");
+    return;
+  }
+  if (enabled && !labMenuEnabled) {
+    server.send(409, "application/json",
+        "{\"ok\":false,\"error\":\"LAB disabled\"}");
+    return;
+  }
+  if (enabled && !summonHeartbeatOverrideSupported()) {
+    server.send(409, "application/json",
+        "{\"ok\":false,\"error\":\"Invalid vehicle topology\"}");
+    return;
+  }
+  if (!summonHeartbeatOverrideApply(enabled, (uint8_t)valueArg.toInt())) {
+    server.send(503, "application/json",
+        "{\"ok\":false,\"error\":\"TX barrier unavailable\"}");
+    return;
+  }
+  server.send(200, "application/json", summonHeartbeatOverrideStatsToJson());
 }
 
 static void writeNagHumanV1ConfigJson(JsonWriterArduino &jw,
@@ -5332,7 +5459,7 @@ static void webTask(void *arg) {
 #endif
   bootCaptureMarkOnce(&bootCapWifiReadyMs);
 #if T2CAN_SERIAL_DIAGNOSTICS
-  Serial.printf("AP: SSID=%s IP=%s\n", wifiApActiveSsid.c_str(), ip.toString().c_str());
+  T2CAN_SERIAL_PRINTF("AP: SSID=%s IP=%s\n", wifiApActiveSsid.c_str(), ip.toString().c_str());
 #endif
 
   server.on("/", HTTP_GET, httpRoot);
@@ -5362,6 +5489,10 @@ static void webTask(void *arg) {
               httpDriverMonitoringControlConfig);
     server.on("/api/driver-monitoring/config", HTTP_POST,
               httpDriverMonitoringControlUpdate);
+    server.on("/api/isa-suppression/config", HTTP_GET,
+              httpIsaSuppressionControlConfig);
+    server.on("/api/isa-suppression/config", HTTP_POST,
+              httpIsaSuppressionControlUpdate);
     server.on("/api/summon/stats", HTTP_GET, httpSummonStats);
     server.on("/api/summon/tlssc-enable", HTTP_POST, httpSummonTlsscEnable);
     server.on("/api/summon/tlssc-disable", HTTP_POST, httpSummonTlsscDisable);
@@ -5375,6 +5506,10 @@ static void webTask(void *arg) {
     server.on("/api/blinkA/tx-mode", HTTP_POST, httpBlinkATxMode);
     server.on("/api/lab/driver-window/stats", HTTP_GET, httpDriverWindowLabStats);
     server.on("/api/lab/driver-window/open", HTTP_POST, httpDriverWindowLabOpen);
+    server.on("/api/lab/summon-heartbeat/stats", HTTP_GET,
+              httpSummonHeartbeatOverrideStats);
+    server.on("/api/lab/summon-heartbeat/update", HTTP_POST,
+              httpSummonHeartbeatOverrideUpdate);
     server.on("/api/features/status", HTTP_GET, httpFeatureStatus);
     server.on("/api/features/lab", HTTP_POST, httpFeatureLab);
     server.on("/api/features/door-cancel", HTTP_POST, httpFeatureDoorCancel);

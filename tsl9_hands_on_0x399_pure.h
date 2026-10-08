@@ -133,7 +133,7 @@ struct Tsl9DasTransformResultPure {
 // second generated frame or a second counter increment.
 static inline Tsl9DasTransformResultPure
 tsl9ApplyDasTransformForCanIdPure(
-    Tsl9HandsOnStatePure &state, bool enabled, uint8_t sequence,
+    Tsl9HandsOnStatePure &state, bool handsOnEnabled, uint8_t sequence,
     uint8_t downgradeWindow, bool isaChimeSuppress, uint16_t canId,
     uint8_t data[8], uint8_t dlc, uint32_t nowMs) {
   Tsl9DasTransformResultPure result = {};
@@ -145,7 +145,7 @@ tsl9ApplyDasTransformForCanIdPure(
   result.apActive = activeNow;
   const uint8_t handsOn = (uint8_t)((data[5] >> 2) & 0x0Fu);
   result.handsOnBefore = handsOn;
-  if (!activeNow || !enabled) return result;
+  if (!activeNow || (!handsOnEnabled && !isaChimeSuppress)) return result;
 
   const bool insideDowngradeWindow =
       tsl9DowngradeWindowSanitizePure(downgradeWindow) ==
@@ -160,7 +160,7 @@ tsl9ApplyDasTransformForCanIdPure(
       tsl9SequenceSanitizePure(sequence) ==
           TSL9_SEQUENCE_V82_ORIGINAL_PURE
           ? originalTarget : extendedTarget;
-  if (insideDowngradeWindow && downgradeTarget) {
+  if (handsOnEnabled && insideDowngradeWindow && downgradeTarget) {
     data[5] = (uint8_t)((data[5] & 0xC3u) |
                         (TSL9_HANDS_ON_DETECTED_PURE << 2));
     result.handsOnModified = true;

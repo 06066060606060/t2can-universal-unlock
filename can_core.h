@@ -161,6 +161,7 @@ static volatile uint32_t canAMcpBusOffCount = 0;
 static volatile uint8_t canTxFreshMaskFast = 0;
 
 static void mcpRxOverflowObserve(uint32_t now, uint8_t flags) {
+  __atomic_fetch_add(&canUsbMcpOverflowTotal, 1U, __ATOMIC_RELAXED);
   portENTER_CRITICAL(&mcpRxOverflowMux);
   mcpRxOverflowCount++;
   mcpRxOverflowLastMs = now;
@@ -341,11 +342,14 @@ static void canATraceReset() {
 }
 
 static volatile bool canTxAdministrativeHold = false;
+static bool canTxAdministrativeRequested = false;
 // Sticky until reboot: configuration handlers cannot release maintenance hold.
 static bool canMaintenanceRequested = false;
 static bool canMaintenanceSupervisorParked = false;
 static bool canMaintenancePreparing = false;
 static bool canMaintenanceStopped = false;
+// Owned by canMaintenancePreparing; sticky until reboot, including failed retries.
+static bool canMaintenanceObservedCanRuntime = false;
 static bool canMaintenanceActive() {
   return __atomic_load_n(&canMaintenanceRequested, __ATOMIC_ACQUIRE);
 }
@@ -359,11 +363,13 @@ static bool canMaintenanceActive() {
 // callers that require invalidation explicitly invoke the recovery barrier.
 static void setCanTxAdministrativeHold(bool hold) {
   if (!canTxBarrierMutex) {
-    canTxAdministrativeHold = hold || canMaintenanceActive();
+    canTxAdministrativeRequested = hold;
+    canTxAdministrativeHold = hold || canMaintenanceActive() || canUsbTxHeld();
     return;
   }
   if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE) {
-    canTxAdministrativeHold = hold || canMaintenanceActive();
+    canTxAdministrativeRequested = hold;
+    canTxAdministrativeHold = hold || canMaintenanceActive() || canUsbTxHeld();
     xSemaphoreGive(canTxBarrierMutex);
   }
 }
@@ -773,7 +779,6 @@ struct NagConfig {
   uint8_t  tsl9Sequence;
   uint8_t  tsl9DowngradeWindow;
   uint8_t  tsl9InputMode;
-  bool     tsl9IsaChimeSuppress;
   uint8_t  tsl9LegacyRoute;
   bool     pauseAtZeroSpeed;
   uint8_t  modeHStopBehavior;
@@ -936,7 +941,6 @@ static Tsl9HandsOnStatePure nagTsl9State = {};
 static volatile uint32_t nagTsl9Rx = 0;
 static volatile uint32_t nagTsl9Modified = 0;
 static volatile uint32_t nagTsl9HandsOnModified = 0;
-static volatile uint32_t nagTsl9IsaModified = 0;
 static volatile uint32_t nagTsl9TxOk = 0;
 static volatile uint32_t nagTsl9TxFail = 0;
 
@@ -1223,7 +1227,6 @@ static void nagCfgSetCommonDefaults(NagConfig& c) {
   c.tsl9Sequence   = TSL9_SEQUENCE_DEFAULT_PURE;
   c.tsl9DowngradeWindow = TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE;
   c.tsl9InputMode  = TSL9_INPUT_MODE_DEFAULT_PURE;
-  c.tsl9IsaChimeSuppress = false;
   c.tsl9LegacyRoute = TSL9_LEGACY_ROUTE_DEFAULT_PURE;
   c.pauseAtZeroSpeed = false;
   c.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
@@ -1326,11 +1329,11 @@ static inline bool nagModePersistedIdSupported(uint8_t mode) {
 
 static void nagCfgLoad() {
 #if T2CAN_SERIAL_DIAGNOSTICS
-  Serial.println("NVS: Loading nag config...");
+  T2CAN_SERIAL_PRINTLN("NVS: Loading nag config...");
 #endif
   if (!prefs.begin("nag", true)) {
 #if T2CAN_SERIAL_DIAGNOSTICS
-    Serial.println("NVS: No existing nag config, using defaults");
+    T2CAN_SERIAL_PRINTLN("NVS: No existing nag config, using defaults");
 #endif
     nagCfgDefaultsModeH(nagCfg);
     nagCfgApplyActiveProfilePolicy(nagCfg, true);
@@ -1362,7 +1365,6 @@ static void nagCfgLoad() {
       prefs.getUChar("tsl9win", TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE));
   nagCfg.tsl9InputMode = tsl9InputModeSanitizePure(
       prefs.getUChar("tsl9in", TSL9_INPUT_MODE_DEFAULT_PURE));
-  nagCfg.tsl9IsaChimeSuppress = prefs.getBool("tsl9isa", false);
   nagCfg.tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(
       prefs.getUChar("tsl9rt", TSL9_LEGACY_ROUTE_DEFAULT_PURE));
   nagCfg.pauseAtZeroSpeed = prefs.getBool("p0", false);
@@ -1440,7 +1442,6 @@ static void nagCfgLoad() {
     prefs.putUChar("tsl9win", tsl9DowngradeWindowSanitizePure(
         nagCfg.tsl9DowngradeWindow));
     prefs.putUChar("tsl9in", tsl9InputModeSanitizePure(nagCfg.tsl9InputMode));
-    prefs.putBool("tsl9isa", nagCfg.tsl9IsaChimeSuppress);
     prefs.putUChar("tsl9rt", tsl9LegacyRouteSanitizePure(
         nagCfg.tsl9LegacyRoute));
     prefs.putUChar("hv", humanVariant);
@@ -1465,7 +1466,7 @@ static void nagCfgLoad() {
 
   nagRxSelectorsRefreshFromConfig();
 #if T2CAN_SERIAL_DIAGNOSTICS
-  Serial.println("NVS: Nag config loaded OK");
+  T2CAN_SERIAL_PRINTLN("NVS: Nag config loaded OK");
 #endif
 }
 
@@ -1494,7 +1495,7 @@ static void nagCfgSave() {
   nagCfgApplyActiveProfilePolicy(snapshot, false);
   if (!prefs.begin("nag", false)) {
 #if T2CAN_SERIAL_DIAGNOSTICS
-    Serial.println("NVS: Nag save failed - could not open");
+    T2CAN_SERIAL_PRINTLN("NVS: Nag save failed - could not open");
 #endif
     return;
   }
@@ -1505,7 +1506,6 @@ static void nagCfgSave() {
   prefs.putUChar("tsl9win", tsl9DowngradeWindowSanitizePure(
       snapshot.tsl9DowngradeWindow));
   prefs.putUChar("tsl9in", tsl9InputModeSanitizePure(snapshot.tsl9InputMode));
-  prefs.putBool("tsl9isa", snapshot.tsl9IsaChimeSuppress);
   prefs.putUChar("tsl9rt", tsl9LegacyRouteSanitizePure(
       snapshot.tsl9LegacyRoute));
   prefs.putBool("p0",     snapshot.pauseAtZeroSpeed);
@@ -1718,23 +1718,31 @@ static bool nagApInjectionGateOpen();
 static void nagApGateSnapshot(bool &validOut, bool &activeOut);
 // Explicit prototypes required here because NAG TX is defined before later modular definitions.
 
-static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo) {
-  portENTER_CRITICAL(&nagTsl9Mux);
-  if (ok) nagTsl9TxOk++; else nagTsl9TxFail++;
-  portEXIT_CRITICAL(&nagTsl9Mux);
-  portENTER_CRITICAL(&nagDiagMux);
-  if (ok) {
-    nagTxOk++;
-    nagMaxTxGapMs = nagGapMaxUpdatePure(nagLastTxOkMs, nowMs, nagMaxTxGapMs);
-    nagLastTxOkMs = nowMs;
-    nagSessionTxOk++;
-  } else {
-    nagTxFail++;
+static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo,
+                            bool handsOnModified, bool isaModified) {
+  if (handsOnModified) {
+    portENTER_CRITICAL(&nagTsl9Mux);
+    if (ok) nagTsl9TxOk++; else nagTsl9TxFail++;
+    portEXIT_CRITICAL(&nagTsl9Mux);
+    portENTER_CRITICAL(&nagDiagMux);
+    if (ok) {
+      nagTxOk++;
+      nagMaxTxGapMs = nagGapMaxUpdatePure(nagLastTxOkMs, nowMs, nagMaxTxGapMs);
+      nagLastTxOkMs = nowMs;
+      nagSessionTxOk++;
+    } else {
+      nagTxFail++;
+    }
+    portEXIT_CRITICAL(&nagDiagMux);
+    if (ok) {
+      nagEchoCount++;
+      nagLastInjectedHo = injectedHo;
+    }
   }
-  portEXIT_CRITICAL(&nagDiagMux);
-  if (ok) {
-    nagEchoCount++;
-    nagLastInjectedHo = injectedHo;
+  if (isaModified) {
+    portENTER_CRITICAL(&isaSuppressionControlMux);
+    if (ok) isaSuppressionTxOk++; else isaSuppressionTxFail++;
+    portEXIT_CRITICAL(&isaSuppressionControlMux);
   }
 }
 
@@ -1753,15 +1761,17 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   uint8_t method;
   uint8_t sequence;
   uint8_t downgradeWindow;
-  bool isaChimeSuppress;
+  bool isaSuppression;
+  uint32_t isaSuppressionGenerationSnapshot;
   portENTER_CRITICAL(&nagCfgMux);
   enabled = nagCfg.enabled;
   method = nagMethodSanitizePure(nagCfg.method);
   sequence = tsl9SequenceSanitizePure(nagCfg.tsl9Sequence);
   downgradeWindow = tsl9DowngradeWindowSanitizePure(
       nagCfg.tsl9DowngradeWindow);
-  isaChimeSuppress = nagCfg.tsl9IsaChimeSuppress;
   portEXIT_CRITICAL(&nagCfgMux);
+  isaSuppressionControlSnapshot(
+      isaSuppression, isaSuppressionGenerationSnapshot);
 
   struct can_frame out = rxf;
   const uint32_t nowMs = (uint32_t)millis();
@@ -1770,18 +1780,25 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   if (method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
   result = tsl9ApplyDasTransformForCanIdPure(
       nagTsl9State, enabled && method == NAG_METHOD_TSL9_PURE,
-      sequence, downgradeWindow, isaChimeSuppress, expectedId,
+      sequence, downgradeWindow, isaSuppression, expectedId,
       out.data, out.can_dlc, nowMs);
-  if (result.modified) nagTsl9Modified++;
+  if (result.handsOnModified) nagTsl9Modified++;
   if (result.handsOnModified) nagTsl9HandsOnModified++;
-  if (result.isaModified) nagTsl9IsaModified++;
   portEXIT_CRITICAL(&nagTsl9Mux);
+  if (result.isaModified) {
+    portENTER_CRITICAL(&isaSuppressionControlMux);
+    isaSuppressionModified++;
+    portEXIT_CRITICAL(&isaSuppressionControlMux);
+  }
   if (!result.modified) return false;
 
   const uint32_t txEpoch = canTxEpochSnapshot();
   MCP2515::ERROR err = MCP2515::ERROR_FAIL;
   McpTxResultReason txReason = MCP_TX_INVALID_MSG;
-  const bool attempted = canTxMcpSend(&out, txEpoch, err, &txReason);
+  const bool attempted = canTxMcpSendTaggedGuarded(
+      &out, txEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
+      &isaSuppressionGeneration, isaSuppressionGenerationSnapshot,
+      err, &txReason);
   const bool ok = attempted && err == MCP2515::ERROR_OK;
   if (ok) {
     mcpTxOk++;
@@ -1790,7 +1807,8 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
     mcpTxFail++;
     if (mcpTxFailConsecutive < 255) mcpTxFailConsecutive++;
   }
-  nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu));
+  nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu),
+                  result.handsOnModified, result.isaModified);
   return ok;
 }
 
@@ -1807,15 +1825,17 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   uint8_t method;
   uint8_t sequence;
   uint8_t downgradeWindow;
-  bool isaChimeSuppress;
+  bool isaSuppression;
+  uint32_t isaSuppressionGenerationSnapshot;
   portENTER_CRITICAL(&nagCfgMux);
   enabled = nagCfg.enabled;
   method = nagMethodSanitizePure(nagCfg.method);
   sequence = tsl9SequenceSanitizePure(nagCfg.tsl9Sequence);
   downgradeWindow = tsl9DowngradeWindowSanitizePure(
       nagCfg.tsl9DowngradeWindow);
-  isaChimeSuppress = nagCfg.tsl9IsaChimeSuppress;
   portEXIT_CRITICAL(&nagCfgMux);
+  isaSuppressionControlSnapshot(
+      isaSuppression, isaSuppressionGenerationSnapshot);
 
   twai_message_t out = src;
   out.flags = 0;
@@ -1825,19 +1845,25 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   if (method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
   result = tsl9ApplyDasTransformForCanIdPure(
       nagTsl9State, enabled && method == NAG_METHOD_TSL9_PURE,
-      sequence, downgradeWindow, isaChimeSuppress, 0x399u,
+      sequence, downgradeWindow, isaSuppression, 0x399u,
       out.data, out.data_length_code, nowMs);
-  if (result.modified) nagTsl9Modified++;
+  if (result.handsOnModified) nagTsl9Modified++;
   if (result.handsOnModified) nagTsl9HandsOnModified++;
-  if (result.isaModified) nagTsl9IsaModified++;
   portEXIT_CRITICAL(&nagTsl9Mux);
+  if (result.isaModified) {
+    portENTER_CRITICAL(&isaSuppressionControlMux);
+    isaSuppressionModified++;
+    portEXIT_CRITICAL(&isaSuppressionControlMux);
+  }
   if (!result.modified) return false;
 
-  esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady) err = twai_transmit(&out, 0);
-  canBTraceRecordTx(&out, err);
+  const uint32_t txEpoch = canTxEpochSnapshot();
+  const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
+      &out, txEpoch, CAN_TX_FRESH_BOTH, CAN_TX_TRACE_SOURCE_DEFAULT,
+      &isaSuppressionGeneration, isaSuppressionGenerationSnapshot);
   const bool ok = err == ESP_OK;
-  nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu));
+  nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu),
+                  result.handsOnModified, result.isaModified);
   return ok;
 }
 
@@ -2116,7 +2142,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
         const unsigned long now = millis();
         if (now - nagLastTxFailLog >= 2000) {
           nagLastTxFailLog = now;
-          Serial.printf("[NAG TX FAIL] MCP err=%d nag=%lu mcp=%lu\n",
+          T2CAN_SERIAL_PRINTF("[NAG TX FAIL] MCP err=%d nag=%lu mcp=%lu\n",
                         (int)err, (unsigned long)nagTxFail, (unsigned long)mcpTxFail);
         }
 #endif

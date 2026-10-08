@@ -255,6 +255,9 @@ static void r79LabRetryTick();
 static void injectTLSSC(const twai_message_t &src);
 static void featureCfgLoad();
 static void featureCfgSave();
+static bool isaSuppressionControlSnapshot();
+static void isaSuppressionControlSnapshot(bool &enabledOut,
+                                          uint32_t &generationOut);
 static void summonCfgLoad();
 static void summonCfgSave();
 static bool ulcCfgLoadAndMigrate();

@@ -1,3 +1,56 @@
+# T2CAN Universal v3.26.2
+
+## Factory-reset profile commit hotfix — 2026-10-08
+- Fixes profile confirmation after Factory Reset, Reset NVS and a clean first boot on the bundled ESP32 core 3.3.12 / ESP-IDF 5.5.5. The uninstalled TWAI driver returns ESP_ERR_INVALID_ARG (0x102), which previously caused maintenance preparation to reject profile saving before NVS was reached.
+- Accepts this missing-driver result only in web-only profile setup/NVS-error mode with no CAN task or supervisor handles and neither controller ready. Running-controller shutdown, barrier ownership, task quiescence, uninstall failures and unknown errors remain fail-closed.
+- Keeps prior controller/task observations across maintenance retries so partially initialized states cannot become eligible for the web-only exception after readiness flags are cleared.
+- Adds production-function host regressions with realistic SDK error values and setup-to-profile-save/reboot coverage. Keeps completed v3.26.1 and its dashboard unchanged.
+
+# T2CAN Universal v3.26.1
+
+## Initial Profile Setup recovery hotfix — 2026-10-08
+- Retries initial profile-status requests after temporary Wi-Fi/HTTP failures and provides a visible recovery action when initialization cannot complete.
+- Shows profile-save and initialization errors on the setup screen so a rejected or failed request does not silently leave users in vehicle selection.
+- Keeps profile saving disabled when the controller reports unavailable NVS, while preserving the existing fail-closed CAN setup policy and reset recovery paths.
+- Requires Check Status after an uncertain save response instead of repeating POST automatically; retains that recovery action when an existing-profile change is cancelled and reopened.
+- Prevents overlapping profile-save requests while a selection is being committed or the controller is rebooting. Vehicle/CAN topology selection, confirmation and existing dashboard styling remain intact.
+- Limits the patch to dashboard startup/recovery behavior and firmware identity. Profile/reset APIs, NVS storage, CAN routing and feature policies remain unchanged; completed v3.26.0 is preserved.
+
+# T2CAN Universal v3.26.0
+
+## Standalone ISA Suppression — 2026-10-08
+- Moves `ISA Suppression` out of Nag Killer into its own Settings toggle, `features/isaSuppress` storage key and `/api/isa-suppression/config` endpoint. The saved selection no longer depends on the Nag master or selected Nag method.
+- Keeps the existing supported 0x399/0x39B routes, valid active-AP gate and CHIME 1-only policy. When Nag TSL9 and ISA Suppression are both enabled, both changes compose into one frame with one rolling-counter/checksum update.
+- Migrates the previous `nag/tsl9isa` value only when the new standalone key is absent. Failed NVS transactions leave live behavior unchanged and retry migration on a later boot.
+- Separates ISA modification/TX diagnostics from Nag session and echo counters, and removes the old ISA field from Nag configuration, update and reset ownership.
+- Adds pure transform, persistence, API/static and source/embedded responsive browser regressions. Keeps completed v3.25.1 unchanged.
+
+# T2CAN Universal v3.25.1
+
+## Dashboard long-row layout hotfix — 2026-10-08
+- Preserves short label/value rows and gives long diagnostic labels and values their own unbroken line when the available width is insufficient. Exceptionally long values remain fully readable through horizontal scrolling.
+- Applies the common row fix throughout dashboard diagnostics and LAB panels; preserves data, controls, CAN behavior and existing visual tokens.
+
+# T2CAN Universal v3.25.0
+
+## LAB Summon Heartbeat Override — 2026-10-08
+- Adds a LAB-only, session-scoped override for `0x3F8 UI_driverAssistControl` `UI_summonHeartbeat` bits 2–3. Raw values 0, 1, 2 and 3 are selectable and applied to every valid received stock frame while enabled, including frames whose stock value already matches.
+- Extends the existing single 0x3F8 compositor, preserving every unrelated bit and composing independently with Confirm-Free bit1 and the retained ALC/ULC fields. The original RX frame remains untouched.
+- Uses the shared TX barrier, receive epoch, 3-second stock freshness, administrative hold, controller-ready checks, cancellation generation and Summon-aware non-R79 queue admission. LAB OFF, CAN full-recovery and reboot disable the override; its toggle and selected value are never written to NVS.
+- Adds strict `0|1|2|3` HTTP parsing, live stock/selected/last-applied diagnostics and applied/fail/blocked counters under `/api/lab/summon-heartbeat/*`.
+- Adds a matching LAB panel using the existing dashboard controls and responsive layout, plus pure, extracted-runtime, API and source/embedded browser regressions.
+- Keeps completed v3.24.0 unchanged. No controller flash, serial/CAN access, live vehicle transmission or road testing was performed.
+
+# T2CAN Universal v3.24.0
+
+## USB full-frame logging and receive-only investigation — 2026-10-08
+- Adds default-OFF USB CAN capture on Hardware CDC/JTAG. A bounded 512-frame queue decouples CAN reception from USB writes; shared sequence numbers and software microsecond timestamps preserve enqueue order across A/B, including standard, extended and RTR frames.
+- `LOGGER START ACTIVE` retains the existing feature policy while recording RX. `LOGGER START PASSIVE` asks the CAN supervisor to quiesce both tasks and switch MCP2515/TWAI to hardware listen-only; existing saved feature/profile choices remain intact. A single connected bus does not trigger missing-second-bus recovery in PASSIVE.
+- Persists only the new `usblog/passive` mode. PASSIVE survives USB unplug, STOP, reset and power cycling; explicit ACTIVE restores normal mode after checked controller initialization. Mode/readback/quiesce failures retain a TX hold and return an error. A legacy direct TSL9 send now shares the TX barrier.
+- Reports logger queue counters plus controller epoch, MCP overflow observations and TWAI missed/overrun counters. USB disconnect abandons the old queue/partial command and starts fresh framing on reconnect.
+- Adds the macOS collector at `tools/can_usb_logger/`: raw USB bytes, frame/event/controller CSV, metadata and completeness summary. Reported timestamps are software observations, not on-wire arrival; detected gaps/errors are retained and surfaced.
+- Keeps completed v3.23.0 and dashboard design unchanged. No flash, serial/CAN device access or vehicle testing is implied.
+
 # T2CAN Universal v3.23.0
 
 ## Standalone Driver Monitoring and production Visual Speed Control — 2026-10-08

@@ -219,6 +219,29 @@ static bool driverMonitoringControlSnapshot() {
   return enabled;
 }
 
+static bool isaSuppressionControlSnapshot() {
+  portENTER_CRITICAL(&isaSuppressionControlMux);
+  const bool enabled = isaSuppressionEnabled;
+  portEXIT_CRITICAL(&isaSuppressionControlMux);
+  return enabled;
+}
+
+static void isaSuppressionControlSnapshot(bool &enabledOut,
+                                          uint32_t &generationOut) {
+  portENTER_CRITICAL(&isaSuppressionControlMux);
+  enabledOut = isaSuppressionEnabled;
+  generationOut = __atomic_load_n(
+      &isaSuppressionGeneration, __ATOMIC_ACQUIRE);
+  portEXIT_CRITICAL(&isaSuppressionControlMux);
+}
+
+static bool isaSuppressionControlActive() {
+  bool apValid, apActive;
+  nagApGateSnapshot(apValid, apActive);
+  return isaSuppressionControlSnapshot() && activeProfileNagTsl9Supported() &&
+      apValid && apActive;
+}
+
 static bool r79DmsControlActive() {
   bool apValid, apActive;
   nagApGateSnapshot(apValid, apActive);
@@ -1036,6 +1059,17 @@ static volatile uint32_t lab3f8CanBPeriodMs = 0;
 static volatile uint8_t lab3f8CanBDlc = 0;
 static uint8_t lab3f8CanBData[8] = {};
 static volatile uint32_t lab3f8Generation = 1u;
+
+// LAB-only session override for 0x3F8 UI_summonHeartbeat (bits 2-3).
+// Deliberately RAM-only: every boot and CAN full-recovery starts disabled.
+static volatile bool summonHeartbeatOverrideEnabled = false;
+static volatile uint8_t summonHeartbeatOverrideValue = 2u;
+static volatile bool summonHeartbeatLastAppliedValid = false;
+static volatile uint8_t summonHeartbeatLastAppliedValue = 0xFFu;
+static volatile uint32_t summonHeartbeatLastAppliedMs = 0u;
+static volatile uint32_t summonHeartbeatAppliedCount = 0u;
+static volatile uint32_t summonHeartbeatTxFail = 0u;
+static volatile uint32_t summonHeartbeatBlocked = 0u;
 // Set by the CAN-B task immediately after receive, before normal decoding.
 static uint32_t lab3f8FrameRxMs = 0u, lab3f8FrameRxEpoch = 0u;
 
@@ -1128,11 +1162,53 @@ static bool countryOverrideSetLabEnabledWithBarrier(bool enabled) {
   if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
   const bool changed = labMenuEnabled != enabled;
   labMenuEnabled = enabled;
+  bool heartbeatChanged = false;
+  if (!enabled) {
+    portENTER_CRITICAL(&lab3f8Mux);
+    heartbeatChanged = summonHeartbeatOverrideEnabled;
+    summonHeartbeatOverrideEnabled = false;
+    portEXIT_CRITICAL(&lab3f8Mux);
+  }
   if (changed) mux1CancelPendingLocked();
-  if (changed) __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
+  if (changed || heartbeatChanged)
+    __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
   // Country settings are independent of LAB menu visibility.
   xSemaphoreGive(canTxBarrierMutex);
   return true;
+}
+
+static bool summonHeartbeatOverrideSupported() {
+  return vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology);
+}
+
+static bool summonHeartbeatOverrideApply(bool enabled, uint8_t value) {
+  if (value > 3u || !canTxBarrierMutex) return false;
+  if (enabled && (!labMenuEnabled || !summonHeartbeatOverrideSupported()))
+    return false;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (enabled && (!labMenuEnabled || !summonHeartbeatOverrideSupported())) {
+    xSemaphoreGive(canTxBarrierMutex);
+    return false;
+  }
+  portENTER_CRITICAL(&lab3f8Mux);
+  summonHeartbeatOverrideValue = value;
+  summonHeartbeatOverrideEnabled = enabled;
+  portEXIT_CRITICAL(&lab3f8Mux);
+  __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
+  xSemaphoreGive(canTxBarrierMutex);
+  return true;
+}
+
+// Called only while canTxBarrierMutex is already held.
+static void summonHeartbeatOverrideResetUnderTxBarrier() {
+  portENTER_CRITICAL(&lab3f8Mux);
+  const bool changed = summonHeartbeatOverrideEnabled;
+  summonHeartbeatOverrideEnabled = false;
+  summonHeartbeatLastAppliedValid = false;
+  summonHeartbeatLastAppliedValue = 0xFFu;
+  summonHeartbeatLastAppliedMs = 0u;
+  portEXIT_CRITICAL(&lab3f8Mux);
+  if (changed) __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
 }
 
 // Every path that can change R79 authorization takes the TX barrier before
@@ -3481,7 +3557,8 @@ static bool lab3f8FinalValidate(twai_message_t *out, void *opaque) {
         dasStateAutosteerPure(valid, state),
         ulcPolicyApGateOpenPure(ulcSelected, valid, state),
         ulcNoConfirmGateOpenWithTimingPure(activeProfileUlcNoConfirmSupported(),
-            context.selected.confirmFreeEnabled, context.confirmTiming, valid, state)};
+            context.selected.confirmFreeEnabled, context.confirmTiming, valid, state),
+        labMenuEnabled && summonHeartbeatOverrideSupported()};
     *out = context.stock; out->flags = 0;
     context.result = ulcCompose3f8Pure(out->data, out->data_length_code, context.selected, gates);
     context.finalComposed = context.result.changed;
@@ -3502,6 +3579,8 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     selected.blindSpotMode = lab3f8UlcBlindMode;
     selected.ulcOffHighwayMode = lab3f8UlcOffHighwayMode;
     selected.confirmFreeEnabled = ulcNoConfirmEnabled;
+    selected.summonHeartbeatOverrideEnabled = summonHeartbeatOverrideEnabled;
+    selected.summonHeartbeatValue = summonHeartbeatOverrideValue;
     confirmTiming = ulcNoConfirmTimingMode;
     portEXIT_CRITICAL(&lab3f8Mux);
 
@@ -3510,7 +3589,8 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     const bool offHighwaySelected =
         selected.ulcOffHighwayMode != ULC_COMPOSITE_STOCK_PURE;
     if (!selected.alcOffHighwayEnabled && !blindSelected &&
-        !offHighwaySelected && !selected.confirmFreeEnabled) return;
+        !offHighwaySelected && !selected.confirmFreeEnabled &&
+        !selected.summonHeartbeatOverrideEnabled) return;
 
     bool dasValid;
     uint8_t dasState;
@@ -3524,7 +3604,8 @@ static void injectDriverAssistControl(const twai_message_t &src) {
         ulcPolicyApGateOpenPure(ulcSelected, dasValid, dasState),
         ulcNoConfirmGateOpenWithTimingPure(
             activeProfileUlcNoConfirmSupported(),
-            selected.confirmFreeEnabled, confirmTiming, dasValid, dasState)};
+            selected.confirmFreeEnabled, confirmTiming, dasValid, dasState),
+        labMenuEnabled && summonHeartbeatOverrideSupported()};
 
     if (selected.alcOffHighwayEnabled && !gates.alcAutosteerOpen) {
         portENTER_CRITICAL(&lab3f8Mux);
@@ -3543,6 +3624,12 @@ static void injectDriverAssistControl(const twai_message_t &src) {
         ulcNoConfirmGateBlockedB++;
         portEXIT_CRITICAL(&lab3f8Mux);
     }
+    if (selected.summonHeartbeatOverrideEnabled &&
+        !gates.summonHeartbeatOverrideOpen) {
+        portENTER_CRITICAL(&lab3f8Mux);
+        summonHeartbeatBlocked++;
+        portEXIT_CRITICAL(&lab3f8Mux);
+    }
 
     twai_message_t out = src;
     out.flags = 0;
@@ -3558,6 +3645,7 @@ static void injectDriverAssistControl(const twai_message_t &src) {
           ulcNoConfirmTxFail++;
           ulcNoConfirmTxBFail++;
         }
+        if (result.summonHeartbeatApplied) summonHeartbeatTxFail++;
         portEXIT_CRITICAL(&lab3f8Mux);
         return;
     }
@@ -3586,6 +3674,17 @@ static void injectDriverAssistControl(const twai_message_t &src) {
       ulcNoConfirmLastTxMs = now;
       if (err == ESP_OK) { ulcNoConfirmTxOk++; ulcNoConfirmTxBOk++; }
       else { ulcNoConfirmTxFail++; ulcNoConfirmTxBFail++; }
+    }
+    if (result.summonHeartbeatApplied) {
+      if (err == ESP_OK) {
+        summonHeartbeatLastAppliedValid = true;
+        summonHeartbeatLastAppliedValue =
+            (uint8_t)((out.data[0] >> 2) & 0x03u);
+        summonHeartbeatLastAppliedMs = now;
+        summonHeartbeatAppliedCount++;
+      } else {
+        summonHeartbeatTxFail++;
+      }
     }
     portEXIT_CRITICAL(&lab3f8Mux);
 }
@@ -4636,6 +4735,28 @@ static bool driverMonitoringControlApply(bool enabled) {
     return saved;
 }
 
+static bool isaSuppressionControlApply(bool enabled) {
+    if (!canTxBarrierMutex ||
+        xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+    Preferences p;
+    bool saved = false;
+    if (p.begin("features", false)) {
+      saved = p.putBool("isaSuppress", enabled) > 0u;
+      p.end();
+      if (saved) {
+        portENTER_CRITICAL(&isaSuppressionControlMux);
+        if (isaSuppressionEnabled != enabled) {
+          isaSuppressionEnabled = enabled;
+          __atomic_add_fetch(
+              &isaSuppressionGeneration, 1u, __ATOMIC_ACQ_REL);
+        }
+        portEXIT_CRITICAL(&isaSuppressionControlMux);
+      }
+    }
+    xSemaphoreGive(canTxBarrierMutex);
+    return saved;
+}
+
 static void featureCfgLoad() {
     const bool featuresOpened = prefs.begin("features", false);
     labMenuEnabled = featuresOpened && prefs.getBool("lab", false);
@@ -4645,6 +4766,10 @@ static void featureCfgLoad() {
         featuresOpened && prefs.getBool("dmsDisable", false);
     const bool legacyFeatureDriverMonitoringControl =
         featuresOpened && prefs.getBool("dmsNag43", false);
+    const bool hasIsaSuppressionControl =
+        featuresOpened && prefs.isKey("isaSuppress");
+    const bool persistedIsaSuppressionControl =
+        featuresOpened && prefs.getBool("isaSuppress", false);
     const uint8_t persistedBlinkerTx = prefs.getUChar("blinkTx", 0xFFu);
     portENTER_CRITICAL(&blinkAMux);
     blinkerTxMode = blinkerTxStoredModePure(
@@ -4715,6 +4840,9 @@ static void featureCfgLoad() {
       portENTER_CRITICAL(&driverMonitoringControlMux);
       driverMonitoringDisableEnabled = false;
       portEXIT_CRITICAL(&driverMonitoringControlMux);
+      portENTER_CRITICAL(&isaSuppressionControlMux);
+      isaSuppressionEnabled = false;
+      portEXIT_CRITICAL(&isaSuppressionControlMux);
       return;
     }
     if (hasDriverMonitoringControl) {
@@ -4726,12 +4854,26 @@ static void featureCfgLoad() {
       Preferences oldNag;
       // Read-write begin distinguishes an absent legacy namespace (which may
       // be created empty) from an unavailable NVS backend.
+      if (oldNag.begin("nag", false)) {
+        migrated = oldNag.getBool("dms43", migrated);
+        oldNag.end();
+        // Publish only after the standalone key is durable. A failed migration
+        // remains safely OFF and retries on the next boot.
+        (void)driverMonitoringControlApply(migrated);
+      }
+    }
+    if (hasIsaSuppressionControl) {
+      portENTER_CRITICAL(&isaSuppressionControlMux);
+      isaSuppressionEnabled = persistedIsaSuppressionControl;
+      portEXIT_CRITICAL(&isaSuppressionControlMux);
+    } else {
+      Preferences oldNag;
       if (!oldNag.begin("nag", false)) return;
-      migrated = oldNag.getBool("dms43", migrated);
+      const bool migrated = oldNag.getBool("tsl9isa", false);
       oldNag.end();
-      // Publish only after the standalone key is durable. A failed migration
+      // Publish only after the standalone key is durable. Failed migration
       // remains safely OFF and retries on the next boot.
-      (void)driverMonitoringControlApply(migrated);
+      (void)isaSuppressionControlApply(migrated);
     }
 }
 
