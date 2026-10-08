@@ -100,9 +100,9 @@ static esp_err_t canTxTwaiTransmit(const twai_message_t *msg, uint32_t expectedE
 static bool canTxMcpSendTagged(const struct can_frame *msg,
                                uint32_t expectedEpoch, uint8_t traceSource,
                                MCP2515::ERROR &errOut,
-                               McpTxResultReason *reasonOut = nullptr);
+                               McpTxResultReason *reasonOut = nullptr, bool party = false);
 static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch, MCP2515::ERROR &errOut,
-                         McpTxResultReason *reasonOut = nullptr);
+                         McpTxResultReason *reasonOut = nullptr, bool party = false);
 static void nagClampTorque(uint8_t& b2, uint8_t& b3);
 static void nagCfgSetCommonDefaults(NagConfig& c);
 static void nagCfgDefaultsModeA(NagConfig& c);

@@ -15,7 +15,8 @@ enum VehicleCanTopology : uint8_t {
   VEHICLE_TOPOLOGY_NONE = 0,
   VEHICLE_TOPOLOGY_YL_PARTY_VH = 1,
   VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS = 2,
-  VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS = 3
+  VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS = 3,
+  VEHICLE_TOPOLOGY_STANDARD_THREE_CAN = 4
 };
 
 enum TurnSignalVariant : uint8_t {
@@ -55,9 +56,15 @@ static inline VehicleCanTopology vehicleProfileDefaultTopology(uint8_t id) {
 
 static inline bool vehicleProfileTopologyValid(uint8_t id, uint8_t topology) {
   if (!vehicleProfileValid(id)) return false;
+#ifdef ARDUINO
+  if (topology == VEHICLE_TOPOLOGY_STANDARD_THREE_CAN && board != BOARD_TMR) return false;
+  if (board == BOARD_TMR && id != VEHICLE_MODEL_YL)
+    return topology == VEHICLE_TOPOLOGY_STANDARD_THREE_CAN;
+#endif
   if (id == VEHICLE_MODEL_YL)
     return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
   return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
+         topology == VEHICLE_TOPOLOGY_STANDARD_THREE_CAN ||
          topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS;
 }
 
@@ -77,12 +84,14 @@ static inline bool vehicleProfileCanAIsParty(uint8_t id, uint8_t topology) {
 
 static inline bool vehicleProfileCanAIsBody(uint8_t id, uint8_t topology) {
   return vehicleProfileTopologyValid(id, topology) &&
-         topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+         (topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
+          topology == VEHICLE_TOPOLOGY_STANDARD_THREE_CAN);
 }
 
 static inline bool vehicleProfileCanBIsChassis(uint8_t id, uint8_t topology) {
   return vehicleProfileTopologyValid(id, topology) &&
          (topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
+          topology == VEHICLE_TOPOLOGY_STANDARD_THREE_CAN ||
           topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS);
 }
 
@@ -92,14 +101,15 @@ static inline bool vehicleProfileApRightScrollSupported(uint8_t id, uint8_t topo
 }
 
 static inline bool vehicleProfileNagSupported(uint8_t id, uint8_t topology) {
-  return vehicleProfileCanAIsParty(id, topology);
+  return vehicleProfileCanAIsParty(id, topology) ||
+         (vehicleProfileTopologyValid(id, topology) && topology == VEHICLE_TOPOLOGY_STANDARD_THREE_CAN);
 }
 
 static inline bool vehicleProfileAdvancedEapSupported(uint8_t id, uint8_t topology) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
   // YL keeps its existing Party+VH split-bus implementation. Standard 3/Y
   // requires Body CAN on CAN A for Advanced EAP/Auto Blinker.
-  return id == VEHICLE_MODEL_YL || topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return id == VEHICLE_MODEL_YL || vehicleProfileCanAIsBody(id, topology);
 }
 
 static inline bool vehicleProfileEuUnlockSupported(uint8_t id, uint8_t topology) {
@@ -117,8 +127,7 @@ static inline bool vehicleProfileDmsNagSupported(uint8_t id, uint8_t topology) {
 }
 
 static inline bool vehicleProfileBodyControlsSupported(uint8_t id, uint8_t topology) {
-  return vehicleProfileTopologyValid(id, topology) &&
-         topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileCanAIsBody(id, topology);
 }
 
 // 0x334 UI_powertrainControl / UI_pedalMap routing. Model Y L exposes the
@@ -128,7 +137,7 @@ static inline bool vehicleProfileBodyControlsSupported(uint8_t id, uint8_t topol
 static inline bool vehicleProfilePedalMapSupported(uint8_t id, uint8_t topology) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
   if (id == VEHICLE_MODEL_YL) return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
-  return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileCanAIsBody(id, topology);
 }
 
 // AP Drive Profile uses the same supported 0x334 route as PedalMap. YL/VH is
@@ -194,6 +203,7 @@ static inline const char *vehicleProfileTopologyName(uint8_t topology) {
     case VEHICLE_TOPOLOGY_YL_PARTY_VH: return "PARTY + VH";
     case VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS: return "BODY + CHASSIS";
     case VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS: return "PARTY + CHASSIS";
+    case VEHICLE_TOPOLOGY_STANDARD_THREE_CAN: return "BODY + CHASSIS + PARTY";
     default: return "DISABLED";
   }
 }

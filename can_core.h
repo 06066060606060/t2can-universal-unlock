@@ -143,7 +143,7 @@ static constexpr uint32_t MCP_SPI_HZ = 10000000;
 
 static constexpr uint8_t MCP_RX_BUDGET = 32;
 
-static MCP2515 Can_A(MCP2515_CS, MCP_SPI_HZ, &SPI);
+static BoardCanA Can_A;
 static volatile uint8_t  mcpState = 0;      // 0=OK, 1=WARN, 2=BUS-OFF
 static volatile uint32_t mcpTxOk = 0;
 static volatile uint32_t mcpTxFail = 0;
@@ -421,7 +421,7 @@ static esp_err_t canTxTwaiTransmit(
 static bool canTxMcpSendTagged(const struct can_frame *msg,
                                uint32_t expectedEpoch, uint8_t traceSource,
                                MCP2515::ERROR &errOut,
-                               McpTxResultReason *reasonOut) {
+                               McpTxResultReason *reasonOut, bool party) {
   if (reasonOut) *reasonOut = MCP_TX_INVALID_MSG;
   if (!msg) return false;
   if (canTxAdministrativeHold) {
@@ -444,7 +444,7 @@ static bool canTxMcpSendTagged(const struct can_frame *msg,
   MCP2515::ERROR traceResult = MCP2515::ERROR_FAIL;
 
   if (allowed) {
-    errOut = Can_A.sendMessage(msg);
+    errOut = Can_A.sendMessage(msg, party);
     traceResult = errOut;
     reason = mcpTxResultReasonPure(
         true, true, true, canTxBarrierState.epoch, canTxBarrierState.freshMask,
@@ -457,9 +457,9 @@ static bool canTxMcpSendTagged(const struct can_frame *msg,
 }
 
 static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
-                         MCP2515::ERROR &errOut, McpTxResultReason *reasonOut) {
+                         MCP2515::ERROR &errOut, McpTxResultReason *reasonOut, bool party) {
   return canTxMcpSendTagged(msg, expectedEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
-                            errOut, reasonOut);
+                            errOut, reasonOut, party);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1739,7 +1739,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     }
   }
 
-  // Nag Killer requires CAN A to be Party. YL-specific Party parsing above remains model-gated.
+  // This handler receives Party frames only. YL parsing above remains model-gated.
   if (!activeProfileNagSupported()) return;
 
   uint16_t targetId, apStateId, steeringId;
@@ -1824,7 +1824,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
 
   const uint32_t nowMs = (uint32_t)millis();
   bool bootDelayPassed = (nowMs - canInitTime) >= NAG_INJECTION_DELAY_MS;
-  bool canSeen = mcpRxCount > 1000;  // Retain the established MCP warmup threshold.
+  bool canSeen = (boardTripleCan() ? boardPartyRx : mcpRxCount) > 1000; // Party warmup only.
   bool apValid, apActiveForNag;
   nagApGateSnapshot(apValid, apActiveForNag);
   const NagSkipReasonPure eligibility = nagEligibilityReasonPure(
@@ -1937,7 +1937,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
       unsigned long t0 = micros();
       MCP2515::ERROR err = MCP2515::ERROR_OK;
       McpTxResultReason txReason = MCP_TX_INVALID_MSG;
-      const bool attempted = canTxMcpSend(&txf, txEpoch, err, &txReason);
+      const bool attempted = canTxMcpSend(&txf, txEpoch, err, &txReason, true);
       if (!attempted) {
         nagDiagRecordTxBlock(txReason, nowMs);
         return;

@@ -336,13 +336,14 @@ static void canTaskMcp(void* arg) {
     // yield budget or task priority.
     static constexpr uint8_t MCP_PREFETCH_BUDGET = 4;
     struct can_frame prefetched[MCP_PREFETCH_BUDGET];
+    bool partyFrames[MCP_PREFETCH_BUDGET];
     uint8_t processed = 0;
     bool noMoreFrames = false;
     while (processed < MCP_RX_BUDGET && !noMoreFrames) {
       uint8_t batch = 0;
       while (batch < MCP_PREFETCH_BUDGET &&
              processed + batch < MCP_RX_BUDGET &&
-             Can_A.readMessage(&prefetched[batch]) == MCP2515::ERROR_OK) {
+             Can_A.readMessage(&prefetched[batch], &partyFrames[batch]) == MCP2515::ERROR_OK) {
         batch++;
       }
       if (batch == 0) break;
@@ -351,6 +352,17 @@ static void canTaskMcp(void* arg) {
       const struct can_frame &rxf = prefetched[bi];
       processed++;
       const uint32_t frameNow = (uint32_t)millis();
+      if (!(rxf.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG))) {
+        usbDiagUlcObserve(board == BOARD_TMR && partyFrames[bi] ? 2 : 0, rxf.can_id, rxf.can_dlc, rxf.data);
+        confirmCountryObserve(board == BOARD_TMR && partyFrames[bi] ? 2 : 0, rxf.can_id, rxf.can_dlc, rxf.data);
+      }
+      if (boardTripleCan() && partyFrames[bi]) {
+        boardPartyRx++;
+        boardPartyLastRx = frameNow;
+        if (!(rxf.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)))
+          nagProcessMcpFrame(rxf);
+        continue; // Party IDs must never feed Body observers or freshness.
+      }
       lastCanAFrameMs = frameNow;
       mcpRxCount++;
       canRxObserve(CAN_RX_BUS_PARTY, frameNow);
@@ -483,7 +495,9 @@ static void canTaskTwai(void* arg) {
       canRxObserve(CAN_RX_BUS_VH, frameNow);
       // Only standard 11-bit DATA frames may reach Tesla decoders or TX paths.
       if (!f.extd && !f.rtr) {
+        usbDiagUlcObserve(1, f.identifier, f.data_length_code, f.data);
         canTxMarkFresh(CAN_TX_FRESH_VH);
+        confirmCountryObserve(1, f.identifier, f.data_length_code, f.data);
         if (f.identifier == 0x7FF) r79LabObserve7ff(T2CAN_BUS_VH, f.data_length_code, f.data);
         bootCaptureObserveVhFrame(f.identifier, f.data_length_code);
         researchCaptureObserveVh((uint16_t)f.identifier, f.data_length_code, f.data);
@@ -697,6 +711,7 @@ static void requestCanSubsystemRestart(uint8_t reason, uint8_t diagReason) {
 }
 
 static bool recoveryMcpColdInit() {
+  if (board == BOARD_TMR) return mcpInitChecked(); // Keep shared SPI and CS_B alive.
   mcpReady = false;
   if (mcpSpiStarted) {
     SPI.end();
@@ -793,8 +808,10 @@ static bool recoveryTwaiFullReinit() {
     return false;
   }
 
-  pinMode(CAN_TX, INPUT);
-  pinMode(CAN_RX, INPUT);
+  if (board == BOARD_T2CAN) {
+    pinMode(CAN_TX, INPUT);
+    pinMode(CAN_RX, INPUT);
+  }
   delay(50);
   return recoveryTwaiInstallFresh();
 }
@@ -831,7 +848,7 @@ static bool recoveryStartCanTasks() {
     canTaskMcpHandle = nullptr;
     return false;
   }
-  BaseType_t b = xTaskCreatePinnedToCore(canTaskTwai, "canB", 8192, nullptr, 4, &canTaskTwaiHandle, 1);
+  BaseType_t b = xTaskCreatePinnedToCore(canTaskTwai, "canB", 8192, nullptr, board == BOARD_TMR ? 5 : 4, &canTaskTwaiHandle, 1);
   if (b != pdPASS) {
     vTaskDelete(canTaskMcpHandle);
     canTaskMcpHandle = nullptr;

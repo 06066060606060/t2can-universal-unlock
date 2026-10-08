@@ -32,7 +32,9 @@
 #endif
 #include "serial_diag.h"
 #include "index_html.h"
+#include "board.h"
 #include "vehicle_profile.h"
+#include "board_can.h"
 #include "summon_state_pure.h"
 #include "auto_blinker_pure.h"
 #include "blinker_tx_policy_pure.h"
@@ -70,12 +72,15 @@
 #include "can_core.h"
 #include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
+#include "confirm_country.h"
 #include "web_api.h"
+#include "usb_diag.h"
 #include "can_runtime.h"
 
 void setup() {
   bootTime = millis();
-  T2CAN_SERIAL_BEGIN(115200);
+  boardDetect();
+  Serial.begin(115200); // Keep native USB available with diagnostics disabled.
   delay(100); // Boot settle retained for behavior compatibility; CAN startup is not held here
 
   rtcBootCount++;
@@ -138,6 +143,7 @@ void setup() {
   // No valid profile means fail-closed setup mode: Wi-Fi/Web/OTA/profile
   // selection only. CAN controllers, CAN tasks, recovery supervisor and BLE
   // are not initialized.
+  if (board == BOARD_UNKNOWN) vehicleProfileSetupMode = true;
   if (vehicleProfileSetupMode || vehicleProfileNvsError) {
     T2CAN_SERIAL_PRINTF("PROFILE SETUP MODE profile=%u nvsError=%s migrationNotice=%s\n",
                   (unsigned)activeVehicleProfile, vehicleProfileNvsError ? "YES" : "NO",
@@ -170,6 +176,7 @@ void setup() {
   nagCfgLoad();
   summonCfgLoad();
   ulcCfgLoadAndMigrate();
+  confirmCountryLoad();
   autoLaneChangeLabCfgLoadAndMigrate();
   r79CfgLoad();
   s3xyAutoLoadConfig();
@@ -206,14 +213,16 @@ void setup() {
 
   // ══ Init CAN A (MCP2515) ══
   T2CAN_SERIAL_PRINTLN("[CAN A] Initializing MCP2515...");
-  pinMode(MCP2515_RST, OUTPUT);
-  digitalWrite(MCP2515_RST, HIGH);
-  delay(1);
-  digitalWrite(MCP2515_RST, LOW);
-  delay(2);
-  digitalWrite(MCP2515_RST, HIGH);
-  delay(2);
-
+  if (!boardCanBegin()) ESP.restart();
+  if (board == BOARD_T2CAN) {
+    pinMode(MCP2515_RST, OUTPUT);
+    digitalWrite(MCP2515_RST, HIGH);
+    delay(1);
+    digitalWrite(MCP2515_RST, LOW);
+    delay(2);
+    digitalWrite(MCP2515_RST, HIGH);
+    delay(2);
+  }
   SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
   mcpSpiStarted = true;
 
@@ -265,7 +274,7 @@ void setup() {
     ESP.restart();
   }
 
-  BaseType_t retTwai = xTaskCreatePinnedToCore(canTaskTwai, "canB", 8192, nullptr, 4, &canTaskTwaiHandle, 1);
+  BaseType_t retTwai = xTaskCreatePinnedToCore(canTaskTwai, "canB", 8192, nullptr, board == BOARD_TMR ? 5 : 4, &canTaskTwaiHandle, 1);
   if (retTwai != pdPASS) {
     T2CAN_SERIAL_PRINTF("CAN B task creation failed: %d\n", retTwai);
     delay(3000);
@@ -308,6 +317,7 @@ void setup() {
 }
 
 void loop() {
+  usbDiagTick();
 #if T2CAN_SERIAL_DIAGNOSTICS
   static unsigned long lastBeatLog = 0;
   static uint32_t loopBeat = 0;
@@ -334,5 +344,5 @@ void loop() {
     );
   }
 #endif
-  vTaskDelay(pdMS_TO_TICKS(1000));
+  vTaskDelay(pdMS_TO_TICKS(10));
 }

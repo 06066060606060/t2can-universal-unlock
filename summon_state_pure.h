@@ -43,6 +43,7 @@ static inline SummonRoutePure summonRoutePure(uint8_t profileId, uint8_t topolog
 
   if (profileId != VEHICLE_MODEL_YL &&
       (topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
+       topology == VEHICLE_TOPOLOGY_STANDARD_THREE_CAN ||
        topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS)) {
     r.valid = true;
     r.gearBusMask = SUMMON_BUS_B;
