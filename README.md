@@ -17,8 +17,8 @@
 
 
 **v3.26.3 Highlights** 
-Dashboard Improvements
-• Clearer feature names and short descriptions
+Dashboard Improvements  
+• Clearer feature names and short descriptions  
 
 **v3.26** 
  - Fixed initial setup recovery, added clear save-error messages, and prevented duplicate saves.
