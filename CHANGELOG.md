@@ -1,3 +1,11 @@
+# T2CAN Universal v3.26.3
+
+## Dashboard clarity and compact Interval — 2026-10-09
+- Applies the accepted English dashboard review: simpler feature names and brief functional descriptions that remain stable after status refresh.
+- Explains that Auto Blinker is inactive while Confirm-Free Lane Change is on. Removes positive restart-persistence annotations while retaining warnings for data/settings that clear after restart.
+- Reuses the common field design for the Nag Killer Interval control with a compact label/value row and right-aligned number. Keeps the 1–600-second range and existing update API.
+- Preserves all CAN policies, feature settings, NVS schema and API behavior. Keeps completed v3.26.2 unchanged.
+
 # T2CAN Universal v3.26.2
 
 ## Factory-reset profile commit hotfix — 2026-10-08

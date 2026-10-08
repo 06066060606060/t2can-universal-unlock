@@ -8,14 +8,19 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.26.2
+# T2CAN Universal Unlock v3.26.3
 
 **Major Universal Release**  
 **Release date:** 8 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
-**v3.26 Highlights** 
+
+**v3.26.3 Highlights** 
+Dashboard Improvements
+• Clearer feature names and short descriptions
+
+**v3.26** 
  - Fixed initial setup recovery, added clear save-error messages, and prevented duplicate saves.
  - Added USB CAN logging and a persistent listen-only mode. (not for everyone)
  - Added a LAB control for the Summon heartbeat value.
