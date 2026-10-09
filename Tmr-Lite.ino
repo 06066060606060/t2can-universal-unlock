@@ -1497,13 +1497,18 @@ static void handle1016(const uint8_t *data, uint8_t dlc) {
 // During SUMMONING only, resend the latest real 0x3FD mux1 frame every 1 s.
 // Preserve the latest received payload and force bit 19=0, bit 47=1.
 static void summonPeriodicTick() {
-    bool summoning;
+    bool en, summoning;
     portENTER_CRITICAL(&stateMux);
+    en = summonEnabled;
     summoning = gateSummoning;
     portEXIT_CRITICAL(&stateMux);
 
-    if (!summoning)
+    // Match the direct injection gate: disabling Summon must immediately
+    // stop periodic R79/EU-Unlock echoes, even before gateSummoning expires.
+    if (!en || !summoning) {
+        lastSummonPeriodicTxMs = 0;
         return;
+    }
 
     const uint32_t now = (uint32_t)millis();
     if (lastSummonPeriodicTxMs != 0 &&
