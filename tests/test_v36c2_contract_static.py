@@ -9,7 +9,7 @@ web = (root / 'web_api.h').read_text(encoding='utf-8')
 dash = (root / 'dashboard_source.html').read_text(encoding='utf-8')
 fixed = (root / 'r79_fixed_policy_pure.h').read_text(encoding='utf-8')
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'H_VARIANT_REV3' not in variant
 assert '#include "nag_human_v3_pure.h"' in ino
 assert 'nagHumanV3StepPure' not in core

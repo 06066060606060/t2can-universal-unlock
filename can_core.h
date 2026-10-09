@@ -478,6 +478,30 @@ static esp_err_t canTxTwaiTransmitValidated(
   return err;
 }
 
+// Compose and validate feature payloads at the final MCP enqueue boundary.
+static bool canTxMcpSendValidated(struct can_frame *msg, uint32_t expectedEpoch,
+    bool (*validate)(struct can_frame *, void *), void *context,
+    MCP2515::ERROR &errOut) {
+  errOut = MCP2515::ERROR_FAIL;
+  if (!msg || !validate) return false;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+    canATraceRecordTx(msg, MCP_TX_MUTEX_BUSY, errOut, CAN_TX_TRACE_SOURCE_DEFAULT);
+    return false;
+  }
+  McpTxResultReason reason = MCP_TX_EPOCH_MISMATCH;
+  bool admitted = false;
+  if (!canTxAdministrativeHold && mcpReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, CAN_TX_FRESH_BOTH) &&
+      validate(msg, context)) {
+    admitted = true;
+    errOut = Can_A.sendMessage(msg);
+    reason = errOut == MCP2515::ERROR_OK ? MCP_TX_OK : MCP_TX_SEND_ERROR;
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  canATraceRecordTx(msg, reason, errOut, CAN_TX_TRACE_SOURCE_DEFAULT);
+  return admitted;
+}
+
 static bool canTxMcpSendTagged(const struct can_frame *msg,
                                uint32_t expectedEpoch, uint8_t traceSource,
                                MCP2515::ERROR &errOut,
@@ -1751,8 +1775,10 @@ static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo,
 static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   const bool yl399Route = activeProfileIsYl();
   const bool legacyBody39BRoute = nagTsl9Body39BSelected();
-  if ((!yl399Route && !legacyBody39BRoute) ||
-      !activeProfileNagTsl9Supported()) return false;
+  const bool handsOnRoute = activeProfileNagTsl9Supported() &&
+      (yl399Route || legacyBody39BRoute);
+  const bool isaRoute = yl399Route && activeProfileIsaSuppressionSupported();
+  if (!handsOnRoute && !isaRoute) return false;
   const uint16_t expectedId = legacyBody39BRoute ? 0x39Bu : 0x399u;
   if ((rxf.can_id & 0xC0000000UL) != 0 ||
       (rxf.can_id & 0x7FFu) != expectedId || rxf.can_dlc < 8u) return false;
@@ -1776,11 +1802,14 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   struct can_frame out = rxf;
   const uint32_t nowMs = (uint32_t)millis();
   Tsl9DasTransformResultPure result;
+  // ISA on a separate route must not start/reset the Nag downgrade window.
+  Tsl9HandsOnStatePure isaOnlyState = {};
   portENTER_CRITICAL(&nagTsl9Mux);
-  if (method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
+  if (handsOnRoute && method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
   result = tsl9ApplyDasTransformForCanIdPure(
-      nagTsl9State, enabled && method == NAG_METHOD_TSL9_PURE,
-      sequence, downgradeWindow, isaSuppression, expectedId,
+      handsOnRoute ? nagTsl9State : isaOnlyState,
+      handsOnRoute && enabled && method == NAG_METHOD_TSL9_PURE,
+      sequence, downgradeWindow, isaRoute && isaSuppression, expectedId,
       out.data, out.can_dlc, nowMs);
   if (result.handsOnModified) nagTsl9Modified++;
   if (result.handsOnModified) nagTsl9HandsOnModified++;
@@ -1815,9 +1844,10 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
 // Standard profiles receive DAS_status 0x399 on Chassis CAN B. This transport
 // is available with either Body+Chassis or Party+Chassis wiring.
 static bool nagProcessTsl9Twai399(const twai_message_t &src) {
-  if (!nagTsl9Chassis399Selected() ||
-      !activeProfileNagTsl9Supported() ||
-      !activeCanBIsChassis()) return false;
+  const bool handsOnRoute = nagTsl9Chassis399Selected();
+  const bool isaRoute = activeCanBIsChassis() &&
+      activeProfileIsaSuppressionSupported();
+  if ((!handsOnRoute && !isaRoute) || !activeCanBIsChassis()) return false;
   if (src.extd || src.rtr || src.identifier != 0x399u ||
       src.data_length_code < 8u) return false;
 
@@ -1841,11 +1871,14 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   out.flags = 0;
   const uint32_t nowMs = (uint32_t)millis();
   Tsl9DasTransformResultPure result;
+  // ISA on a separate route must not start/reset the Nag downgrade window.
+  Tsl9HandsOnStatePure isaOnlyState = {};
   portENTER_CRITICAL(&nagTsl9Mux);
-  if (method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
+  if (handsOnRoute && method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
   result = tsl9ApplyDasTransformForCanIdPure(
-      nagTsl9State, enabled && method == NAG_METHOD_TSL9_PURE,
-      sequence, downgradeWindow, isaSuppression, 0x399u,
+      handsOnRoute ? nagTsl9State : isaOnlyState,
+      handsOnRoute && enabled && method == NAG_METHOD_TSL9_PURE,
+      sequence, downgradeWindow, isaRoute && isaSuppression, 0x399u,
       out.data, out.data_length_code, nowMs);
   if (result.handsOnModified) nagTsl9Modified++;
   if (result.handsOnModified) nagTsl9HandsOnModified++;
@@ -1858,9 +1891,12 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   if (!result.modified) return false;
 
   const uint32_t txEpoch = canTxEpochSnapshot();
-  const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
-      &out, txEpoch, CAN_TX_FRESH_BOTH, CAN_TX_TRACE_SOURCE_DEFAULT,
-      &isaSuppressionGeneration, isaSuppressionGenerationSnapshot);
+  // Independent ISA can modify every active-AP stock frame. Respect the
+  // shared Non-R79 admission ceiling without changing Nag-only TX policy.
+  const esp_err_t err = result.isaModified && !twaiNonSummonAdmissionOpen()
+      ? ESP_FAIL : canTxTwaiTransmitWithMaskTaggedGuarded(
+          &out, txEpoch, CAN_TX_FRESH_BOTH, CAN_TX_TRACE_SOURCE_DEFAULT,
+          &isaSuppressionGeneration, isaSuppressionGenerationSnapshot);
   const bool ok = err == ESP_OK;
   nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu),
                   result.handsOnModified, result.isaModified);

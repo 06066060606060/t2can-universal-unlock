@@ -6,7 +6,7 @@ web = (r/'web_api.h').read_text(errors='ignore')
 html = (r/'dashboard_source.html').read_text(errors='ignore')
 pure = (r/'ulc_stalk_confirm_pure.h').read_text(errors='ignore')
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE' in pure
 assert 'ULC_NO_CONFIRM_TIMING_PRE_AP_PURE' in pure
 assert 'ulcNoConfirmGateOpenWithTimingPure' in pure

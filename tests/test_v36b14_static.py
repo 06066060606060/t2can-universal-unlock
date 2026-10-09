@@ -7,7 +7,7 @@ logic=(ROOT/'vehicle_logic.h').read_text()
 api=(ROOT/'web_api.h').read_text()
 dash=(ROOT/'dashboard_source.html').read_text()
 ulc=(ROOT/'ulc_stalk_confirm_pure.h').read_text()
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 # Confirm-Free is fixed to the production CAN-B 0x3F8 compositor.
 assert 'ulcNoConfirmBusSelectablePure' not in ulc
 assert 'static void lab3f8ObserveCanB' in logic

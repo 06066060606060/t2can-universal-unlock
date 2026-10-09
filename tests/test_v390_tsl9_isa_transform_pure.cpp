@@ -25,8 +25,7 @@ int main() {
   assert((frame[6] >> 4) == 6u);
   assert(frame[7] == tsl9ChecksumForCanIdPure(0x399u, frame));
 
-  // ISA only applies to the original HO=4 state, even when the selected
-  // Hands-On sequence does not transform that frame.
+  // ISA remains active independently of the selected Hands-On sequence.
   state = {};
   makeFrame(frame, 3u, 4u, 9u);
   result = tsl9ApplyDasTransformForCanIdPure(
@@ -73,7 +72,7 @@ int main() {
       TSL9_DOWNGRADE_AP_SESSION_PURE, true, 0x399u, frame, 8u, 4000u);
   assert(result.modified && !result.handsOnModified && result.isaModified);
   assert((frame[1] & 0x20u) != 0u);
-  // AP-inactive and non-HO4 inputs do not suppress ISA.
+  // AP-inactive inputs stay blocked; non-HO4 active inputs suppress ISA.
   state = {};
   makeFrame(frame, 2u, 4u);
   result = tsl9ApplyDasTransformForCanIdPure(
@@ -85,7 +84,7 @@ int main() {
   result = tsl9ApplyDasTransformForCanIdPure(
       state, true, TSL9_SEQUENCE_V82_ORIGINAL_PURE,
       TSL9_DOWNGRADE_AP_SESSION_PURE, true, 0x399u, frame, 8u, 6000u);
-  assert(!result.isaModified);
+  assert(result.isaModified && !result.handsOnModified);
 
   return 0;
 }

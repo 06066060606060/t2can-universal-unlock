@@ -7,7 +7,7 @@ api = (R / 'web_api.h').read_text()
 dash = (R / 'dashboard_source.html').read_text()
 fixed = (R / 'r79_fixed_policy_pure.h').read_text()
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'R79_FIXED_FAST_WAIT_MS_PURE = 2u' in fixed
 a = vl.index('static bool r79FixedFastEcho(const twai_message_t &src) {')
 fast = vl[a:vl.index('static void r79FixedObserveStock(', a)]

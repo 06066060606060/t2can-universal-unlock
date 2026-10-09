@@ -1,4 +1,4 @@
-// T2CAN Universal v3.26.2 - Model 3/Y / Model YL firmware
+// T2CAN Universal v3.28.0 - Model 3/Y / Model YL firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -77,8 +77,9 @@
 #include "fixed_point_arduino.h"
 #include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.26.2"
+#define FW_VERSION "v3.28.0"
 
+#include "continuous_ap_fsm_pure.h"
 #include "t2can_core_state.h"
 #include "t2can_forward.h"
 #include "can_usb_logger.h"
@@ -88,6 +89,7 @@
 #include "can_core.h"
 #include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
+#include "continuous_ap_runtime.h"
 #include "web_api.h"
 #include "can_runtime.h"
 #include "can_usb_logger_task.h"
@@ -202,6 +204,7 @@ void setup() {
   nvsSchemaRead();
   (void)(featureConfigMigrateToSchema2() && featureConfigMigrateToSchema3());
   featureCfgLoad();
+  continuousApControlLoad();
   nagCfgLoad();
   summonCfgLoad();
   ulcCfgLoadAndMigrate();

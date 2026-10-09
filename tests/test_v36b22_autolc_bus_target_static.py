@@ -6,7 +6,7 @@ html = (root/'dashboard_source.html').read_text()
 ino = next(root.glob('*.ino')).read_text()
 pure = (root/'auto_lane_change_enable_pure.h').read_text()
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'UI_AUTO_LC_BUS_BOTH_PURE' in pure
 assert 'uiAutoLaneChangeBusAllowedPure' in pure
 assert 'uiAutoLaneChangeTargetBus' in logic

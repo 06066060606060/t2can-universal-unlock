@@ -9,7 +9,7 @@ forward = (root / 't2can_forward.h').read_text(encoding='utf-8')
 ino_files = list(root.glob('*.ino'))
 assert len(ino_files) == 1
 ino = ino_files[0].read_text(encoding='utf-8')
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 
 # PedalMap mode changes cache the full latest stock 0x334 template and attempt
 # one immediate one-shot TX, while preserving the existing stock-follow overlay.

@@ -13,7 +13,7 @@ code = r'''
 #include <vector>
 #include <algorithm>
 #include "can_usb_logger_pure.h"
-#define FW_VERSION "v3.26.3"
+#define FW_VERSION "v3.28.0"
 #define pdMS_TO_TICKS(x) (x)
 #define portENTER_CRITICAL(x) ((void)(x))
 #define portEXIT_CRITICAL(x) ((void)(x))
@@ -79,7 +79,7 @@ void verifyFinal(int expectedSession){
 }
 int main(){
  reset(0);run();verifyFinal(1);
- assert(lines.front()=="\n"&&lines[1]=="@HELLO,1,v3.26.3\n");
+ assert(lines.front()=="\n"&&lines[1]=="@HELLO,1,v3.28.0\n");
  assert(lines[3]=="@CTRL,1,4,2,3,1,1\n");
  reset(1);run();verifyFinal(1); // STOP arrives between periodic CTRL and its STAT.
  assert(std::find(lines.begin(),lines.end(),"@STAT,1,3,3,0,3\n")!=lines.end());
@@ -88,7 +88,7 @@ int main(){
  assert(Serial.output.find("@ERROR,session_busy")==std::string::npos);
  assert(Serial.output.find("@ERROR,unknown_command")==std::string::npos);
  // A truncated old frame is separated by a newline and a fresh HELLO.
- assert(Serial.output.find("\n@HELLO,1,v3.26.3\n",Serial.output.find("@CA"))!=std::string::npos);
+ assert(Serial.output.find("\n@HELLO,1,v3.28.0\n",Serial.output.find("@CA"))!=std::string::npos);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='can-usb-task-') as directory:

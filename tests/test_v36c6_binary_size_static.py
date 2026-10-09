@@ -13,7 +13,7 @@ spec = importlib.util.spec_from_file_location('build_dashboard', root/'tools'/'b
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert (root/'fixed_point_pure.h').exists()
 assert 'strtod(' not in web
 for dead in ('steeringScale', 'steeringOffset', 'steeringAngleDeg', 'lastModeCTorqueNm'):

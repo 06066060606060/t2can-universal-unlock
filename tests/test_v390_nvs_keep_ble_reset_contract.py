@@ -5,7 +5,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 API = (ROOT / "web_api.h").read_text()
-INO = (ROOT / "T2CAN-Universal-v3.26.3-LP_YL.ino").read_text()
+INO = (ROOT / "T2CAN-Universal-v3.28.0-LP_YL.ino").read_text()
 
 
 class NvsKeepBleResetContract(unittest.TestCase):

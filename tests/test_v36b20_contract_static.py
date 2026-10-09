@@ -12,7 +12,7 @@ v3 = (root/'nag_human_v3_pure.h').read_text(errors='ignore')
 v4 = (root/'nag_human_v4_pure.h').read_text(errors='ignore')
 variants = (root/'nag_mode_h_variant_pure.h').read_text(errors='ignore')
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert '#include "nag_human_v4_pure.h"' in ino
 assert '#include "nag_mode_h_variant_pure.h"' in ino
 

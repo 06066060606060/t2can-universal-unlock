@@ -14,7 +14,7 @@ def block(text: str, start: str, end: str) -> str:
 class R79DmsOwnershipContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.ino = (ROOT / "T2CAN-Universal-v3.26.3-LP_YL.ino").read_text()
+        cls.ino = (ROOT / "T2CAN-Universal-v3.28.0-LP_YL.ino").read_text()
         cls.core = (ROOT / "can_core.h").read_text()
         cls.logic = (ROOT / "vehicle_logic.h").read_text()
         cls.api = (ROOT / "web_api.h").read_text()

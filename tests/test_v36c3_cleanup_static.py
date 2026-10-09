@@ -4,7 +4,7 @@ root = Path(__file__).resolve().parents[1]
 ino = next(root.glob('*.ino')).read_text(encoding='utf-8')
 
 # c3 is a conservative cleanup-only release.
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 
 # Confirmed dead production symbols must stay removed.
 checks = {

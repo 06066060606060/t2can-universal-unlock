@@ -7,7 +7,7 @@ pure = (root / 'driver_monitor_capture_pure.h').read_text(encoding='utf-8')
 api = (root / 'web_api.h').read_text(encoding='utf-8')
 html = (root / 'dashboard_source.html').read_text(encoding='utf-8')
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'driverMonitorCaptureInit();' in ino
 assert 'if (activeProfileIsYl()) driverMonitorCaptureInit();' not in ino
 

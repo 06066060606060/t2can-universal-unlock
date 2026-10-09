@@ -9,7 +9,7 @@ api = (root / 'web_api.h').read_text()
 dash = (root / 'dashboard_source.html').read_text()
 fixed = (root / 'r79_fixed_policy_pure.h').read_text()
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'R79_FIXED_QUIET_DELAY_MS_PURE = 150u' in fixed
 assert 'r79FixedQuietStepPure' in vehicle and 'r79FixedObserveStock' in vehicle
 dispatch = runtime.index('r79ProcessStockFrame(f, timingMux, r79FrameNowMs)')

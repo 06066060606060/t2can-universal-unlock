@@ -8,7 +8,7 @@ html = (root / 'dashboard_source.html').read_text(encoding='utf-8')
 ino_files = list(root.glob('*.ino'))
 assert len(ino_files) == 1
 ino = ino_files[0].read_text(encoding='utf-8')
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 
 # AP Pedal / Regen Profile follows the 0x334-capable topology, not a YL model check.
 assert 'vehicleProfileApDriveProfileSupported' in profile

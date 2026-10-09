@@ -341,3 +341,8 @@ static void canSupervisorTask(void* arg);
 
 static bool prepareCanForMaintenance();
 static void restartT2CanSafely();
+
+static inline bool continuousApOwnsInputRoute(ContApRoute route);
+
+static inline bool continuousApValidateNagCanA(struct can_frame *out,void *arg);
+static inline bool continuousApValidateNagCanB(twai_message_t *out,void *arg);

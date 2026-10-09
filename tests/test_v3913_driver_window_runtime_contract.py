@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-INO = (ROOT / "T2CAN-Universal-v3.26.3-LP_YL.ino").read_text()
+INO = (ROOT / "T2CAN-Universal-v3.28.0-LP_YL.ino").read_text()
 CORE = (ROOT / "can_core.h").read_text()
 RUNTIME = (ROOT / "can_runtime.h").read_text()
 LOGIC = (ROOT / "vehicle_logic.h").read_text()
@@ -56,4 +56,4 @@ for field in (
 ):
     assert field in WEB
 
-print("PASS v3.26.3 driver-window LAB runtime/API contract")
+print("PASS v3.28.0 driver-window LAB runtime/API contract")

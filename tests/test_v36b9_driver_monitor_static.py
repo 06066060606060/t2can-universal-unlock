@@ -4,7 +4,7 @@ root = Path(__file__).resolve().parents[1]
 ino_files = list(root.glob('*.ino'))
 assert len(ino_files) == 1
 ino = ino_files[0].read_text(encoding='utf-8')
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert '#include "driver_monitor_capture_pure.h"' in ino
 assert '#include "driver_monitor_capture.h"' in ino
 

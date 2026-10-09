@@ -5,7 +5,7 @@ v=(R/'vehicle_logic.h').read_text()
 f=(R/'t2can_forward.h').read_text()
 d=(R/'dashboard_source.html').read_text()
 ino=next(R.glob('*.ino')).read_text()
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 # Existing persisted IDs remain stable; new actions append only.
 assert 'S3XY_ACTION_PERFORMANCE_MODE = 10' in s
 assert 'S3XY_ACTION_LEFT_BLINKER = 11' in s

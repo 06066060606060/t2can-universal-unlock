@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 class NagRightScrollContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.ino = (ROOT / "T2CAN-Universal-v3.26.3-LP_YL.ino").read_text()
+        cls.ino = (ROOT / "T2CAN-Universal-v3.28.0-LP_YL.ino").read_text()
         cls.logic = (ROOT / "vehicle_logic.h").read_text()
         cls.runtime = (ROOT / "can_runtime.h").read_text()
         cls.api = (ROOT / "web_api.h").read_text()

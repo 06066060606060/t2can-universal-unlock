@@ -9,7 +9,7 @@ text = ino.read_text()
 web = (ROOT / 'web_api.h').read_text()
 driver = (ROOT / 'driver_monitor_capture.h').read_text()
 
-assert '#define FW_VERSION "v3.26.3"' in text, 'firmware version must be v3.26.3'
+assert '#define FW_VERSION "v3.28.0"' in text, 'firmware version must be v3.28.0'
 assert '#include "json_writer_arduino.h"' in text, 'compact JSON writer must be included'
 assert (ROOT / 'json_writer_arduino.h').exists(), 'compact JSON writer header missing'
 

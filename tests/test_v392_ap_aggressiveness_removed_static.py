@@ -18,7 +18,7 @@ dashboard = (root / "dashboard_source.html").read_text(encoding="utf-8")
 
 # Removal contract: the failed AP Aggressiveness experiment must not leave any
 # runtime, API, persistence, trace, or dashboard integration behind.
-assert '#define FW_VERSION "v3.26.3"' in production
+assert '#define FW_VERSION "v3.28.0"' in production
 assert not (root / "ap_aggressiveness_pure.h").exists()
 assert not (root / "tests" / "test_ap_aggressiveness_pure.cpp").exists()
 
@@ -39,4 +39,4 @@ for marker in (
 # The independent, existing 0x334 AP pedal/regen feature remains supported.
 assert "AP Accel / Regen" in dashboard
 
-print("PASS v3.26.3 AP Aggressiveness removal contract")
+print("PASS v3.28.0 AP Aggressiveness removal contract")

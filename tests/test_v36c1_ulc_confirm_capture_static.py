@@ -7,7 +7,7 @@ pure = (root / 'can_research_capture_pure.h').read_text(encoding='utf-8')
 api = (root / 'web_api.h').read_text(encoding='utf-8')
 html = (root / 'dashboard_source.html').read_text(encoding='utf-8')
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'RESEARCH_CAPTURE_MODE_ULC_CONFIRM = 3' in cap
 assert 'RESEARCH_CAPTURE_ULC_CONFIRM_PRE_MS = 3000' in cap
 assert 'RESEARCH_CAPTURE_ULC_CONFIRM_POST_MS = 7000' in cap
@@ -22,7 +22,7 @@ assert 'RESEARCH_CAPTURE_ULC_CONFIRM_PRE_MS' in cap
 assert 'RESEARCH_CAPTURE_ULC_CONFIRM_POST_MS' in cap
 
 # The legacy targeted recorder implementation remains available for historical
-# CSV decoding, but v3.26.3 deliberately retires it from the public API/UI.
+# CSV decoding, but v3.28.0 deliberately retires it from the public API/UI.
 mode_handler = api[api.index('static void httpResearchCaptureMode()'):
                    api.index('static void httpResearchCaptureReset()')]
 assert 'raw == "ULC_CONFIRM"' not in mode_handler

@@ -6,7 +6,7 @@ api=(root/'web_api.h').read_text()
 html=(root/'dashboard_source.html').read_text()
 ino=next(root.glob('*.ino')).read_text()
 pure=(root/'auto_lane_change_enable_pure.h').read_text() if (root/'auto_lane_change_enable_pure.h').exists() else ''
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 # Confirm-Free must be AP-active, not NOA-only.
 ulc=(root/'ulc_stalk_confirm_pure.h').read_text()
 assert 'dasState4 == 3' in ulc and 'dasState4 == 4' in ulc and 'dasState4 == 5' in ulc and 'dasState4 == 6' in ulc

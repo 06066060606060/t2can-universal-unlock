@@ -3,13 +3,13 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INO = (ROOT / "T2CAN-Universal-v3.26.3-LP_YL.ino").read_text()
+INO = (ROOT / "T2CAN-Universal-v3.28.0-LP_YL.ino").read_text()
 CORE = (ROOT / "can_core.h").read_text()
 RUNTIME = (ROOT / "can_runtime.h").read_text()
 API = (ROOT / "web_api.h").read_text()
 
-assert INO.startswith("// T2CAN Universal v3.26.3")
-assert '#define FW_VERSION "v3.26.3"' in INO
+assert INO.startswith("// T2CAN Universal v3.28.0")
+assert '#define FW_VERSION "v3.28.0"' in INO
 assert '#include "can_task_diagnostics_pure.h"' in INO
 
 for symbol in (
@@ -68,4 +68,4 @@ assert supervisor.count("canTaskHeartbeatTimedOutPure(") == 2
 assert "(uint32_t)(now - canTaskMcpHeartbeatMs)" not in supervisor
 assert "(uint32_t)(now - canTaskTwaiHeartbeatMs)" not in supervisor
 
-print("PASS v3.26.3 CAN task and CAN A RX diagnostic integration contract")
+print("PASS v3.28.0 CAN task and CAN A RX diagnostic integration contract")

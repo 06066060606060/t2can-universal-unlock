@@ -1,3 +1,30 @@
+# T2CAN Universal v3.28.0
+
+## Continuous AP — 2026-10-10
+- Adds default-off Continuous AP with selectable Stalk Down (two pulls), Scroll Click and Scroll Double Click under Settings. The chosen method must match the vehicle's Autopilot activation setting.
+- Supports Legacy Model 3/Y stalk input on Body+Chassis and Highland/Juniper scroll input on Body+Chassis or Party+Chassis. Excludes YL and unverified Legacy Party+Chassis stalk routing; no method fallback.
+- Observes unmodified Chassis AP/indicator/brake/gear and route-qualified physical controls/steering torque. Requires a fresh AP-active-to-ready transition during a single indicated lane change, then 1,000 ms after signal off; limits an episode to three attempts and 10 seconds.
+- Persists one versioned `features/contApCfg` key. Strict GET/POST configuration rejects unsupported ON requests, keeps live state on NVS failure, cancels an old episode on saved settings changes, and reconciles lost HTTP replies with GET without repeated POST.
+- Serializes final MCP/TWAI admission, settings publication and cancellation under the existing TX barrier. Stops on physical input, brake, unknown/stale state, fault/non-Drive gear, signal reactivation, route/epoch changes and transport holds; retains stop events across drained RX batches.
+- Releases an accepted input through its original adapter with bounded cleanup. Separates Nag rotation and composes shared 0x3C2 from qualified newest idle stock rather than replaying a cached click. Exact echoes remain ambiguous and do not prove vehicle acceptance.
+- Preserves the completed v3.27.0 package. Host/browser verification and target build evidence are recorded in VALIDATION.md; physical gesture acceptance, OEM competition and vehicle timing/torque applicability remain unverified.
+
+# T2CAN Universal v3.27.0
+
+## Independent ISA Suppression — 2026-10-10
+- Separates ISA profile capability and transport selection from Nag/TSL9, including Standard Party+Chassis.
+- ISA uses Party CAN A 0x399 on YL and Chassis CAN B 0x399 on every valid Standard topology, independent of the Legacy Nag Body 0x39B selection.
+- Removes the TSL9 Hands-On/CHIME 1 dependency: valid active-AP frames can suppress speed warnings in every Hands-On state. Preserves the saved standalone setting and guarded TX; combines ISA and Nag mutations into one frame only when they share a route.
+- Leaves Nag support, Hands-On downgrade windows and Legacy Body 0x39B behavior unchanged; ISA-only frames do not mutate Nag session state or counters.
+- Keeps completed v3.26.4 unchanged.
+
+# T2CAN Universal v3.26.4
+
+## Diagnostics BUS OFF display hotfix — 2026-10-09
+- Fixes the repeated Diagnostics flicker between a blank age and persisted BUS OFF evidence, which also changed row heights and shifted nearby rows.
+- Uses one formatter for BUS OFF age, snapshots and CAN A/B TX trace evidence when system telemetry arrives. Keeps current/previous-boot labels, event uptime, persistence status and errors accurate.
+- Preserves existing dashboard styling, polling intervals, recovery controls, APIs, NVS storage and all CAN behavior. Keeps completed v3.26.3 unchanged.
+
 # T2CAN Universal v3.26.3
 
 ## Dashboard clarity and compact Interval — 2026-10-09

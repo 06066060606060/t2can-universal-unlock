@@ -8,7 +8,7 @@ CAPTURE = (ROOT / "can_research_capture.h").read_text(encoding="utf-8")
 API = (ROOT / "web_api.h").read_text(encoding="utf-8")
 HTML = (ROOT / "dashboard_source.html").read_text(encoding="utf-8")
 
-assert '#define FW_VERSION "v3.26.3"' in INO
+assert '#define FW_VERSION "v3.28.0"' in INO
 
 # SNAPSHOT and RAW TRANSITION share one fixed PSRAM allocation. A mode change
 # must not free the working buffers and attempt a larger fragmented allocation.
@@ -44,4 +44,4 @@ save_mode = HTML[
 assert "capture mode change failed" in save_mode
 assert "alert(" in save_mode
 
-print("PASS v3.26.3 stable two-mode research capture contract")
+print("PASS v3.28.0 stable two-mode research capture contract")

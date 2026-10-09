@@ -84,8 +84,8 @@
       if(groups==='home-fast')return send({fast:homeFast,...(u.searchParams.has('slow')?{slow:homeSlow}:{})});
       if(groups==='home-slow')return send(homeSlow);
       if(groups==='lab-lite')return send({r79,alc:{alcValid:true,alcRaw:apActive?8:0,alcAgeMs:10,lane239Valid:true,lane239AgeMs:14,leftLaneExists:1,leftLineUsageRaw:2,leftForkRaw:0,rightLaneExists:1,rightLineUsageRaw:2,rightForkRaw:0},dmsNag:driverMonitoring});
-      if(groups==='settings-lite')return send({system:{fwVersion:'3.26.3'},blink:{delayMs:300},summon:{sessionActive:false},s3xy,lab3f8:{alcMode:0},r79});
-      if(groups==='system')return send({system:{fwVersion:'3.26.3'}});
+      if(groups==='settings-lite')return send({system:{fwVersion:'3.27.0'},blink:{delayMs:300},summon:{sessionActive:false},s3xy,lab3f8:{alcMode:0},r79});
+      if(groups==='system')return send({system:{fwVersion:'3.27.0'}});
       return send({});
     }
     return send({ok:true});

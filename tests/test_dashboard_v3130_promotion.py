@@ -8,4 +8,4 @@ for removed in ['modeHRev1','modeHRev3','modeHRev4','Rev.4','REV.4','Rev.1','Rev
     assert removed not in s, removed
 settings=s.split('<main class="page" data-page="settings"',1)[1].split('</main>',1)[0]
 assert 'data-panel="panelCountry"' in settings
-print('v3.26.3 dashboard promotion: PASS')
+print('v3.28.0 dashboard promotion: PASS')

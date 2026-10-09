@@ -39,7 +39,11 @@ assert 'canTxTwaiTransmitWithMaskTaggedGuarded(' in twai
 assert '&isaSuppressionGeneration' in twai
 assert 'tsl9ApplyDasTransformForCanIdPure' in twai
 assert 'nagProcessTsl9Twai399(f)' in runtime
-assert 'activeProfileNagTsl9Supported()' in twai
+assert 'const bool handsOnRoute = nagTsl9Chassis399Selected();' in twai
+assert 'handsOnRoute && enabled && method == NAG_METHOD_TSL9_PURE' in twai
+selector = core.split('static bool nagTsl9Chassis399Selected()',1)[1].split('\n}',1)[0]
+assert 'activeProfileNagTsl9Supported()' in selector
+assert 'activeProfileIsaSuppressionSupported()' in twai
 assert 'nagTsl9Chassis399Selected()' in twai
 
 # The method switch is exclusive: TSL9 can still observe the AP-status frame,

@@ -2926,11 +2926,10 @@ static String isaSuppressionControlJson() {
   String json;
   JsonWriterArduino jw(json);
   jw.boolean("enabled", isaSuppressionControlSnapshot());
-  jw.boolean("supported", activeProfileNagTsl9Supported());
+  jw.boolean("supported", activeProfileIsaSuppressionSupported());
   jw.boolean("active", isaSuppressionControlActive());
   jw.string("route", activeProfileIsYl()
-      ? "PARTY_0x399" : nagTsl9Body39BSelected()
-          ? "BODY_0x39B" : "CHASSIS_0x399");
+      ? "PARTY_0x399" : "CHASSIS_0x399");
   jw.u32("modified", modified);
   jw.u32("txOk", txOk);
   jw.u32("txFail", txFail);
@@ -2948,7 +2947,7 @@ static void httpIsaSuppressionControlUpdate() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
     return;
   }
-  if (enabled && !activeProfileNagTsl9Supported()) {
+  if (enabled && !activeProfileIsaSuppressionSupported()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"ISA suppression unavailable for current profile\"}");
     return;
   }
@@ -2957,6 +2956,44 @@ static void httpIsaSuppressionControlUpdate() {
     return;
   }
   server.send(200, "application/json", isaSuppressionControlJson());
+}
+
+static String continuousApControlJson(){
+  portENTER_CRITICAL(&continuousApMux);
+  const auto cfg=continuousApConfig;const auto status=continuousApFsm.status();
+  portEXIT_CRITICAL(&continuousApMux);
+  const auto route=continuousApGestureRoutePure(activeVehicleProfile,activeVehicleTopology,cfg.method);
+  const bool stalk=vehicleProfileContinuousApMethodSupported(activeVehicleProfile,activeVehicleTopology,1);
+  const bool single=vehicleProfileContinuousApMethodSupported(activeVehicleProfile,activeVehicleTopology,2);
+  const bool doubleClick=vehicleProfileContinuousApMethodSupported(activeVehicleProfile,activeVehicleTopology,3);
+  String json;JsonWriterArduino jw(json);
+  jw.boolean("enabled",cfg.enabled);jw.u32("method",(uint8_t)cfg.method);
+  jw.boolean("effectiveEnabled",cfg.enabled&&route!=ContApRoute::None);
+  jw.boolean("supported",stalk||single||doubleClick);
+  jw.boolean("stalkSupported",stalk);jw.boolean("scrollSingleSupported",single);jw.boolean("scrollDoubleSupported",doubleClick);
+  jw.string("supportReason",stalk||single||doubleClick?"Select a supported method that matches your vehicle's Autopilot setting.":"Unavailable for this vehicle connection. Standard Model 3/Y with Chassis CAN is required.");
+  jw.string("route",route==ContApRoute::BodyA?"Body CAN A":route==ContApRoute::ChassisB?"Chassis CAN B":"Unavailable");
+  jw.string("state",continuousApStateName(status.state));jw.string("blockedReason",continuousApReasonName(status.reason));
+  jw.u32("attempts",status.attempts);jw.u32("txOk",status.txOk);jw.u32("txFail",status.txFail);jw.u32("cleanupSends",status.cleanupSends);
+  jw.boolean("releasePending",status.releaseOwed);jw.boolean("cleanupUnconfirmed",status.cleanupUnconfirmed);jw.finish();return json;
+}
+static void httpContinuousApControlConfig(){server.send(200,"application/json",continuousApControlJson());}
+static void httpContinuousApControlUpdate(){
+  bool enabled;unsigned enabledArgs=0,methodArgs=0;
+  for(int n=0;n<server.args();++n){
+    const String name=server.argName(n);
+    if(name=="enabled")++enabledArgs;else if(name=="method")++methodArgs;
+    else {server.send(400,"application/json","{\"ok\":false,\"error\":\"unknown argument\"}");return;}
+  }
+  const String method=server.arg("method");
+  if(server.args()!=2||enabledArgs!=1||methodArgs!=1||!httpBoolArg("enabled",enabled)||!(method=="0"||method=="1"||method=="2"||method=="3")){
+    server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid enabled or method\"}");return;
+  }
+  ContApConfig next{enabled,method=="1"?ContApMethod::StalkDouble:method=="2"?ContApMethod::ScrollSingle:method=="3"?ContApMethod::ScrollDouble:ContApMethod::Unset};
+  if(enabled&&next.method==ContApMethod::Unset){server.send(400,"application/json","{\"ok\":false,\"error\":\"choose a method\"}");return;}
+  if(enabled&&continuousApGestureRoutePure(activeVehicleProfile,activeVehicleTopology,next.method)==ContApRoute::None){server.send(409,"application/json","{\"ok\":false,\"error\":\"unsupported method\"}");return;}
+  if(!continuousApControlApply(next)){server.send(503,"application/json","{\"ok\":false,\"error\":\"save failed\"}");return;}
+  server.send(200,"application/json",continuousApControlJson());
 }
 
 static void httpFeatureStatus() {
@@ -5489,6 +5526,8 @@ static void webTask(void *arg) {
               httpDriverMonitoringControlConfig);
     server.on("/api/driver-monitoring/config", HTTP_POST,
               httpDriverMonitoringControlUpdate);
+    server.on("/api/continuous-ap/config", HTTP_GET, httpContinuousApControlConfig);
+    server.on("/api/continuous-ap/config", HTTP_POST, httpContinuousApControlUpdate);
     server.on("/api/isa-suppression/config", HTTP_GET,
               httpIsaSuppressionControlConfig);
     server.on("/api/isa-suppression/config", HTTP_POST,

@@ -109,6 +109,7 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   // Keep an owned CENTER cleanup pending across controller recovery. The
   // scheduler will retry only after a fresh route-local MUX1 template arrives.
   tsl9InputRequestCancel(TSL9_INPUT_FAILURE_CAN_UNAVAILABLE_PURE, true);
+  continuousApResetForEpoch(barrierLocked ? canTxBarrierState.epoch : 0u);
   driverWindowLabResetRuntimeUnderTxBarrier();
   summonHeartbeatOverrideResetUnderTxBarrier();
 
@@ -436,6 +437,7 @@ static void canTaskMcp(void* arg) {
       // 11-bit DATA frames. Aggregate telemetry still counts rejected frames.
       if ((rxf.can_id & 0xC0000000UL) != 0) continue;
       const uint16_t partyId = (uint16_t)(rxf.can_id & 0x7FF);
+      continuousApObserveStock(0, partyId, rxf.data, rxf.can_dlc, countryRxEpoch, prefetchedRxMs[bi]);
       canTxMarkFresh(CAN_TX_FRESH_PARTY); // physical CAN A fresh in this recovery epoch
       bootCaptureObservePartyFrame(partyId, rxf.can_dlc, rxf.data);
       researchCaptureObserveParty(partyId, rxf.can_dlc, rxf.data);
@@ -488,6 +490,7 @@ static void canTaskMcp(void* arg) {
     canTaskDiagnosticsEnterStagePure(canTaskMcpDiagnostics,
                                      CAN_TASK_STAGE_SERVICE,
                                      (uint32_t)millis());
+    continuousApService(ContApRoute::BodyA);
     tsl9InputServiceCanA();
 
     // ── STATUS CHECK / RECOVERY (1 Hz) ──
@@ -591,6 +594,8 @@ static void canTaskTwai(void* arg) {
       // v3.6d2 R79 fast path: this is deliberately before millis(), RX-gap
       // accounting, capture, and normal decoding. Preserve the existing d1
       // fail-open/manual-latch authorization policy inside the fast function.
+      if (!canUsbPassive() && !f.extd && !f.rtr)
+        continuousApObserveStock(1, (uint16_t)f.identifier, f.data, f.data_length_code, countryRxEpoch, stockRxMs);
       bool mux1StockClaimed = false;
       if (!canUsbPassive() && !f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
         const uint8_t timingMux = readMuxID(f.data);
@@ -717,6 +722,7 @@ static void canTaskTwai(void* arg) {
     r79TransportTick();
     // R79 immediate/retry/periodic work always gets first access to the CAN-B
     // TX queue. TSL9 input assistance is intentionally lower priority.
+    continuousApService(ContApRoute::ChassisB);
     tsl9InputServiceCanB();
     const uint32_t captureNow = (uint32_t)millis();
     researchCaptureTick(captureNow);

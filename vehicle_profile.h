@@ -103,6 +103,13 @@ static inline bool vehicleProfileNagTorqueSupported(uint8_t id, uint8_t topology
   return vehicleProfileCanAIsParty(id, topology);
 }
 
+// ISA owns a fixed DAS_status route independent of Nag method and Legacy route.
+// YL uses Party CAN A; every valid Standard topology exposes Chassis CAN B.
+static inline bool vehicleProfileIsaSuppressionSupported(uint8_t id,
+                                                          uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology);
+}
+
 static inline bool vehicleProfileNagTsl9Supported(uint8_t id, uint8_t topology) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
   return id == VEHICLE_MODEL_YL || vehicleProfileCanAIsBody(id, topology);
@@ -311,6 +318,11 @@ static inline bool activeProfileNagSupported() {
 
 static inline bool activeProfileNagTorqueSupported() {
   return vehicleProfileNagTorqueSupported(
+      activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileIsaSuppressionSupported() {
+  return vehicleProfileIsaSuppressionSupported(
       activeVehicleProfile, activeVehicleTopology);
 }
 

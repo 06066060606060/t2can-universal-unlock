@@ -7,7 +7,7 @@ web = (ROOT / "web_api.h").read_text()
 dash = (ROOT / "dashboard_source.html").read_text()
 core = (ROOT / "can_core.h").read_text()
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert '#include "r79_dms_composition_pure.h"' in ino
 assert 'bool     dmsControlEnabled;' not in core
 active = vl[vl.index('static bool r79DmsControlActive()'):vl.index('static inline bool r79DmsApplyFinal')]

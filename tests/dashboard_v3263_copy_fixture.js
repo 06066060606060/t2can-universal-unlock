@@ -3,7 +3,7 @@
 /* Preview-only API simulator. Every value is synthetic; no vehicle, Wi-Fi, BLE or OTA hardware is accessed. */
 (()=>{
   'use strict';
-  const VERSION='3.26.3', query=new URLSearchParams(location.search), clone=x=>JSON.parse(JSON.stringify(x));
+  const VERSION='3.28.0', query=new URLSearchParams(location.search), clone=x=>JSON.parse(JSON.stringify(x));
   const routes=new Map(), methods=new Map();
   let state, apSince=Date.now();
   // Separate query presets share no saved state. Reloading a preset preserves its simulated settings.
@@ -23,7 +23,7 @@
       features:{lab:true,s3xy:true,doorCancel:false,banned:false,tlsscRestore:false,apDriveProfile:false,apDriveProfileRegenRaw:10},
       nag:{enabled:true,ignoreApState:false,method:topology===2?1:0,tsl9Sequence:0,tsl9IntervalMode:0,tsl9InputMode:0,tsl9Window:0,tsl9RightPeriodicEnabled:false,tsl9RightPeriodicIntervalSeconds:30,tsl9LegacyRoute:0,torqueRightScrollEnabled:false,torqueRightScrollIntervalSeconds:30,torqueRightScrollPattern:1,pauseAtZeroSpeed:false,mode:7,humanVariant:4,modeHStopBehavior:0,hoRatePct:50,burstMs:300,pauseMs:2000,targetId:0x488,apStateId:0x399,steeringId:0x370,torque:[{b2:7,b3:239},{b2:8,b3:21}]},
       human:{peakMinNm:1.8,peakMaxNm:2.6,waitMinMs:900,waitMaxMs:3000,refractoryMinMs:500,refractoryMaxMs:1500,carrierMinNm:.1,carrierMaxNm:.6,hoPolicy:2,ho1ThresholdNm:.4,ho2ThresholdNm:2,visualRescueEnabled:true,visualRescueDelayMs:500},
-      driverMonitoring:{enabled:true},isa:{enabled:false},
+      driverMonitoring:{enabled:true},isa:{enabled:false},continuousAp:{enabled:false,method:0},
       blink:{enabled:true,delayMs:300,noaStabilizationSeconds:10,cancelPauseSeconds:20,txMode:model===1?0:1,txRequests:12,txBlocked:0,txOk:12,txFail:0,txActiveSource:'NONE',txLastSource:'DEMO AUTO',txLastResult:'DEMO OK',txLastDirection:1},
       summon:{tlssc:false,tlsscHighwayGateEnabled:true,tlsscBlockInNoa:true},
       r79:{mode:1,mode1TxWaitMode:1,mode1ReinjectEnabled:true,mode1DelayMs:150,mode2ReinjectEnabled:false,mode2DelayMs:150,bit18Mode:0,hw3Enabled:false,txOk:42118,txFail:0},
@@ -97,6 +97,11 @@
   route('/api/nag/h-profile/reset','POST',()=>{state.human=defaults().human;return human()});
   route('/api/nag/h-profile/update','POST',p=>{const next=clone(state.human);patch(next,p,{peakMinNm:[1,3,false],peakMaxNm:[1,3,false],waitMinMs:[300,5000],waitMaxMs:[300,5000],refractoryMinMs:[300,2500],refractoryMaxMs:[300,2500],carrierMinNm:[.1,.8,false],carrierMaxNm:[.1,.8,false],hoPolicy:[0,2],ho1ThresholdNm:[.1,3,false],ho2ThresholdNm:[.1,3,false],visualRescueEnabled:'bool',visualRescueDelayMs:[0,2000]});for(const pair of [['peakMinNm','peakMaxNm'],['waitMinMs','waitMaxMs'],['refractoryMinMs','refractoryMaxMs'],['carrierMinNm','carrierMaxNm'],['ho1ThresholdNm','ho2ThresholdNm']])if(next[pair[0]]>next[pair[1]])fail(400,'Minimum exceeds maximum');state.human=next;return human()});
   for(const [path,key,reader] of [['/api/driver-monitoring/config','driverMonitoring',dms],['/api/isa-suppression/config','isa',isa]])route(path,'GET,POST',(p,method)=>{if(method==='POST'){const next=clone(state[key]);patch(next,p,{enabled:'bool'});if(!p.has('enabled'))fail(400,'Missing enabled');if(next.enabled&&!reader().supported)fail(409,'Unsupported topology');state[key]=next}return reader()});
+  route('/api/continuous-ap/config','GET,POST',(p,method)=>{
+    const stalk=[3,5].includes(state.model)&&state.topology===2,scroll=[2,4].includes(state.model)&&[2,3].includes(state.topology);
+    if(method==='POST'){const next=clone(state.continuousAp);patch(next,p,{enabled:'bool',method:[0,3]});if(!p.has('enabled')||!p.has('method'))fail(400,'Missing configuration');if(next.enabled&&(!next.method||next.method===1&&!stalk||next.method>=2&&!scroll))fail(409,'Unsupported method');state.continuousAp=next}
+    return {...state.continuousAp,effectiveEnabled:state.continuousAp.enabled&&(stalk||scroll),supported:stalk||scroll,stalkSupported:stalk,scrollSingleSupported:scroll,scrollDoubleSupported:scroll,supportReason:stalk||scroll?'Match your vehicle setting.':'Unavailable for this vehicle connection.',state:'Idle',blockedReason:'Waiting for AP active',attempts:0,txOk:0,txFail:0};
+  });
   for(const action of ['enable','disable'])route('/api/blinkA/'+action,'POST',()=>{if(!profile().advancedEapSupported)fail(409,'Unsupported topology');state.blink.enabled=action==='enable';return blink()});
   route('/api/blinkA/delay','POST',p=>{state.blink.delayMs=num(p,'ms',0,30000);return blink()});
   route('/api/blinkA/timing','POST',p=>{patch(state.blink,p,{noaStabilizationSeconds:[1,20],cancelPauseSeconds:[10,100]});return blink()});

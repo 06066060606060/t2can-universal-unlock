@@ -7,7 +7,7 @@ cr = (ROOT / 'can_runtime.h').read_text()
 web = (ROOT / 'web_api.h').read_text()
 dash = (ROOT / 'dashboard_source.html').read_text()
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert '#include <esp_timer.h>' not in ino
 
 assert 'esp_timer_get_time()' not in cr + vl

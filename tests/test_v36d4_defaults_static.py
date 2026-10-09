@@ -8,7 +8,7 @@ v3 = (root / 'nag_human_v3_pure.h').read_text(errors='ignore')
 fixed = (root / 'r79_fixed_policy_pure.h').read_text(errors='ignore')
 dash = (root / 'dashboard_source.html').read_text(errors='ignore')
 
-assert '#define FW_VERSION "v3.26.3"' in ino
+assert '#define FW_VERSION "v3.28.0"' in ino
 assert 'R79_FIXED_FAST_WAIT_MS_PURE = 2u' in fixed
 assert 'R79_FIXED_QUIET_DELAY_MS_PURE = 150u' in fixed
 assert 'R79_BIT18_DEFAULT_PURE = R79_BIT18_STOCK_PURE' in fixed

@@ -71,4 +71,4 @@ for symbol in (
 ):
     assert symbol in reset
 
-print("v3.26.3 TWAI error-alert diagnostics contract: PASS")
+print("v3.28.0 TWAI error-alert diagnostics contract: PASS")

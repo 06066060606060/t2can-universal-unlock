@@ -12,7 +12,7 @@ async function check(html,label){
       requests.push(`${request.method()} ${url.pathname}${url.search}`);
       if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
       let body={};
-      if(url.pathname==='/api/profile/status')body={setupMode:false,profile:1,topology:1,turn:1,nagSupported:false,nagTorqueSupported:false,nagTsl9Supported:true,advancedEapSupported:true,euUnlockSupported:true};
+      if(url.pathname==='/api/profile/status')body={setupMode:false,profile:3,topology:3,turn:0,nagSupported:true,nagTorqueSupported:true,nagTsl9Supported:false,advancedEapSupported:false,euUnlockSupported:true};
       else if(url.pathname==='/api/features/status')body={lab:false,s3xy:false,doorCancel:false};
       else if(url.pathname==='/api/driver-monitoring/config')body={enabled:false,supported:true,active:false};
       else if(url.pathname==='/api/isa-suppression/config'){
@@ -27,12 +27,12 @@ async function check(html,label){
     await page.getByRole('button',{name:'Settings'}).click();
     assert.equal(await page.locator('#isaSuppressionRow').count(),1,'standalone Settings row missing');
     assert.equal(await page.locator('#panelNag #tsl9IsaWrap').count(),0,'Nag panel still owns ISA Suppression');
-    assert.equal(await page.locator('#isaSuppressionToggle').isDisabled(),false,'ISA must work when Nag master is unavailable');
+    assert.equal(await page.locator('#isaSuppressionToggle').isDisabled(),false,'Party+Chassis ISA must work with TSL9 unavailable');
     assert.equal(await page.locator('#isaSuppressionToggle').isChecked(),false);
     await page.locator('#isaSuppressionRow label.toggle').click();
     await page.waitForFunction(()=>document.querySelector('#isaSuppressionToggle')?.checked===true);
     assert(requests.includes('POST /api/isa-suppression/config?enabled=1'));
-    assert.equal(requests.some(item=>item.startsWith('GET /api/nag/config')),false,'standalone ISA must not require Nag config');
+    assert.equal(requests.some(item=>item.startsWith('POST /api/nag/')),false,'standalone ISA must not write Nag config');
     await page.reload({waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>universalBootReady);
     await page.getByRole('button',{name:'Settings'}).click();
@@ -56,4 +56,4 @@ async function check(html,label){
     const h=fs.readFileSync(path.join(root,'index_html.h'),'utf8').match(/INDEX_HTML_GZ\[\][^{]*\{([\s\S]*?)\};/)[1];
     await check(zlib.gunzipSync(Buffer.from(h.match(/0x[\da-f]+/gi).map(x=>parseInt(x,16)))).toString(),'embedded');
   }
-})().then(()=>console.log('PASS standalone ISA Suppression settings with Nag unavailable'),e=>{console.error(e);process.exitCode=1;});
+})().then(()=>console.log('PASS standalone ISA Suppression on Party+Chassis with TSL9 unavailable'),e=>{console.error(e);process.exitCode=1;});

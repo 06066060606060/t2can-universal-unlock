@@ -43,7 +43,7 @@ int main() {
   assert((frame[6] >> 4) == 0u);
   assert(frame[7] == tsl9ChecksumForCanIdPure(0x39Bu, frame));
 
-  // ISA remains fail-closed outside active AP and for non-target states.
+  // ISA remains fail-closed outside active AP and independent of Hands-On.
   state = {};
   makeFrame(frame, 2u, TSL9_HANDS_ON_CHIME_1_PURE);
   result = tsl9ApplyDasTransformForCanIdPure(
@@ -57,6 +57,6 @@ int main() {
       state, false, TSL9_SEQUENCE_EXTENDED_PURE,
       TSL9_DOWNGRADE_AP_SESSION_PURE, true, 0x399u,
       frame, 8u, 4000u);
-  assert(!result.modified);
+  assert(result.isaModified && !result.handsOnModified);
   return 0;
 }

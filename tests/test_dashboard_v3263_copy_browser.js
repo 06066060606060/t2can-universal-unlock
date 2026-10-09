@@ -6,7 +6,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { launchBrowser } = require('./browser_test_runtime');
 const root = path.resolve(__dirname, '..');
-const output = process.env.DASHBOARD_COPY_SCREENSHOT_DIR || '/private/tmp/t2can-v3263-copy-browser';
+const output = process.env.DASHBOARD_COPY_SCREENSHOT_DIR || '/private/tmp/t2can-v3264-copy-browser';
 const descriptions = [
   {
     "id": "setNagDesc",
@@ -291,7 +291,7 @@ async function validate(browser, base, variant) {
     }
     assert.deepEqual(report.pageErrors,[]);
     report.status='passed';
-    process.stdout.write('v3.26.3 copy source/embedded: PASS (48 fixed descriptions, 48 mobile/theme screens, 16 valid saves, 16 invalid edits)\n');
+    process.stdout.write('v3.28.0 copy source/embedded: PASS (48 fixed descriptions, 48 mobile/theme screens, 16 valid saves, 16 invalid edits)\n');
   } catch(error) { report.status='failed'; report.failure=error.stack; process.stderr.write(error.stack+'\n'); process.exitCode=1; }
   finally {
     if(browser) await browser.close();

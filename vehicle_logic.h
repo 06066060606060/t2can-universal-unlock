@@ -238,7 +238,7 @@ static void isaSuppressionControlSnapshot(bool &enabledOut,
 static bool isaSuppressionControlActive() {
   bool apValid, apActive;
   nagApGateSnapshot(apValid, apActive);
-  return isaSuppressionControlSnapshot() && activeProfileNagTsl9Supported() &&
+  return isaSuppressionControlSnapshot() && activeProfileIsaSuppressionSupported() &&
       apValid && apActive;
 }
 
@@ -2429,7 +2429,8 @@ static bool tsl9InputSendCanA(const struct can_frame &stock,
   tsl9InputApplyCommandPure(command, out.data);
   const uint32_t txEpoch = canTxEpochSnapshot();
   MCP2515::ERROR err = MCP2515::ERROR_FAIL;
-  const bool attempted = canTxMcpSend(&out, txEpoch, err, nullptr);
+  Tsl9InputCommandPure prepared = command;
+  const bool attempted = canTxMcpSendValidated(&out, txEpoch, continuousApValidateNagCanA, &prepared, err);
   return attempted && err == MCP2515::ERROR_OK;
 }
 
@@ -2438,14 +2439,16 @@ static bool tsl9InputSendCanB(const twai_message_t &stock,
   twai_message_t out = stock;
   tsl9InputApplyCommandPure(command, out.data);
   const uint32_t txEpoch = canTxEpochSnapshot();
-  const esp_err_t err = canTxTwaiTransmitWithMask(
-      &out, txEpoch, CAN_TX_FRESH_VH);
+  Tsl9InputCommandPure prepared = command;
+  const esp_err_t err = canTxTwaiTransmitValidated(
+      &out, txEpoch, CAN_TX_FRESH_VH, continuousApValidateNagCanB, &prepared);
   researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code,
                              out.data, err == ESP_OK);
   return err == ESP_OK;
 }
 
 static void tsl9InputServiceCanA() {
+  if (continuousApOwnsInputRoute(ContApRoute::BodyA)) return;
   if (!activeProfileTsl9InputOnBodyCanA()) return;
   const uint32_t now = (uint32_t)millis();
   Tsl9InputInputsPure in = tsl9InputInputsSnapshot(now, true);
@@ -2485,6 +2488,7 @@ static void tsl9InputServiceCanA() {
 }
 
 static void tsl9InputServiceCanB() {
+  if (continuousApOwnsInputRoute(ContApRoute::ChassisB)) return;
   if (activeProfileTsl9InputOnBodyCanA() ||
       !activeProfileTsl9InputSupported()) return;
   const uint32_t now = (uint32_t)millis();

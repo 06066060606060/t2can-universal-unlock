@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "isa_suppression_pure.h"
 
 enum NagMethodPure : uint8_t {
   NAG_METHOD_TORQUE_PURE = 0,
@@ -127,10 +128,9 @@ struct Tsl9DasTransformResultPure {
   uint8_t handsOnBefore;
 };
 
-// Compose every TSL9 DAS mutation before touching the rolling counter or
-// checksum. The predicates intentionally inspect the original stock payload,
-// so Hands-On 4 may both downgrade to 1 and suppress the ISA chime without a
-// second generated frame or a second counter increment.
+// Compose independent ISA and Nag mutations before updating the counter and
+// checksum. ISA suppresses speed warnings during active AP regardless of
+// Hands-On state; Nag retains its original stock Hands-On predicates.
 static inline Tsl9DasTransformResultPure
 tsl9ApplyDasTransformForCanIdPure(
     Tsl9HandsOnStatePure &state, bool handsOnEnabled, uint8_t sequence,
@@ -166,12 +166,8 @@ tsl9ApplyDasTransformForCanIdPure(
     result.handsOnModified = true;
   }
 
-  if (isaChimeSuppress &&
-      handsOn == TSL9_HANDS_ON_CHIME_1_PURE &&
-      (data[1] & 0x20u) == 0u) {
-    data[1] |= 0x20u;
-    result.isaModified = true;
-  }
+  result.isaModified =
+      isaChimeSuppress && isaSuppressSpeedWarningPure(data, dlc);
 
   result.modified = result.handsOnModified || result.isaModified;
   if (result.modified) {

@@ -8,12 +8,16 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.26.3
+# T2CAN Universal Unlock v3.28
 
 **Major Universal Release**  
-**Release date:** 8 October 2026  
+**Release date:** 9 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
+
+**v3.28** 
+- Continuous AP  
+- Independent ISA chime Suppression 
 
 
 **v3.26.3 Highlights** 
