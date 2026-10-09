@@ -1,7 +1,20 @@
 # Tesla Unlock Android 1.2.1
 
 
-https://github.com/06066060606060/t2can-universal-unlock/releases/download/android_1.2.1/Tesla-Unlock-1.2.1.apk
+## Download
+
+[**Download Android APK — v1.2.1**](https://github.com/OWNER/REPOSITORY/releases/download/android-v1.2.1/Tesla-Unlock-1.2.1.apk)
+
+[Release notes, source code, and checksums](https://github.com/OWNER/REPOSITORY/releases/tag/android-v1.2.1)
+
+### Installation
+
+1. Download the APK on your Android phone.
+2. Open the downloaded file.
+3. Allow installation from this source if Android asks.
+4. Install the app and open Tesla Unlock.
+
+When updating, install over the existing app to keep your saved devices.
 
 An Android app for connecting to a T2CAN device and opening its dashboard. It supports saved device profiles, app-scoped local Wi-Fi access, automatic connection on launch, and one immediate retry when Android reports that a connection request is unavailable.
 
