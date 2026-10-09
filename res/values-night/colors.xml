@@ -1,0 +1,14 @@
+<resources>
+    <color name="connection_background">#1D1D21</color>
+    <color name="connection_card">#2F2F34</color>
+    <color name="connection_chip">#303035</color>
+    <color name="connection_text">#D8D8DD</color>
+    <color name="connection_muted">#A2A2AA</color>
+    <color name="connection_primary">#DEDEE3</color>
+    <color name="connection_primary_text">#1D1D21</color>
+    <color name="connection_secondary">#39393F</color>
+    <color name="connection_secondary_stroke">#515158</color>
+    <color name="connection_secondary_text">#D8D8DD</color>
+    <color name="connection_ripple">#3376767C</color>
+    <color name="status_red">#E95461</color>
+</resources>
