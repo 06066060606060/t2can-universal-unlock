@@ -1,4 +1,4 @@
-# Tesla Unlock Android 1.2.1
+# Dashboard Android 1.2.1
 
 
 ## Download
@@ -12,7 +12,7 @@
 1. Download the APK on your Android phone.
 2. Open the downloaded file.
 3. Allow installation from this source if Android asks.
-4. Install the app and open Tesla Unlock.
+4. Install the app and open Dashboard.
 
 When updating, install over the existing app to keep your saved devices.
 
