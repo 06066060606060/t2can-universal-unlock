@@ -4,11 +4,13 @@
 #include <stdint.h>
 
 static constexpr uint32_t CAN_BUS_OFF_RECORD_MAGIC_PURE = 0x5442434Fu;
-static constexpr uint16_t CAN_BUS_OFF_RECORD_VERSION_PURE = 1u;
+static constexpr uint16_t CAN_BUS_OFF_RECORD_VERSION_V1_PURE = 1u;
+static constexpr uint16_t CAN_BUS_OFF_RECORD_VERSION_PURE = 2u;
 static constexpr uint8_t CAN_BUS_OFF_BUS_A_PURE = 1u;
 static constexpr uint8_t CAN_BUS_OFF_BUS_B_PURE = 2u;
 static constexpr uint8_t CAN_BUS_OFF_TRACE_CAPACITY_PURE = 64u;
-static constexpr size_t CAN_BUS_OFF_RECORD_HEADER_BYTES_PURE = 84u;
+static constexpr size_t CAN_BUS_OFF_RECORD_HEADER_V1_BYTES_PURE = 84u;
+static constexpr size_t CAN_BUS_OFF_RECORD_HEADER_BYTES_PURE = 104u;
 static constexpr size_t CAN_BUS_OFF_TRACE_ENTRY_BYTES_PURE = 28u;
 static constexpr size_t CAN_BUS_OFF_RECORD_MAX_BYTES_PURE =
     CAN_BUS_OFF_RECORD_HEADER_BYTES_PURE +
@@ -43,6 +45,11 @@ struct CanBusOffSnapshotPure {
   uint32_t rxOverrunCount;
   uint32_t arbLostCount;
   uint32_t busErrorCount;
+  uint32_t alertSeenMask;
+  uint32_t alertBatchMask;
+  uint32_t txFailedAlertAgeMs;
+  uint32_t errPassAlertAgeMs;
+  uint32_t busErrorAlertAgeMs;
 };
 
 struct CanBusOffRecordPure {
@@ -151,6 +158,13 @@ static inline size_t encodeCanBusOffRecordPure(const CanBusOffRecordPure &record
       record.snapshot.busErrorCount};
   for (uint8_t i = 0; i < 13; ++i)
     canBusOffWrite32Pure(out, o, snapshotValues[i]);
+  const uint32_t alertValues[] = {
+      record.snapshot.alertSeenMask, record.snapshot.alertBatchMask,
+      record.snapshot.txFailedAlertAgeMs,
+      record.snapshot.errPassAlertAgeMs,
+      record.snapshot.busErrorAlertAgeMs};
+  for (uint8_t i = 0; i < 5; ++i)
+    canBusOffWrite32Pure(out, o, alertValues[i]);
   out[o++] = record.traceCount;
   out[o++] = 0; out[o++] = 0; out[o++] = 0;
   for (uint8_t i = 0; i < record.traceCount; ++i) {
@@ -174,12 +188,19 @@ static inline bool decodeCanBusOffRecordPure(const uint8_t *encoded,
                                               size_t length,
                                               uint8_t expectedBus,
                                               CanBusOffRecordPure &out) {
-  if (!encoded || length < CAN_BUS_OFF_RECORD_HEADER_BYTES_PURE + 4u ||
+  if (!encoded || length < CAN_BUS_OFF_RECORD_HEADER_V1_BYTES_PURE + 4u ||
       length > CAN_BUS_OFF_RECORD_MAX_BYTES_PURE) return false;
   size_t o = 0;
-  if (canBusOffRead32Pure(encoded, o) != CAN_BUS_OFF_RECORD_MAGIC_PURE ||
-      canBusOffRead16Pure(encoded, o) != CAN_BUS_OFF_RECORD_VERSION_PURE ||
+  if (canBusOffRead32Pure(encoded, o) != CAN_BUS_OFF_RECORD_MAGIC_PURE)
+    return false;
+  const uint16_t version = canBusOffRead16Pure(encoded, o);
+  if ((version != CAN_BUS_OFF_RECORD_VERSION_V1_PURE &&
+       version != CAN_BUS_OFF_RECORD_VERSION_PURE) ||
       canBusOffRead16Pure(encoded, o) != length) return false;
+  const size_t headerBytes = version == CAN_BUS_OFF_RECORD_VERSION_V1_PURE
+      ? CAN_BUS_OFF_RECORD_HEADER_V1_BYTES_PURE
+      : CAN_BUS_OFF_RECORD_HEADER_BYTES_PURE;
+  if (length < headerBytes + 4u) return false;
   const uint8_t bus = encoded[o++];
   o += 3u;
   if (bus != expectedBus ||
@@ -202,10 +223,18 @@ static inline bool decodeCanBusOffRecordPure(const uint8_t *encoded,
       &snapshot.arbLostCount, &snapshot.busErrorCount};
   for (uint8_t i = 0; i < 13; ++i)
     *snapshotValues[i] = canBusOffRead32Pure(encoded, o);
+  if (version >= CAN_BUS_OFF_RECORD_VERSION_PURE) {
+    uint32_t *alertValues[] = {
+        &snapshot.alertSeenMask, &snapshot.alertBatchMask,
+        &snapshot.txFailedAlertAgeMs, &snapshot.errPassAlertAgeMs,
+        &snapshot.busErrorAlertAgeMs};
+    for (uint8_t i = 0; i < 5; ++i)
+      *alertValues[i] = canBusOffRead32Pure(encoded, o);
+  }
   const uint8_t traceCount = encoded[o++];
   o += 3u;
   if (traceCount > CAN_BUS_OFF_TRACE_CAPACITY_PURE ||
-      length != CAN_BUS_OFF_RECORD_HEADER_BYTES_PURE +
+      length != headerBytes +
           (size_t)traceCount * CAN_BUS_OFF_TRACE_ENTRY_BYTES_PURE + 4u)
     return false;
   const uint32_t expectedCrc = canBusOffCrc32Pure(encoded, length - 4u);

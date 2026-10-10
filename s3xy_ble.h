@@ -359,12 +359,6 @@ static bool s3xyActionParseKnown(const String &s, uint8_t &out) {
   return false;
 }
 
-static uint8_t s3xyParseAction(const String &s) {
-  uint8_t out = S3XY_ACTION_NONE;
-  (void)s3xyActionParseKnown(s, out);
-  return out;
-}
-
 #if S3XY_DIAGNOSTICS_ENABLED
 static const char *s3xyLogTypeName(uint8_t t) {
   switch (t) {
@@ -2420,6 +2414,7 @@ static uint16_t s3xyRemoveAllLocalBonds() {
 }
 
 static void s3xyResetAllBluetoothData() {
+  while (!prepareCanForMaintenance()) vTaskDelay(pdMS_TO_TICKS(100));
   // This operation intentionally preserves the Bluetooth Master and global
   // Auto Connect preferences. Everything tied to paired S3XY peers is wiped.
   char addresses[S3XY_MAX_DEVICES][24] = {};
@@ -2505,7 +2500,7 @@ static void s3xyResetAllBluetoothData() {
 
   T2CAN_SERIAL_PRINTF("S3XY: Bluetooth data reset complete; removed bonds=%u; rebooting\n", (unsigned)removedBonds);
   vTaskDelay(pdMS_TO_TICKS(500));
-  ESP.restart();
+  restartT2CanSafely();
 }
 
 static bool s3xyQueueCommand(uint8_t type, int8_t slot = -1, const char *address = nullptr) {
@@ -3379,5 +3374,4 @@ static void s3xyClearLog() {
   s3xyLogPush(S3XY_LOG_INFO, "multi-device/action log cleared");
 #endif
 }
-
 

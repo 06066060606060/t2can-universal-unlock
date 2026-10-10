@@ -161,6 +161,7 @@ static volatile uint32_t canAMcpBusOffCount = 0;
 static volatile uint8_t canTxFreshMaskFast = 0;
 
 static void mcpRxOverflowObserve(uint32_t now, uint8_t flags) {
+  __atomic_fetch_add(&canUsbMcpOverflowTotal, 1U, __ATOMIC_RELAXED);
   portENTER_CRITICAL(&mcpRxOverflowMux);
   mcpRxOverflowCount++;
   mcpRxOverflowLastMs = now;
@@ -211,7 +212,14 @@ static void canTxMarkFresh(uint8_t busBit) {
 enum CanTxTraceSource : uint8_t {
   CAN_TX_TRACE_SOURCE_DEFAULT = 0,
   CAN_TX_TRACE_SOURCE_AUTO_BLINKER = 1,
-  CAN_TX_TRACE_SOURCE_S3XY_BUTTON = 2
+  CAN_TX_TRACE_SOURCE_S3XY_BUTTON = 2,
+  CAN_TX_TRACE_SOURCE_DRIVER_WINDOW_LAB = 3,
+  CAN_TX_TRACE_SOURCE_TLSSC = 4,
+  CAN_TX_TRACE_SOURCE_TLSSC_CLEAR = 5,
+  CAN_TX_TRACE_SOURCE_R79 = 6,
+  CAN_TX_TRACE_SOURCE_R79_REINJECT = 7,
+  CAN_TX_TRACE_SOURCE_DMS = 8,
+  CAN_TX_TRACE_SOURCE_DISPLAY = 9
 };
 
 static constexpr uint8_t CAN_B_TX_TRACE_CAPACITY = 64;
@@ -233,36 +241,12 @@ static volatile uint8_t canBTxTraceFrozenCount = 0;
 static volatile uint32_t canBTxTraceSeq = 0;
 static volatile uint32_t canBTxTraceFrozenMs = 0;
 static volatile uint32_t canBTxTraceFrozenBusOffOrdinal = 0;
-// d3 CAN-B TX acceptance/pipeline telemetry. Every successful application
-// enqueue increments the accepted serial. TX_IDLE alerts mark the application
-// pipeline idle again; this is used only to qualify R79 timing diagnostics.
-static volatile uint32_t canBTxAcceptedSerial = 0;
-static volatile bool canBTxPipelineIdle = true;
 
-static inline uint32_t canBTxAcceptedSerialSnapshot() {
-  return __atomic_load_n(&canBTxAcceptedSerial, __ATOMIC_ACQUIRE);
-}
-static inline bool canBTxPipelineIdleSnapshot() {
-  return __atomic_load_n(&canBTxPipelineIdle, __ATOMIC_ACQUIRE);
-}
-static inline void canBTxObserveTxIdleAlert() {
-  twai_status_info_t status = {};
-  const bool statusReadOk = twai_get_status_info(&status) == ESP_OK;
-  const bool confirmed = statusReadOk &&
-      status.state == TWAI_STATE_RUNNING && status.msgs_to_tx == 0u;
-  __atomic_store_n(&canBTxPipelineIdle, confirmed, __ATOMIC_RELEASE);
-}
-
-static uint32_t canBTraceRecordTx(const twai_message_t *msg, esp_err_t result,
-                                  uint8_t traceSource = CAN_TX_TRACE_SOURCE_DEFAULT) {
-  if (!msg) return 0;
+static void canBTraceRecordTx(const twai_message_t *msg, esp_err_t result,
+                              uint8_t traceSource = CAN_TX_TRACE_SOURCE_DEFAULT) {
+  if (!msg) return;
   CanBTxTraceEntry e = {};
   e.seq = __atomic_add_fetch(&canBTxTraceSeq, 1U, __ATOMIC_RELAXED);
-  uint32_t acceptedSerial = 0;
-  if (result == ESP_OK) {
-    acceptedSerial = __atomic_add_fetch(&canBTxAcceptedSerial, 1U, __ATOMIC_ACQ_REL);
-    __atomic_store_n(&canBTxPipelineIdle, false, __ATOMIC_RELEASE);
-  }
   e.capturedMs = (uint32_t)millis();
   e.id = (uint16_t)(msg->identifier & 0x7FFU);
   e.dlc = (uint8_t)min((uint8_t)8, (uint8_t)msg->data_length_code);
@@ -274,7 +258,6 @@ static uint32_t canBTraceRecordTx(const twai_message_t *msg, esp_err_t result,
   canBTxTraceLiveHead = (uint8_t)((canBTxTraceLiveHead + 1U) % CAN_B_TX_TRACE_CAPACITY);
   if (canBTxTraceLiveCount < CAN_B_TX_TRACE_CAPACITY) canBTxTraceLiveCount++;
   portEXIT_CRITICAL(&canBTxTraceMux);
-  return acceptedSerial;
 }
 
 static void canBTraceReset() {
@@ -359,6 +342,17 @@ static void canATraceReset() {
 }
 
 static volatile bool canTxAdministrativeHold = false;
+static bool canTxAdministrativeRequested = false;
+// Sticky until reboot: configuration handlers cannot release maintenance hold.
+static bool canMaintenanceRequested = false;
+static bool canMaintenanceSupervisorParked = false;
+static bool canMaintenancePreparing = false;
+static bool canMaintenanceStopped = false;
+// Owned by canMaintenancePreparing; sticky until reboot, including failed retries.
+static bool canMaintenanceObservedCanRuntime = false;
+static bool canMaintenanceActive() {
+  return __atomic_load_n(&canMaintenanceRequested, __ATOMIC_ACQUIRE);
+}
 
 // Administrative TX hold used by profile/reset/feature transitions.
 // Take the same barrier mutex used by all application TX paths so enabling
@@ -369,11 +363,13 @@ static volatile bool canTxAdministrativeHold = false;
 // callers that require invalidation explicitly invoke the recovery barrier.
 static void setCanTxAdministrativeHold(bool hold) {
   if (!canTxBarrierMutex) {
-    canTxAdministrativeHold = hold;
+    canTxAdministrativeRequested = hold;
+    canTxAdministrativeHold = hold || canMaintenanceActive() || canUsbTxHeld();
     return;
   }
   if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE) {
-    canTxAdministrativeHold = hold;
+    canTxAdministrativeRequested = hold;
+    canTxAdministrativeHold = hold || canMaintenanceActive() || canUsbTxHeld();
     xSemaphoreGive(canTxBarrierMutex);
   }
 }
@@ -399,6 +395,53 @@ static esp_err_t canTxTwaiTransmitWithMaskTagged(
   return err;
 }
 
+// Feature-local cancellation guard. Advancing a generation takes the same
+// barrier as enqueue, so after cancellation returns no decision prepared under
+// the previous generation can reach TWAI.
+static uint32_t canTxCancellationGenerationSnapshot(
+    const volatile uint32_t *generation) {
+  return generation
+      ? __atomic_load_n(generation, __ATOMIC_ACQUIRE)
+      : 0u;
+}
+
+static void canTxCancellationGenerationAdvance(
+    volatile uint32_t *generation) {
+  if (!generation) return;
+  if (!canTxBarrierMutex) {
+    __atomic_add_fetch(generation, 1u, __ATOMIC_ACQ_REL);
+    return;
+  }
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE) {
+    __atomic_add_fetch(generation, 1u, __ATOMIC_ACQ_REL);
+    xSemaphoreGive(canTxBarrierMutex);
+  }
+}
+
+static esp_err_t canTxTwaiTransmitWithMaskTaggedGuarded(
+    const twai_message_t *msg, uint32_t expectedEpoch,
+    uint8_t requiredFreshMask, uint8_t traceSource,
+    const volatile uint32_t *generation, uint32_t expectedGeneration) {
+  if (!msg || !generation) return ESP_ERR_INVALID_ARG;
+  if (canTxAdministrativeHold) {
+    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE, traceSource);
+    return ESP_ERR_INVALID_STATE;
+  }
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+    canBTraceRecordTx(msg, ESP_ERR_TIMEOUT, traceSource);
+    return ESP_ERR_TIMEOUT;
+  }
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (!canTxAdministrativeHold && twaiReady &&
+      canTxCancellationGenerationSnapshot(generation) == expectedGeneration &&
+      canTxBarrierAllowsMaskedPure(
+          canTxBarrierState, expectedEpoch, requiredFreshMask))
+    err = twai_transmit(msg, 0);
+  xSemaphoreGive(canTxBarrierMutex);
+  canBTraceRecordTx(msg, err, traceSource);
+  return err;
+}
+
 static esp_err_t canTxTwaiTransmitWithMask(
     const twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask) {
   return canTxTwaiTransmitWithMaskTagged(
@@ -416,7 +459,48 @@ static esp_err_t canTxTwaiTransmit(
   return canTxTwaiTransmitWithMask(msg, expectedEpoch, CAN_TX_FRESH_BOTH);
 }
 
+// Final feature admission and payload composition share the enqueue barrier.
+static esp_err_t canTxTwaiTransmitValidated(
+    twai_message_t *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
+    bool (*validate)(twai_message_t *, void *), void *context) {
+  if (!msg || !validate) return ESP_ERR_INVALID_ARG;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+    canBTraceRecordTx(msg, ESP_ERR_TIMEOUT, CAN_TX_TRACE_SOURCE_DEFAULT);
+    return ESP_ERR_TIMEOUT;
+  }
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (!canTxAdministrativeHold && twaiReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask) &&
+      validate(msg, context))
+    err = twai_transmit(msg, 0);
+  xSemaphoreGive(canTxBarrierMutex);
+  canBTraceRecordTx(msg, err, CAN_TX_TRACE_SOURCE_DEFAULT);
+  return err;
+}
 
+// Compose and validate feature payloads at the final MCP enqueue boundary.
+static bool canTxMcpSendValidated(struct can_frame *msg, uint32_t expectedEpoch,
+    bool (*validate)(struct can_frame *, void *), void *context,
+    MCP2515::ERROR &errOut) {
+  errOut = MCP2515::ERROR_FAIL;
+  if (!msg || !validate) return false;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+    canATraceRecordTx(msg, MCP_TX_MUTEX_BUSY, errOut, CAN_TX_TRACE_SOURCE_DEFAULT);
+    return false;
+  }
+  McpTxResultReason reason = MCP_TX_EPOCH_MISMATCH;
+  bool admitted = false;
+  if (!canTxAdministrativeHold && mcpReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, CAN_TX_FRESH_BOTH) &&
+      validate(msg, context)) {
+    admitted = true;
+    errOut = Can_A.sendMessage(msg);
+    reason = errOut == MCP2515::ERROR_OK ? MCP_TX_OK : MCP_TX_SEND_ERROR;
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  canATraceRecordTx(msg, reason, errOut, CAN_TX_TRACE_SOURCE_DEFAULT);
+  return admitted;
+}
 
 static bool canTxMcpSendTagged(const struct can_frame *msg,
                                uint32_t expectedEpoch, uint8_t traceSource,
@@ -460,6 +544,49 @@ static bool canTxMcpSend(const struct can_frame *msg, uint32_t expectedEpoch,
                          MCP2515::ERROR &errOut, McpTxResultReason *reasonOut) {
   return canTxMcpSendTagged(msg, expectedEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
                             errOut, reasonOut);
+}
+
+static bool canTxMcpSendTaggedGuarded(
+    const struct can_frame *msg, uint32_t expectedEpoch, uint8_t traceSource,
+    const volatile uint32_t *generation, uint32_t expectedGeneration,
+    MCP2515::ERROR &errOut, McpTxResultReason *reasonOut) {
+  if (reasonOut) *reasonOut = MCP_TX_INVALID_MSG;
+  if (!msg || !generation) return false;
+  if (canTxAdministrativeHold) {
+    if (reasonOut) *reasonOut = MCP_TX_EPOCH_MISMATCH;
+    canATraceRecordTx(msg, MCP_TX_EPOCH_MISMATCH, MCP2515::ERROR_FAIL,
+                      traceSource);
+    return false;
+  }
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+    if (reasonOut) *reasonOut = MCP_TX_MUTEX_BUSY;
+    canATraceRecordTx(msg, MCP_TX_MUTEX_BUSY, MCP2515::ERROR_FAIL,
+                      traceSource);
+    return false;
+  }
+
+  McpTxResultReason reason = MCP_TX_EPOCH_MISMATCH;
+  const bool generationValid =
+      canTxCancellationGenerationSnapshot(generation) == expectedGeneration;
+  if (generationValid) {
+    reason = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH : mcpTxResultReasonPure(
+        true, true, mcpReady && twaiReady, canTxBarrierState.epoch,
+        canTxBarrierState.freshMask, expectedEpoch, true);
+  }
+  const bool allowed = generationValid && reason == MCP_TX_OK;
+  MCP2515::ERROR traceResult = MCP2515::ERROR_FAIL;
+  if (allowed) {
+    errOut = Can_A.sendMessage(msg);
+    traceResult = errOut;
+    reason = mcpTxResultReasonPure(
+        true, true, true, canTxBarrierState.epoch,
+        canTxBarrierState.freshMask, expectedEpoch,
+        errOut == MCP2515::ERROR_OK);
+  }
+  if (reasonOut) *reasonOut = reason;
+  xSemaphoreGive(canTxBarrierMutex);
+  canATraceRecordTx(msg, reason, traceResult, traceSource);
+  return allowed;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -522,6 +649,27 @@ struct CanTwaiRecoverySnapshot {
   uint32_t rxOverrunCount;
   uint32_t arbLostCount;
   uint32_t busErrorCount;
+  uint32_t alertSeenMask;
+  uint32_t alertBatchMask;
+  uint32_t txFailedAlertAgeMs;
+  uint32_t errPassAlertAgeMs;
+  uint32_t busErrorAlertAgeMs;
+};
+
+struct CanTwaiErrorAlertWindow {
+  uint32_t seenMask;
+  uint32_t lastTxFailedMs;
+  uint32_t lastErrPassMs;
+  uint32_t lastBusErrorMs;
+};
+
+struct CanTwaiBusOffAlertEvidence {
+  bool valid;
+  uint32_t seenMask;
+  uint32_t batchMask;
+  uint32_t txFailedAgeMs;
+  uint32_t errPassAgeMs;
+  uint32_t busErrorAgeMs;
 };
 
 static portMUX_TYPE canRecoveryMux = portMUX_INITIALIZER_UNLOCKED;
@@ -557,6 +705,24 @@ static volatile uint32_t canTaskHeartbeatLastAgeBms = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountA = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountB = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountBoth = 0;
+static volatile CanTaskLiveDiagnosticsPure canTaskMcpDiagnostics = {};
+static volatile CanTaskLiveDiagnosticsPure canTaskTwaiDiagnostics = {};
+static CanTaskTimeoutSnapshotPure canTaskHeartbeatLastSnapshotA = {};
+static CanTaskTimeoutSnapshotPure canTaskHeartbeatLastSnapshotB = {};
+static volatile CanARxDiagnosticsPure canARxDiagnostics = {};
+static inline uint8_t canTaskStateCode(TaskHandle_t handle) {
+  return handle ? (uint8_t)eTaskGetState(handle) : (uint8_t)eInvalid;
+}
+static inline const char *canTaskStateName(uint8_t state) {
+  switch ((eTaskState)state) {
+    case eRunning: return "RUNNING";
+    case eReady: return "READY";
+    case eBlocked: return "BLOCKED";
+    case eSuspended: return "SUSPENDED";
+    case eDeleted: return "DELETED";
+    default: return "INVALID";
+  }
+}
 static volatile uint32_t lastCanAFrameMs = 0;
 static volatile uint32_t lastCanBFrameMs = 0;
 static volatile uint32_t canHardReinitCount = 0;
@@ -578,6 +744,8 @@ static volatile uint32_t canTwaiLastEventMs = 0;
 static volatile uint32_t canBLastRxGapMs = 0;
 static volatile uint32_t canBMaxRxGapMs = 0;
 static CanTwaiRecoverySnapshot canTwaiLastBusOffSnapshot = {};
+static CanTwaiErrorAlertWindow canTwaiErrorAlertWindow = {};
+static CanTwaiBusOffAlertEvidence canTwaiBusOffAlertEvidence = {};
 
 static bool mcpSpiStarted = false;
 static bool recoveryEverBothActive = false;
@@ -630,6 +798,12 @@ enum NagMode : uint8_t {
 
 struct NagConfig {
   bool     enabled;
+  bool     ignoreApState;
+  uint8_t  method;
+  uint8_t  tsl9Sequence;
+  uint8_t  tsl9DowngradeWindow;
+  uint8_t  tsl9InputMode;
+  uint8_t  tsl9LegacyRoute;
   bool     pauseAtZeroSpeed;
   uint8_t  modeHStopBehavior;
   uint8_t  mode;
@@ -693,8 +867,10 @@ static inline void nagRxSelectorsSnapshot(uint16_t &targetId, uint16_t &apStateI
 }
 
 static void nagCfgCommit(const NagConfig &c) {
+  NagConfig normalized = c;
+  nagCfgApplyActiveProfilePolicy(normalized, false);
   portENTER_CRITICAL(&nagCfgMux);
-  nagCfg = c;
+  nagCfg = normalized;
   nagRxSelectorsPublishLocked(nagCfg);
   portEXIT_CRITICAL(&nagCfgMux);
 }
@@ -705,6 +881,20 @@ static void nagRxSelectorsRefreshFromConfig() {
   portEXIT_CRITICAL(&nagCfgMux);
 }
 
+static bool nagTsl9Body39BSelected() {
+  uint8_t route;
+  portENTER_CRITICAL(&nagCfgMux);
+  route = tsl9LegacyRouteSanitizePure(nagCfg.tsl9LegacyRoute);
+  portEXIT_CRITICAL(&nagCfgMux);
+  return vehicleProfileNagTsl9OnBody39B(
+      activeVehicleProfile, activeVehicleTopology, route);
+}
+
+static bool nagTsl9Chassis399Selected() {
+  return !activeProfileIsYl() && activeCanBIsChassis() &&
+      activeProfileNagTsl9Supported() && !nagTsl9Body39BSelected();
+}
+
 struct NagContext {
   uint8_t  apState;
   uint8_t  handsOnState;
@@ -712,6 +902,8 @@ struct NagContext {
   uint32_t visualWarningEpoch;
   unsigned long visualWarningEnterMs;
   bool     visualWarningActive;
+  uint32_t scrollWarningEpoch;
+  bool     scrollWarningActive;
   int16_t  steeringAngleDeciDeg;
   unsigned long lastApStateMs;
   unsigned long lastSteeringMs;
@@ -768,6 +960,19 @@ static volatile uint8_t nagLastSkipReason = NAG_SKIP_NONE;
 static volatile uint32_t nagLastSkipMs = 0;
 static volatile uint8_t nagLastTxBlockReason = MCP_TX_OK;
 static volatile uint32_t nagLastTxBlockMs = 0;
+static portMUX_TYPE nagTsl9Mux = portMUX_INITIALIZER_UNLOCKED;
+static Tsl9HandsOnStatePure nagTsl9State = {};
+static volatile uint32_t nagTsl9Rx = 0;
+static volatile uint32_t nagTsl9Modified = 0;
+static volatile uint32_t nagTsl9HandsOnModified = 0;
+static volatile uint32_t nagTsl9TxOk = 0;
+static volatile uint32_t nagTsl9TxFail = 0;
+
+static void nagTsl9RuntimeReset() {
+  portENTER_CRITICAL(&nagTsl9Mux);
+  nagTsl9State = {};
+  portEXIT_CRITICAL(&nagTsl9Mux);
+}
 // Mode B burst/pause timing starts from AP engagement rather than boot uptime.
 // This is intentionally independent of the Original mcpRxCount > 1000 warmup check.
 static volatile uint32_t nagModeBPhaseStartMs = 0;
@@ -789,24 +994,9 @@ static void nagExactEchoReset() {
   portEXIT_CRITICAL(&nagExactEchoMux);
 }
 
-// Mode H variants — Rev.1 / Rev.3 / Rev.4 are UI-selectable. Rev.2 remains
-// runtime-readable so an older persisted profile ID is never reinterpreted.
-// Rev.1 = b18 Human Interaction defaults (1.50–2.00 Nm primary peak).
-// Rev.2 = Natural Grip baseline + bounded 1.80–2.20 Nm interaction peaks.
-// Rev.3 = Human Interaction + stock-relative Natural Grip WAIT carrier + HO policy.
-// Rev.4 = Human Interaction + per-RX stock-opposite carrier in WAIT/REFRACTORY;
-//         primary-event direction is independently biased 80% negative / 20% positive.
-static volatile uint8_t nagHumanVariant = H_VARIANT_REV3;
+// Mode H uses the established Rev.4 engine; persisted id 1 and h4* tuning remain stable.
+static volatile uint8_t nagHumanVariant = nagModeHDefaultVariantPure();
 static portMUX_TYPE nagHumanMux = portMUX_INITIALIZER_UNLOCKED;
-static NagHumanV1ConfigPure nagHumanV1Rev1Config = nagHumanV1Rev1ConfigPure();
-static NagHumanV1StatePure nagHumanV1State = {};
-static bool nagHumanV1Initialized = false;
-static NagHumanV2ConfigPure nagHumanV2Config = nagHumanV2DefaultConfigPure();
-static NagHumanV2StatePure nagHumanV2State = {};
-static bool nagHumanV2Initialized = false;
-static NagHumanV3ConfigPure nagHumanV3Config = nagHumanV3DefaultConfigPure();
-static NagHumanV3StatePure nagHumanV3State = {};
-static bool nagHumanV3Initialized = false;
 static NagHumanV4ConfigPure nagHumanV4Config = nagHumanV4DefaultConfigPure();
 static NagHumanV4StatePure nagHumanV4State = {};
 static bool nagHumanV4Initialized = false;
@@ -818,7 +1008,7 @@ static uint32_t nagHumanRuntimeSeed() {
 
 static uint8_t nagHumanVariantSnapshot() {
   portENTER_CRITICAL(&nagHumanMux);
-  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
+  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : nagModeHDefaultVariantPure();
   portEXIT_CRITICAL(&nagHumanMux);
   return v;
 }
@@ -826,30 +1016,6 @@ static uint8_t nagHumanVariantSnapshot() {
 static void nagHumanRuntimeReset(bool reseed) {
   const uint32_t seed = reseed ? nagHumanRuntimeSeed() : 0u;
   portENTER_CRITICAL(&nagHumanMux);
-  if (!nagHumanV1Initialized) {
-    nagHumanV1InitPure(nagHumanV1State, reseed ? seed : 0x484D4F44u);
-    nagHumanV1Initialized = true;
-  } else if (reseed) {
-    nagHumanV1ReseedPure(nagHumanV1State, seed);
-  } else {
-    nagHumanV1ResetRuntimePure(nagHumanV1State, H1_IDLE);
-  }
-  if (!nagHumanV2Initialized) {
-    nagHumanV2InitPure(nagHumanV2State, reseed ? seed ^ 0x52325632u : 0x52325632u);
-    nagHumanV2Initialized = true;
-  } else if (reseed) {
-    nagHumanV2ReseedPure(nagHumanV2State, seed ^ 0x52325632u);
-  } else {
-    nagHumanV2ResetRuntimePure(nagHumanV2State, H_IDLE);
-  }
-  if (!nagHumanV3Initialized) {
-    nagHumanV3InitPure(nagHumanV3State, reseed ? seed ^ 0x52335633u : 0x52335633u);
-    nagHumanV3Initialized = true;
-  } else if (reseed) {
-    nagHumanV3ReseedPure(nagHumanV3State, seed ^ 0x52335633u);
-  } else {
-    nagHumanV3ResetRuntimePure(nagHumanV3State, H1_IDLE);
-  }
   if (!nagHumanV4Initialized) {
     nagHumanV4InitPure(nagHumanV4State, reseed ? seed ^ 0x52345634u : 0x52345634u);
     nagHumanV4Initialized = true;
@@ -862,7 +1028,7 @@ static void nagHumanRuntimeReset(bool reseed) {
 }
 
 static void nagHumanRuntimeSetVariant(uint8_t variant) {
-  const uint8_t normalized = nagModeHVariantValidPure(variant) ? variant : H_VARIANT_REV3;
+  const uint8_t normalized = nagModeHVariantValidPure(variant) ? variant : nagModeHDefaultVariantPure();
   portENTER_CRITICAL(&nagHumanMux);
   nagHumanVariant = normalized;
   portEXIT_CRITICAL(&nagHumanMux);
@@ -892,27 +1058,7 @@ static NagHumanV1StepResultPure nagHumanRuntimeStep(uint32_t nowMs,
                                                      bool visualWarningActive) {
   NagHumanV1StepResultPure result = {};
   portENTER_CRITICAL(&nagHumanMux);
-  const uint8_t variant = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
-  if (variant == H_VARIANT_REV2) {
-    if (!nagHumanV2Initialized) {
-      nagHumanV2InitPure(nagHumanV2State, nagHumanRuntimeSeed() ^ 0x52325632u);
-      nagHumanV2Initialized = true;
-    }
-    const NagHumanV2StepResultPure r = nagHumanV2StepPure(
-        nagHumanV2State, nagHumanV2Config, nowMs, sourceRaw, runAllowed,
-        speedValid, speedFresh, speedRaw);
-    result.tx = r.tx; result.setHo = r.setHo; result.carrier = r.carrier;
-    result.hoOverrideValid = r.setHo; result.hoLevel = r.setHo ? 1u : 0u;
-    result.raw = r.raw; result.phase = r.phase; result.motion = r.motion;
-    result.blockReason = r.blockReason;
-  } else if (variant == H_VARIANT_REV3) {
-    if (!nagHumanV3Initialized) {
-      nagHumanV3InitPure(nagHumanV3State, nagHumanRuntimeSeed() ^ 0x52335633u);
-      nagHumanV3Initialized = true;
-    }
-    result = nagHumanV3StepPure(nagHumanV3State, nagHumanV3Config, nowMs,
-                                sourceRaw, runAllowed, speedValid, speedFresh, speedRaw);
-  } else if (variant == H_VARIANT_REV4) {
+{
     if (!nagHumanV4Initialized) {
       nagHumanV4InitPure(nagHumanV4State, nagHumanRuntimeSeed() ^ 0x52345634u);
       nagHumanV4Initialized = true;
@@ -920,40 +1066,9 @@ static NagHumanV1StepResultPure nagHumanRuntimeStep(uint32_t nowMs,
     result = nagHumanV4StepPure(nagHumanV4State, nagHumanV4Config, nowMs,
                                 sourceRaw, runAllowed, speedValid, speedFresh, speedRaw,
                                 visualWarningEpoch, visualWarningEnterMs, visualWarningActive);
-  } else {
-    if (!nagHumanV1Initialized) {
-      nagHumanV1InitPure(nagHumanV1State, nagHumanRuntimeSeed());
-      nagHumanV1Initialized = true;
-    }
-    result = nagHumanV1StepPure(nagHumanV1State, nagHumanV1Rev1Config, nowMs, sourceRaw,
-                                runAllowed, speedValid, speedFresh, speedRaw);
   }
   portEXIT_CRITICAL(&nagHumanMux);
   return result;
-}
-
-static NagHumanV1StatePure nagHumanV1RuntimeSnapshot() {
-  NagHumanV1StatePure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanV1State;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
-}
-
-static NagHumanV2StatePure nagHumanV2RuntimeSnapshot() {
-  NagHumanV2StatePure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanV2State;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
-}
-
-static NagHumanV3StatePure nagHumanV3RuntimeSnapshot() {
-  NagHumanV3StatePure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanV3State;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
 }
 
 static NagHumanV4StatePure nagHumanV4RuntimeSnapshot() {
@@ -964,95 +1079,12 @@ static NagHumanV4StatePure nagHumanV4RuntimeSnapshot() {
   return snapshot;
 }
 
-static NagHumanV1ConfigPure nagHumanV1RuntimeConfigSnapshot() {
-  NagHumanV1ConfigPure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
-  if (v == H_VARIANT_REV1) snapshot = nagHumanV1Rev1Config;
-  else if (v == H_VARIANT_REV3) snapshot = nagHumanV3Config.base;
-  else if (v == H_VARIANT_REV4) snapshot = nagHumanV4Config.base;
-  else snapshot = nagHumanV1Rev1Config;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
-}
-
-static NagHumanV2ConfigPure nagHumanV2RuntimeConfigSnapshot() {
-  NagHumanV2ConfigPure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanV2Config;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
-}
-
-static NagHumanV3ConfigPure nagHumanV3RuntimeConfigSnapshot() {
-  NagHumanV3ConfigPure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanV3Config;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
-}
-
 static NagHumanV4ConfigPure nagHumanV4RuntimeConfigSnapshot() {
   NagHumanV4ConfigPure snapshot = {};
   portENTER_CRITICAL(&nagHumanMux);
   snapshot = nagHumanV4Config;
   portEXIT_CRITICAL(&nagHumanMux);
   return snapshot;
-}
-
-static bool nagHumanV1RuntimeSetLabTuning(uint16_t peakMinRaw, uint16_t peakMaxRaw,
-                                          uint16_t waitMinMs, uint16_t waitMaxMs,
-                                          uint16_t refractoryMinMs, uint16_t refractoryMaxMs,
-                                          uint8_t hoOverridePct) {
-  if (!nagHumanV1PeakRangeValidPure(peakMinRaw, peakMaxRaw) ||
-      !nagHumanV1TimingValidPure(waitMinMs, waitMaxMs, refractoryMinMs, refractoryMaxMs) ||
-      hoOverridePct > 100u) return false;
-  portENTER_CRITICAL(&nagHumanMux);
-  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
-  if (v != H_VARIANT_REV1) { portEXIT_CRITICAL(&nagHumanMux); return false; }
-  nagHumanV1Rev1Config.peakMinRaw = peakMinRaw;
-  nagHumanV1Rev1Config.peakMaxRaw = peakMaxRaw;
-  nagHumanV1Rev1Config.waitMinMs = waitMinMs;
-  nagHumanV1Rev1Config.waitMaxMs = waitMaxMs;
-  nagHumanV1Rev1Config.refractoryMinMs = refractoryMinMs;
-  nagHumanV1Rev1Config.refractoryMaxMs = refractoryMaxMs;
-  nagHumanV1Rev1Config.hoOverridePct = hoOverridePct;
-  nagHumanV1State = NagHumanV1StatePure{};
-  nagHumanV1Initialized = false;
-  portEXIT_CRITICAL(&nagHumanMux);
-  nagExactEchoReset();
-  return true;
-}
-
-static bool nagHumanV3RuntimeSetLabTuning(
-    uint16_t peakMinRaw, uint16_t peakMaxRaw,
-    uint16_t waitMinMs, uint16_t waitMaxMs,
-    uint16_t refractoryMinMs, uint16_t refractoryMaxMs,
-    uint16_t carrierMinRaw, uint16_t carrierMaxRaw,
-    uint8_t carrierDirectionMode, uint8_t hoPolicy,
-    uint16_t ho1ThresholdRaw, uint16_t ho2ThresholdRaw) {
-  NagHumanV3ConfigPure next = nagHumanV3RuntimeConfigSnapshot();
-  next.base.peakMinRaw = peakMinRaw;
-  next.base.peakMaxRaw = peakMaxRaw;
-  next.base.waitMinMs = waitMinMs;
-  next.base.waitMaxMs = waitMaxMs;
-  next.base.refractoryMinMs = refractoryMinMs;
-  next.base.refractoryMaxMs = refractoryMaxMs;
-  next.base.hoOverridePct = 0u;
-  next.carrierMinRaw = carrierMinRaw;
-  next.carrierMaxRaw = carrierMaxRaw;
-  next.carrierDirectionMode = carrierDirectionMode;
-  next.hoPolicy = hoPolicy;
-  next.ho1ThresholdRaw = ho1ThresholdRaw;
-  next.ho2ThresholdRaw = ho2ThresholdRaw;
-  if (!nagHumanV3ConfigValidPure(next)) return false;
-  portENTER_CRITICAL(&nagHumanMux);
-  nagHumanV3Config = next;
-  nagHumanV3State = NagHumanV3StatePure{};
-  nagHumanV3Initialized = false;
-  portEXIT_CRITICAL(&nagHumanMux);
-  nagExactEchoReset();
-  return true;
 }
 
 static bool nagHumanV4RuntimeSetLabTuning(
@@ -1093,16 +1125,7 @@ static bool nagHumanV4RuntimeSetLabTuning(
 
 static void nagHumanRuntimeLoadDefaults() {
   portENTER_CRITICAL(&nagHumanMux);
-  nagHumanVariant = H_VARIANT_REV3;
-  nagHumanV1Rev1Config = nagHumanV1Rev1ConfigPure();
-  nagHumanV1State = NagHumanV1StatePure{};
-  nagHumanV1Initialized = false;
-  nagHumanV2Config = nagHumanV2DefaultConfigPure();
-  nagHumanV2State = NagHumanV2StatePure{};
-  nagHumanV2Initialized = false;
-  nagHumanV3Config = nagHumanV3DefaultConfigPure();
-  nagHumanV3State = NagHumanV3StatePure{};
-  nagHumanV3Initialized = false;
+  nagHumanVariant = nagModeHDefaultVariantPure();
   nagHumanV4Config = nagHumanV4DefaultConfigPure();
   nagHumanV4State = NagHumanV4StatePure{};
   nagHumanV4Initialized = false;
@@ -1112,10 +1135,12 @@ static void nagHumanRuntimeLoadDefaults() {
 static void nagHumanRuntimeApTransition(bool apActive, bool wasApActive) {
   if (apActive == wasApActive) return;
   uint8_t mode;
+  bool ignoreApState;
   portENTER_CRITICAL(&nagCfgMux);
   mode = nagCfg.mode;
+  ignoreApState = nagCfg.ignoreApState;
   portEXIT_CRITICAL(&nagCfgMux);
-  if (mode == MODE_H) {
+  if (mode == MODE_H && !ignoreApState) {
     nagExactEchoReset();
     nagHumanRuntimeReset(true);
   }
@@ -1220,7 +1245,13 @@ static void nagClampTorque(uint8_t& b2, uint8_t& b3) {
 }
 
 static void nagCfgSetCommonDefaults(NagConfig& c) {
-  c.enabled        = true;
+  c.enabled        = false;
+  c.ignoreApState  = false;
+  c.method         = NAG_METHOD_DEFAULT_PURE;
+  c.tsl9Sequence   = TSL9_SEQUENCE_DEFAULT_PURE;
+  c.tsl9DowngradeWindow = TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE;
+  c.tsl9InputMode  = TSL9_INPUT_MODE_DEFAULT_PURE;
+  c.tsl9LegacyRoute = TSL9_LEGACY_ROUTE_DEFAULT_PURE;
   c.pauseAtZeroSpeed = false;
   c.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
   c.burstMs        = 1000;
@@ -1269,7 +1300,7 @@ static void nagCfgDefaultsModeC(NagConfig& c) {
   c.pauseMs     = 0;    // Mode C is continuous by default.
 }
 
-// Mode H — AP-gated shared transport wrapper; waveform is selected by nagHumanVariant.
+// Mode H — single event engine with the shared torque eligibility policy.
 static void nagCfgDefaultsModeH(NagConfig& c) {
   nagCfgSetCommonDefaults(c);
   c.mode        = MODE_H;
@@ -1282,6 +1313,12 @@ static void nagCfgDefaultsModeH(NagConfig& c) {
 
 
 static void nagCfgClampAll(NagConfig& c) {
+  c.method = nagMethodSanitizePure(c.method);
+  c.tsl9Sequence = tsl9SequenceSanitizePure(c.tsl9Sequence);
+  c.tsl9DowngradeWindow =
+      tsl9DowngradeWindowSanitizePure(c.tsl9DowngradeWindow);
+  c.tsl9InputMode = tsl9InputModeSanitizePure(c.tsl9InputMode);
+  c.tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(c.tsl9LegacyRoute);
   if (!nagModeHStopBehaviorValidPure(c.modeHStopBehavior))
     c.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
   if (c.mode == MODE_H) c.hoRatePct = 100;
@@ -1294,104 +1331,212 @@ static void nagCfgClampAll(NagConfig& c) {
   for (uint8_t i = 0; i < c.torqueCount; i++) nagClampTorque(c.torqueB2[i], c.torqueB3[i]);
 }
 
+static bool nagCfgApplyActiveProfilePolicy(NagConfig& c, bool disableIfFallback) {
+  const bool torqueSupported = activeProfileNagTorqueSupported();
+  const bool tsl9Supported = activeProfileNagTsl9Supported();
+  const uint8_t previous = nagMethodSanitizePure(c.method);
+  const uint8_t resolved = nagMethodResolveForCapabilitiesPure(
+      previous, torqueSupported, tsl9Supported);
+  const bool changed = resolved != previous;
+  c.method = resolved;
+  // A topology migration must never auto-arm a newly selected injection method.
+  // Explicit user API changes pass disableIfFallback=false and retain the user's
+  // requested enabled state after the method has been normalized.
+  if ((!torqueSupported && !tsl9Supported) || (changed && disableIfFallback))
+    c.enabled = false;
+  return changed;
+}
+
 static inline bool nagModePersistedIdSupported(uint8_t mode) {
   return mode == MODE_A || mode == MODE_B || mode == MODE_C || mode == MODE_H;
 }
 
+// Versioned, single-key NVS commit. Legacy scalar keys remain readable.
+struct NagScrollStoredSnapshot {
+  bool torqueEnabled;
+  uint16_t torqueInterval;
+  uint8_t torquePattern;
+  bool tsl9Enabled;
+  uint16_t tsl9Interval;
+};
+static NagScrollStoredSnapshot nagScrollRuntimeSnapshot();
+static void nagScrollRuntimeRestore(const NagScrollStoredSnapshot&);
+
+struct NagStoredSnapshot {
+  uint32_t version;
+  NagConfig config;
+  NagHumanV4ConfigPure human;
+  uint8_t variant;
+  NagScrollStoredSnapshot scroll;
+};
+static bool nagNvsReadError = false;
+
+static void nagCfgLoadSafeDefaults() {
+  nagCfgDefaultsModeH(nagCfg);
+  nagCfgApplyActiveProfilePolicy(nagCfg, true);
+  nagHumanRuntimeLoadDefaults();
+  if (nagNvsReadError) {
+    NagScrollStoredSnapshot scroll = nagScrollRuntimeSnapshot();
+    scroll.torqueEnabled = false; scroll.tsl9Enabled = false;
+    nagScrollRuntimeRestore(scroll);
+  }
+  nagRxSelectorsRefreshFromConfig();
+}
+
+static bool nagCfgPersistSnapshot(const NagConfig& config,
+                          const NagHumanV4ConfigPure& human,
+                          uint8_t variant, const NagScrollStoredSnapshot& scroll) {
+  if (nagNvsReadError) return false;
+  NagStoredSnapshot stored = {};
+  stored.version = 1u;
+  stored.config = config;
+  nagCfgClampAll(stored.config);
+  nagCfgApplyActiveProfilePolicy(stored.config, false);
+  stored.human = human;
+  stored.scroll = scroll;
+  stored.variant = nagModeHVariantValidPure(variant)
+      ? variant : nagModeHDefaultVariantPure();
+  return nvsCheckedWriteBlob("nag", "snapshot", &stored, sizeof(stored));
+}
+
+static bool nagCfgPersist(const NagConfig& config,
+                          const NagHumanV4ConfigPure& human, uint8_t variant) {
+  return nagCfgPersistSnapshot(config, human, variant, nagScrollRuntimeSnapshot());
+}
+
+static bool nagCfgSaveCandidateWithScroll(const NagConfig& config,
+                                          const NagScrollStoredSnapshot& scroll) {
+  NagHumanV4ConfigPure human;
+  uint8_t variant;
+  portENTER_CRITICAL(&nagHumanMux);
+  human = nagHumanV4Config;
+  variant = nagHumanVariant;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return nagCfgPersistSnapshot(config, human, variant, scroll);
+}
+
+static bool nagCfgSaveCandidate(const NagConfig& config) {
+  return nagCfgSaveCandidateWithScroll(config, nagScrollRuntimeSnapshot());
+}
+
 static void nagCfgLoad() {
+  nagNvsReadError = false;
+  NagStoredSnapshot stored = {};
+  bool found = false;
+  if (!nvsCheckedReadBlob("nag", "snapshot", &stored, sizeof(stored), found)) {
+    nagNvsReadError = true;
+    nagCfgLoadSafeDefaults();
+    return;
+  }
+  if (found) {
+    if (stored.version != 1u || !nagModePersistedIdSupported(stored.config.mode) ||
+        !nagHumanV4ConfigValidPure(stored.human)) {
+      nagNvsReadError = true;
+      nagCfgLoadSafeDefaults();
+      return;
+    }
+    nagScrollRuntimeRestore(stored.scroll);
+    nagCfg = stored.config;
+    nagCfgClampAll(nagCfg);
+    nagCfgApplyActiveProfilePolicy(nagCfg, true);
+    portENTER_CRITICAL(&nagHumanMux);
+    nagHumanVariant = nagModeHVariantValidPure(stored.variant)
+        ? stored.variant : nagModeHDefaultVariantPure();
+    nagHumanV4Config = stored.human;
+    nagHumanV4State = NagHumanV4StatePure{};
+    nagHumanV4Initialized = false;
+    portEXIT_CRITICAL(&nagHumanMux);
+    nagRxSelectorsRefreshFromConfig();
+    return;
+  }
+  CheckedPreferences reader;
+  if (!reader.begin("nag", true)) {
 #if T2CAN_SERIAL_DIAGNOSTICS
-  Serial.println("NVS: Loading nag config...");
+    T2CAN_SERIAL_PRINTLN("NVS: No existing nag config, using defaults");
 #endif
-  if (!prefs.begin("nag", true)) {
-#if T2CAN_SERIAL_DIAGNOSTICS
-    Serial.println("NVS: No existing nag config, using defaults");
-#endif
-    nagCfgDefaultsModeA(nagCfg);
+    nagNvsReadError = !reader.ok();
+    nagCfgLoadSafeDefaults();
+    return;
+  }
+  if (!reader.isKey("v")) {
+    const bool savedEnabled = reader.getBool("en", false);
+    const bool savedIgnoreApState = reader.getBool("iap", false);
+    reader.end();
+    if (!reader.ok()) {
+      nagNvsReadError = true;
+      nagCfgLoadSafeDefaults();
+      return;
+    }
+    nagCfgDefaultsModeH(nagCfg);
+    nagCfg.enabled = savedEnabled;
+    nagCfg.ignoreApState = savedIgnoreApState;
+    nagCfgApplyActiveProfilePolicy(nagCfg, true);
     nagHumanRuntimeLoadDefaults();
     nagRxSelectorsRefreshFromConfig();
     return;
   }
-  if (!prefs.isKey("v")) {
-    prefs.end();
-    nagCfgDefaultsModeA(nagCfg);
-    nagHumanRuntimeLoadDefaults();
-    nagRxSelectorsRefreshFromConfig();
-    return;
-  }
-  const uint8_t nagCfgVersion = prefs.getUChar("v", 0u);
+  const uint8_t nagCfgVersion = reader.getUChar("v", 0u);
   nagCfgSetCommonDefaults(nagCfg);
-  nagCfg.enabled        = prefs.getBool("en", true);
-  nagCfg.pauseAtZeroSpeed = prefs.getBool("p0", false);
+  nagCfg.enabled        = reader.getBool("en", false);
+  nagCfg.ignoreApState  = reader.getBool("iap", false);
+  nagCfg.method         = nagMethodSanitizePure(
+      reader.getUChar("method", NAG_METHOD_DEFAULT_PURE));
+  nagCfg.tsl9Sequence   = tsl9SequenceSanitizePure(
+      reader.getUChar("tsl9seq", TSL9_SEQUENCE_DEFAULT_PURE));
+  nagCfg.tsl9DowngradeWindow = tsl9DowngradeWindowSanitizePure(
+      reader.getUChar("tsl9win", TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE));
+  nagCfg.tsl9InputMode = tsl9InputModeSanitizePure(
+      reader.getUChar("tsl9in", TSL9_INPUT_MODE_DEFAULT_PURE));
+  nagCfg.tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(
+      reader.getUChar("tsl9rt", TSL9_LEGACY_ROUTE_DEFAULT_PURE));
+  nagCfg.pauseAtZeroSpeed = reader.getBool("p0", false);
   const uint8_t storedStopDefault = nagCfgVersion < 18u
       ? H_STOP_STOCK_CARRIER : nagModeHDefaultStopBehaviorPure();
-  nagCfg.modeHStopBehavior = prefs.getUChar("hsb", storedStopDefault);
+  nagCfg.modeHStopBehavior = reader.getUChar("hsb", storedStopDefault);
   if (!nagModeHStopBehaviorValidPure(nagCfg.modeHStopBehavior))
     nagCfg.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
-  nagCfg.mode           = prefs.getUChar("mode", 0);
-  if (!nagModePersistedIdSupported(nagCfg.mode)) nagCfg.mode = MODE_A;
-  nagCfg.targetId       = prefs.getUShort("id", 0x370);
-  nagCfg.torqueCount    = prefs.getUChar("tc", 1);
-  size_t n = prefs.getBytes("tb2", nagCfg.torqueB2, NAG_MAX_TORQUE_ENTRIES);
+  nagCfg.mode           = reader.getUChar("mode", MODE_H);
+  if (!nagModePersistedIdSupported(nagCfg.mode)) nagCfg.mode = MODE_H;
+  nagCfg.targetId       = reader.getUShort("id", 0x370);
+  nagCfg.torqueCount    = reader.getUChar("tc", 1);
+  size_t n = reader.getBytes("tb2", nagCfg.torqueB2, NAG_MAX_TORQUE_ENTRIES);
   if (n == 0) { nagCfg.torqueB2[0] = 0x08; }
-  n = prefs.getBytes("tb3", nagCfg.torqueB3, NAG_MAX_TORQUE_ENTRIES);
+  n = reader.getBytes("tb3", nagCfg.torqueB3, NAG_MAX_TORQUE_ENTRIES);
   if (n == 0) { nagCfg.torqueB3[0] = 0xB6; }
-  nagCfg.hoRatePct      = prefs.getUChar("ho", 100);
-  nagCfg.burstMs        = prefs.getUShort("bms", 1000);
-  nagCfg.pauseMs        = prefs.getUShort("pms", 1500);
-  nagCfg.apStateId      = prefs.getUShort("apid", 0x399);
-  nagCfg.steeringId     = prefs.getUShort("stid", 0x129);
+  nagCfg.hoRatePct      = reader.getUChar("ho", 100);
+  nagCfg.burstMs        = reader.getUShort("bms", 1000);
+  nagCfg.pauseMs        = reader.getUShort("pms", 1500);
+  nagCfg.apStateId      = reader.getUShort("apid", 0x399);
+  nagCfg.steeringId     = reader.getUShort("stid", 0x129);
 
-  const NagHumanV1ConfigPure rev1Defaults = nagHumanV1Rev1ConfigPure();
-  const NagHumanV3ConfigPure rev3Defaults = nagHumanV3DefaultConfigPure();
   const NagHumanV4ConfigPure rev4Defaults = nagHumanV4DefaultConfigPure();
-  uint8_t humanVariant = prefs.getUChar("hv", H_VARIANT_REV3);
-  if (!nagModeHVariantValidPure(humanVariant)) humanVariant = H_VARIANT_REV3;
-
-  NagHumanV1ConfigPure rev1Cfg = rev1Defaults;
-  rev1Cfg.peakMinRaw = prefs.getUShort("hr1pmin", rev1Defaults.peakMinRaw);
-  rev1Cfg.peakMaxRaw = prefs.getUShort("hr1pmax", rev1Defaults.peakMaxRaw);
-  rev1Cfg.waitMinMs = prefs.getUShort("hr1wmin", rev1Defaults.waitMinMs);
-  rev1Cfg.waitMaxMs = prefs.getUShort("hr1wmax", rev1Defaults.waitMaxMs);
-  rev1Cfg.refractoryMinMs = prefs.getUShort("hr1rmin", rev1Defaults.refractoryMinMs);
-  rev1Cfg.refractoryMaxMs = prefs.getUShort("hr1rmax", rev1Defaults.refractoryMaxMs);
-  rev1Cfg.hoOverridePct = prefs.getUChar("hr1ho", rev1Defaults.hoOverridePct);
-
-  NagHumanV3ConfigPure rev3Cfg = rev3Defaults;
-  rev3Cfg.base.peakMinRaw = prefs.getUShort("h3pmin", rev3Defaults.base.peakMinRaw);
-  rev3Cfg.base.peakMaxRaw = prefs.getUShort("h3pmax", rev3Defaults.base.peakMaxRaw);
-  rev3Cfg.base.waitMinMs = prefs.getUShort("h3wmin", rev3Defaults.base.waitMinMs);
-  rev3Cfg.base.waitMaxMs = prefs.getUShort("h3wmax", rev3Defaults.base.waitMaxMs);
-  rev3Cfg.base.refractoryMinMs = prefs.getUShort("h3rmin", rev3Defaults.base.refractoryMinMs);
-  rev3Cfg.base.refractoryMaxMs = prefs.getUShort("h3rmax", rev3Defaults.base.refractoryMaxMs);
-  rev3Cfg.base.hoOverridePct = 0u;
-  rev3Cfg.carrierMinRaw = prefs.getUShort("h3cmin", rev3Defaults.carrierMinRaw);
-  rev3Cfg.carrierMaxRaw = prefs.getUShort("h3cmax", rev3Defaults.carrierMaxRaw);
-  rev3Cfg.carrierDirectionMode = prefs.getUChar("h3dir", rev3Defaults.carrierDirectionMode);
-  rev3Cfg.hoPolicy = prefs.getUChar("h3hop", rev3Defaults.hoPolicy);
-  rev3Cfg.ho1ThresholdRaw = prefs.getUShort("h3ho1", rev3Defaults.ho1ThresholdRaw);
-  rev3Cfg.ho2ThresholdRaw = prefs.getUShort("h3ho2", rev3Defaults.ho2ThresholdRaw);
+  uint8_t humanVariant = reader.getUChar("hv", nagModeHDefaultVariantPure());
+  if (!nagModeHVariantValidPure(humanVariant)) humanVariant = nagModeHDefaultVariantPure();
 
   // Rev.4 has owned the h4* namespace since schema v15. Legacy Rev.1 Plus h1*
   // keys are deliberately never reinterpreted as Rev.4 tuning.
   NagHumanV4ConfigPure rev4Cfg = rev4Defaults;
-  rev4Cfg.base.peakMinRaw = prefs.getUShort("h4pmin", rev4Defaults.base.peakMinRaw);
-  rev4Cfg.base.peakMaxRaw = prefs.getUShort("h4pmax", rev4Defaults.base.peakMaxRaw);
-  rev4Cfg.base.waitMinMs = prefs.getUShort("h4wmin", rev4Defaults.base.waitMinMs);
-  rev4Cfg.base.waitMaxMs = prefs.getUShort("h4wmax", rev4Defaults.base.waitMaxMs);
-  rev4Cfg.base.refractoryMinMs = prefs.getUShort("h4rmin", rev4Defaults.base.refractoryMinMs);
-  rev4Cfg.base.refractoryMaxMs = prefs.getUShort("h4rmax", rev4Defaults.base.refractoryMaxMs);
+  rev4Cfg.base.peakMinRaw = reader.getUShort("h4pmin", rev4Defaults.base.peakMinRaw);
+  rev4Cfg.base.peakMaxRaw = reader.getUShort("h4pmax", rev4Defaults.base.peakMaxRaw);
+  rev4Cfg.base.waitMinMs = reader.getUShort("h4wmin", rev4Defaults.base.waitMinMs);
+  rev4Cfg.base.waitMaxMs = reader.getUShort("h4wmax", rev4Defaults.base.waitMaxMs);
+  rev4Cfg.base.refractoryMinMs = reader.getUShort("h4rmin", rev4Defaults.base.refractoryMinMs);
+  rev4Cfg.base.refractoryMaxMs = reader.getUShort("h4rmax", rev4Defaults.base.refractoryMaxMs);
   rev4Cfg.base.hoOverridePct = 0u;
-  rev4Cfg.carrierMinRaw = prefs.getUShort("h4cmin", rev4Defaults.carrierMinRaw);
-  rev4Cfg.carrierMaxRaw = prefs.getUShort("h4cmax", rev4Defaults.carrierMaxRaw);
-  rev4Cfg.hoPolicy = prefs.getUChar("h4hop", rev4Defaults.hoPolicy);
-  rev4Cfg.ho1ThresholdRaw = prefs.getUShort("h4ho1", rev4Defaults.ho1ThresholdRaw);
-  rev4Cfg.ho2ThresholdRaw = prefs.getUShort("h4ho2", rev4Defaults.ho2ThresholdRaw);
-  rev4Cfg.visualRescueEnabled = prefs.getBool("h4vres", rev4Defaults.visualRescueEnabled);
-  rev4Cfg.visualRescueDelayMs = prefs.getUShort("h4vdly", rev4Defaults.visualRescueDelayMs);
-  prefs.end();
+  rev4Cfg.carrierMinRaw = reader.getUShort("h4cmin", rev4Defaults.carrierMinRaw);
+  rev4Cfg.carrierMaxRaw = reader.getUShort("h4cmax", rev4Defaults.carrierMaxRaw);
+  rev4Cfg.hoPolicy = reader.getUChar("h4hop", rev4Defaults.hoPolicy);
+  rev4Cfg.ho1ThresholdRaw = reader.getUShort("h4ho1", rev4Defaults.ho1ThresholdRaw);
+  rev4Cfg.ho2ThresholdRaw = reader.getUShort("h4ho2", rev4Defaults.ho2ThresholdRaw);
+  rev4Cfg.visualRescueEnabled = reader.getBool("h4vres", rev4Defaults.visualRescueEnabled);
+  rev4Cfg.visualRescueDelayMs = reader.getUShort("h4vdly", rev4Defaults.visualRescueDelayMs);
+  reader.end();
+  if (!reader.ok()) {
+    nagNvsReadError = true;
+    nagCfgLoadSafeDefaults();
+    return;
+  }
 
-  // Preserve arbitrary custom Rev.3 profiles; migrate only known old defaults.
-  const bool migratedRev3D4 = nagCfgVersion < 13u && nagHumanV3MigrateD3DefaultToD4Pure(rev3Cfg);
   // Schema v17 promotes only the exact v16 Rev.4 defaults. Custom Rev.4
   // tuning survives unchanged while all profiles gain the new HO defaults.
   const bool migratedRev4V17 = nagCfgVersion < 17u && nagHumanV4MigrateV16DefaultPure(rev4Cfg);
@@ -1402,23 +1547,10 @@ static void nagCfgLoad() {
   }
 
   nagCfgClampAll(nagCfg);
-  if (!nagHumanV1PeakRangeValidPure(rev1Cfg.peakMinRaw, rev1Cfg.peakMaxRaw) ||
-      !nagHumanV1TimingValidPure(rev1Cfg.waitMinMs, rev1Cfg.waitMaxMs,
-                                rev1Cfg.refractoryMinMs, rev1Cfg.refractoryMaxMs) ||
-      rev1Cfg.hoOverridePct > 100u) rev1Cfg = rev1Defaults;
-  if (!nagHumanV3ConfigValidPure(rev3Cfg)) rev3Cfg = rev3Defaults;
+  const bool profileMethodMigrated = nagCfgApplyActiveProfilePolicy(nagCfg, true);
   if (!nagHumanV4ConfigValidPure(rev4Cfg)) rev4Cfg = rev4Defaults;
   portENTER_CRITICAL(&nagHumanMux);
   nagHumanVariant = humanVariant;
-  nagHumanV1Rev1Config = rev1Cfg;
-  nagHumanV1State = NagHumanV1StatePure{};
-  nagHumanV1Initialized = false;
-  nagHumanV2Config = nagHumanV2DefaultConfigPure();
-  nagHumanV2State = NagHumanV2StatePure{};
-  nagHumanV2Initialized = false;
-  nagHumanV3Config = rev3Cfg;
-  nagHumanV3State = NagHumanV3StatePure{};
-  nagHumanV3Initialized = false;
   nagHumanV4Config = rev4Cfg;
   nagHumanV4State = NagHumanV4StatePure{};
   nagHumanV4Initialized = false;
@@ -1428,122 +1560,35 @@ static void nagCfgLoad() {
   // tuning and an independently selected stop behavior survive unchanged.
   // Profile id 1 is intentionally retained, so an OTA installation previously
   // selecting Rev.1 Plus moves to Rev.4 without creating a fifth profile id.
-  if ((nagCfgVersion < 18u || migratedRev3D4 || migratedRev4V17 || migratedRev4V18) &&
-      prefs.begin("nag", false)) {
-    prefs.putUChar("hv", humanVariant);
-    prefs.putUChar("hsb", nagCfg.modeHStopBehavior);
-    prefs.putUShort("hr1pmin", rev1Cfg.peakMinRaw);
-    prefs.putUShort("hr1pmax", rev1Cfg.peakMaxRaw);
-    prefs.putUShort("hr1wmin", rev1Cfg.waitMinMs);
-    prefs.putUShort("hr1wmax", rev1Cfg.waitMaxMs);
-    prefs.putUShort("hr1rmin", rev1Cfg.refractoryMinMs);
-    prefs.putUShort("hr1rmax", rev1Cfg.refractoryMaxMs);
-    prefs.putUChar("hr1ho", rev1Cfg.hoOverridePct);
-    prefs.putUShort("h3pmin", rev3Cfg.base.peakMinRaw);
-    prefs.putUShort("h3pmax", rev3Cfg.base.peakMaxRaw);
-    prefs.putUShort("h3wmin", rev3Cfg.base.waitMinMs);
-    prefs.putUShort("h3wmax", rev3Cfg.base.waitMaxMs);
-    prefs.putUShort("h3rmin", rev3Cfg.base.refractoryMinMs);
-    prefs.putUShort("h3rmax", rev3Cfg.base.refractoryMaxMs);
-    prefs.putUShort("h3cmin", rev3Cfg.carrierMinRaw);
-    prefs.putUShort("h3cmax", rev3Cfg.carrierMaxRaw);
-    prefs.putUChar("h3dir", rev3Cfg.carrierDirectionMode);
-    prefs.putUChar("h3hop", rev3Cfg.hoPolicy);
-    prefs.putUShort("h3ho1", rev3Cfg.ho1ThresholdRaw);
-    prefs.putUShort("h3ho2", rev3Cfg.ho2ThresholdRaw);
-    prefs.putUShort("h4pmin", rev4Cfg.base.peakMinRaw);
-    prefs.putUShort("h4pmax", rev4Cfg.base.peakMaxRaw);
-    prefs.putUShort("h4wmin", rev4Cfg.base.waitMinMs);
-    prefs.putUShort("h4wmax", rev4Cfg.base.waitMaxMs);
-    prefs.putUShort("h4rmin", rev4Cfg.base.refractoryMinMs);
-    prefs.putUShort("h4rmax", rev4Cfg.base.refractoryMaxMs);
-    prefs.putUShort("h4cmin", rev4Cfg.carrierMinRaw);
-    prefs.putUShort("h4cmax", rev4Cfg.carrierMaxRaw);
-    prefs.putUChar("h4hop", rev4Cfg.hoPolicy);
-    prefs.putUShort("h4ho1", rev4Cfg.ho1ThresholdRaw);
-    prefs.putUShort("h4ho2", rev4Cfg.ho2ThresholdRaw);
-    prefs.putBool("h4vres", rev4Cfg.visualRescueEnabled);
-    prefs.putUShort("h4vdly", rev4Cfg.visualRescueDelayMs);
-    prefs.putUChar("v", 18u);
-    prefs.end();
+  if (nagCfgVersion < 20u || migratedRev4V17 || migratedRev4V18 ||
+      profileMethodMigrated) {
+    // One durable snapshot; a failed migration leaves the legacy keys intact.
+    (void)nagCfgSave();
   }
 
   nagRxSelectorsRefreshFromConfig();
 #if T2CAN_SERIAL_DIAGNOSTICS
-  Serial.println("NVS: Nag config loaded OK");
+  T2CAN_SERIAL_PRINTLN("NVS: Nag config loaded OK");
 #endif
 }
 
-static void nagCfgSave() {
+// Persist the torque-only opt-in before publishing it to the running configuration.
+// Existing configuration writes retain their established format.
+static bool nagIgnoreApStatePersist(bool value) {
+  NagConfig candidate;
+  portENTER_CRITICAL(&nagCfgMux);
+  candidate = nagCfg;
+  portEXIT_CRITICAL(&nagCfgMux);
+  candidate.ignoreApState = value;
+  return nagCfgSaveCandidate(candidate);
+}
+
+static bool nagCfgSave() {
   NagConfig snapshot;
-  NagHumanV1ConfigPure rev1Snapshot;
-  NagHumanV3ConfigPure rev3Snapshot;
-  NagHumanV4ConfigPure rev4Snapshot;
-  uint8_t variantSnapshot;
   portENTER_CRITICAL(&nagCfgMux);
   snapshot = nagCfg;
   portEXIT_CRITICAL(&nagCfgMux);
-  portENTER_CRITICAL(&nagHumanMux);
-  rev1Snapshot = nagHumanV1Rev1Config;
-  rev3Snapshot = nagHumanV3Config;
-  rev4Snapshot = nagHumanV4Config;
-  variantSnapshot = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : H_VARIANT_REV3;
-  portEXIT_CRITICAL(&nagHumanMux);
-  nagCfgClampAll(snapshot);
-  if (!prefs.begin("nag", false)) {
-#if T2CAN_SERIAL_DIAGNOSTICS
-    Serial.println("NVS: Nag save failed - could not open");
-#endif
-    return;
-  }
-  prefs.putBool("en",     snapshot.enabled);
-  prefs.putBool("p0",     snapshot.pauseAtZeroSpeed);
-  prefs.putUChar("hsb",   snapshot.modeHStopBehavior);
-  prefs.putUChar("mode",  snapshot.mode);
-  prefs.putUShort("id",   snapshot.targetId);
-  prefs.putUChar("tc",    snapshot.torqueCount);
-  prefs.putBytes("tb2",   snapshot.torqueB2, NAG_MAX_TORQUE_ENTRIES);
-  prefs.putBytes("tb3",   snapshot.torqueB3, NAG_MAX_TORQUE_ENTRIES);
-  prefs.putUChar("ho",    snapshot.hoRatePct);
-  prefs.putUShort("bms",  snapshot.burstMs);
-  prefs.putUShort("pms",  snapshot.pauseMs);
-  prefs.putUShort("apid", snapshot.apStateId);
-  prefs.putUShort("stid", snapshot.steeringId);
-  prefs.putUChar("hv", variantSnapshot);
-  prefs.putUShort("hr1pmin", rev1Snapshot.peakMinRaw);
-  prefs.putUShort("hr1pmax", rev1Snapshot.peakMaxRaw);
-  prefs.putUShort("hr1wmin", rev1Snapshot.waitMinMs);
-  prefs.putUShort("hr1wmax", rev1Snapshot.waitMaxMs);
-  prefs.putUShort("hr1rmin", rev1Snapshot.refractoryMinMs);
-  prefs.putUShort("hr1rmax", rev1Snapshot.refractoryMaxMs);
-  prefs.putUChar("hr1ho", rev1Snapshot.hoOverridePct);
-  prefs.putUShort("h3pmin", rev3Snapshot.base.peakMinRaw);
-  prefs.putUShort("h3pmax", rev3Snapshot.base.peakMaxRaw);
-  prefs.putUShort("h3wmin", rev3Snapshot.base.waitMinMs);
-  prefs.putUShort("h3wmax", rev3Snapshot.base.waitMaxMs);
-  prefs.putUShort("h3rmin", rev3Snapshot.base.refractoryMinMs);
-  prefs.putUShort("h3rmax", rev3Snapshot.base.refractoryMaxMs);
-  prefs.putUShort("h3cmin", rev3Snapshot.carrierMinRaw);
-  prefs.putUShort("h3cmax", rev3Snapshot.carrierMaxRaw);
-  prefs.putUChar("h3dir", rev3Snapshot.carrierDirectionMode);
-  prefs.putUChar("h3hop", rev3Snapshot.hoPolicy);
-  prefs.putUShort("h3ho1", rev3Snapshot.ho1ThresholdRaw);
-  prefs.putUShort("h3ho2", rev3Snapshot.ho2ThresholdRaw);
-  prefs.putUShort("h4pmin", rev4Snapshot.base.peakMinRaw);
-  prefs.putUShort("h4pmax", rev4Snapshot.base.peakMaxRaw);
-  prefs.putUShort("h4wmin", rev4Snapshot.base.waitMinMs);
-  prefs.putUShort("h4wmax", rev4Snapshot.base.waitMaxMs);
-  prefs.putUShort("h4rmin", rev4Snapshot.base.refractoryMinMs);
-  prefs.putUShort("h4rmax", rev4Snapshot.base.refractoryMaxMs);
-  prefs.putUShort("h4cmin", rev4Snapshot.carrierMinRaw);
-  prefs.putUShort("h4cmax", rev4Snapshot.carrierMaxRaw);
-  prefs.putUChar("h4hop", rev4Snapshot.hoPolicy);
-  prefs.putUShort("h4ho1", rev4Snapshot.ho1ThresholdRaw);
-  prefs.putUShort("h4ho2", rev4Snapshot.ho2ThresholdRaw);
-  prefs.putBool("h4vres", rev4Snapshot.visualRescueEnabled);
-  prefs.putUShort("h4vdly", rev4Snapshot.visualRescueDelayMs);
-  prefs.putUChar("v",     18u);
-  prefs.end();
+  return nagCfgSaveCandidate(snapshot);
 }
 
 // ── Nag decide injection (raw data version) ──
@@ -1643,12 +1688,20 @@ static void nagObserveHandsOnState(uint8_t ho, uint32_t now) {
     nagCtx.prevHandsOnState = previousHandsOnState;
     nagCtx.handsOnState = ho;
     const bool visualWarningNow = nagHumanV4VisualWarningActivePure(ho);
+    const bool scrollWarningWas =
+        tsl9InputWarningStatePure(previousHandsOnState);
+    const bool scrollWarningNow = tsl9InputWarningStatePure(ho);
     if (nagHumanV4VisualWarningEdgePure(previousHandsOnState, ho)) {
       nagCtx.visualWarningEpoch++;
       if (nagCtx.visualWarningEpoch == 0u) nagCtx.visualWarningEpoch = 1u;
       nagCtx.visualWarningEnterMs = now;
     }
     nagCtx.visualWarningActive = visualWarningNow;
+    if (!scrollWarningWas && scrollWarningNow) {
+      nagCtx.scrollWarningEpoch++;
+      if (nagCtx.scrollWarningEpoch == 0u) nagCtx.scrollWarningEpoch = 1u;
+    }
+    nagCtx.scrollWarningActive = scrollWarningNow;
     if (ho == 2 && nagCtx.state2EnterMs == 0) nagCtx.state2EnterMs = now;
     if (ho != 2) nagCtx.state2EnterMs = 0;
     if (ho == 3 && nagCtx.state3EnterMs == 0) nagCtx.state3EnterMs = now;
@@ -1680,11 +1733,14 @@ static void nagUpdateVehicleSpeed(const uint8_t* data, uint8_t dlc) {
   uint16_t raw = 0;
   const bool valid = nagDecodePartySpeedRawPure(data, dlc, raw);
   const unsigned long now = millis();
+  const bool locked = canTxBarrierMutex &&
+      xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE;
   portENTER_CRITICAL(&nagCtxMux);
   nagCtx.vehicleSpeedValid = valid;
   if (valid) nagCtx.vehicleSpeedRaw = raw;
   nagCtx.lastVehicleSpeedMs = now;
   portEXIT_CRITICAL(&nagCtxMux);
+  if (locked) xSemaphoreGive(canTxBarrierMutex);
 }
 
 static void nagUpdateSteering(const uint8_t* data, uint8_t dlc) {
@@ -1714,6 +1770,167 @@ static bool nagApInjectionGateOpen();
 static void nagApGateSnapshot(bool &validOut, bool &activeOut);
 // Explicit prototypes required here because NAG TX is defined before later modular definitions.
 
+static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo,
+                            bool handsOnModified, bool isaModified) {
+  if (handsOnModified) {
+    portENTER_CRITICAL(&nagTsl9Mux);
+    if (ok) nagTsl9TxOk++; else nagTsl9TxFail++;
+    portEXIT_CRITICAL(&nagTsl9Mux);
+    portENTER_CRITICAL(&nagDiagMux);
+    if (ok) {
+      nagTxOk++;
+      nagMaxTxGapMs = nagGapMaxUpdatePure(nagLastTxOkMs, nowMs, nagMaxTxGapMs);
+      nagLastTxOkMs = nowMs;
+      nagSessionTxOk++;
+    } else {
+      nagTxFail++;
+    }
+    portEXIT_CRITICAL(&nagDiagMux);
+    if (ok) {
+      nagEchoCount++;
+      nagLastInjectedHo = injectedHo;
+    }
+  }
+  if (isaModified) {
+    portENTER_CRITICAL(&isaSuppressionControlMux);
+    if (ok) isaSuppressionTxOk++; else isaSuppressionTxFail++;
+    portEXIT_CRITICAL(&isaSuppressionControlMux);
+  }
+}
+
+// Model Y L uses DAS_status 0x399 on Party CAN A. Legacy Model 3/Y uses the
+// gateway-translated DAS_status 0x39B on Body CAN A.
+static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
+  const bool yl399Route = activeProfileIsYl();
+  const bool legacyBody39BRoute = nagTsl9Body39BSelected();
+  const bool handsOnRoute = activeProfileNagTsl9Supported() &&
+      (yl399Route || legacyBody39BRoute);
+  const bool isaRoute = yl399Route && activeProfileIsaSuppressionSupported();
+  if (!handsOnRoute && !isaRoute) return false;
+  const uint16_t expectedId = legacyBody39BRoute ? 0x39Bu : 0x399u;
+  if ((rxf.can_id & 0xC0000000UL) != 0 ||
+      (rxf.can_id & 0x7FFu) != expectedId || rxf.can_dlc < 8u) return false;
+
+  bool enabled;
+  uint8_t method;
+  uint8_t sequence;
+  uint8_t downgradeWindow;
+  bool isaSuppression;
+  uint32_t isaSuppressionGenerationSnapshot;
+  portENTER_CRITICAL(&nagCfgMux);
+  enabled = nagCfg.enabled;
+  method = nagMethodSanitizePure(nagCfg.method);
+  sequence = tsl9SequenceSanitizePure(nagCfg.tsl9Sequence);
+  downgradeWindow = tsl9DowngradeWindowSanitizePure(
+      nagCfg.tsl9DowngradeWindow);
+  portEXIT_CRITICAL(&nagCfgMux);
+  isaSuppressionControlSnapshot(
+      isaSuppression, isaSuppressionGenerationSnapshot);
+
+  struct can_frame out = rxf;
+  const uint32_t nowMs = (uint32_t)millis();
+  Tsl9DasTransformResultPure result;
+  // ISA on a separate route must not start/reset the Nag downgrade window.
+  Tsl9HandsOnStatePure isaOnlyState = {};
+  portENTER_CRITICAL(&nagTsl9Mux);
+  if (handsOnRoute && method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
+  result = tsl9ApplyDasTransformForCanIdPure(
+      handsOnRoute ? nagTsl9State : isaOnlyState,
+      handsOnRoute && enabled && method == NAG_METHOD_TSL9_PURE,
+      sequence, downgradeWindow, isaRoute && isaSuppression, expectedId,
+      out.data, out.can_dlc, nowMs);
+  if (result.handsOnModified) nagTsl9Modified++;
+  if (result.handsOnModified) nagTsl9HandsOnModified++;
+  portEXIT_CRITICAL(&nagTsl9Mux);
+  if (result.isaModified) {
+    portENTER_CRITICAL(&isaSuppressionControlMux);
+    isaSuppressionModified++;
+    portEXIT_CRITICAL(&isaSuppressionControlMux);
+  }
+  if (!result.modified) return false;
+
+  const uint32_t txEpoch = canTxEpochSnapshot();
+  MCP2515::ERROR err = MCP2515::ERROR_FAIL;
+  McpTxResultReason txReason = MCP_TX_INVALID_MSG;
+  const bool attempted = canTxMcpSendTaggedGuarded(
+      &out, txEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
+      &isaSuppressionGeneration, isaSuppressionGenerationSnapshot,
+      err, &txReason);
+  const bool ok = attempted && err == MCP2515::ERROR_OK;
+  if (ok) {
+    mcpTxOk++;
+    mcpTxFailConsecutive = 0;
+  } else {
+    mcpTxFail++;
+    if (mcpTxFailConsecutive < 255) mcpTxFailConsecutive++;
+  }
+  nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu),
+                  result.handsOnModified, result.isaModified);
+  return ok;
+}
+
+// Standard profiles receive DAS_status 0x399 on Chassis CAN B. This transport
+// is available with either Body+Chassis or Party+Chassis wiring.
+static bool nagProcessTsl9Twai399(const twai_message_t &src) {
+  const bool handsOnRoute = nagTsl9Chassis399Selected();
+  const bool isaRoute = activeCanBIsChassis() &&
+      activeProfileIsaSuppressionSupported();
+  if ((!handsOnRoute && !isaRoute) || !activeCanBIsChassis()) return false;
+  if (src.extd || src.rtr || src.identifier != 0x399u ||
+      src.data_length_code < 8u) return false;
+
+  bool enabled;
+  uint8_t method;
+  uint8_t sequence;
+  uint8_t downgradeWindow;
+  bool isaSuppression;
+  uint32_t isaSuppressionGenerationSnapshot;
+  portENTER_CRITICAL(&nagCfgMux);
+  enabled = nagCfg.enabled;
+  method = nagMethodSanitizePure(nagCfg.method);
+  sequence = tsl9SequenceSanitizePure(nagCfg.tsl9Sequence);
+  downgradeWindow = tsl9DowngradeWindowSanitizePure(
+      nagCfg.tsl9DowngradeWindow);
+  portEXIT_CRITICAL(&nagCfgMux);
+  isaSuppressionControlSnapshot(
+      isaSuppression, isaSuppressionGenerationSnapshot);
+
+  twai_message_t out = src;
+  out.flags = 0;
+  const uint32_t nowMs = (uint32_t)millis();
+  Tsl9DasTransformResultPure result;
+  // ISA on a separate route must not start/reset the Nag downgrade window.
+  Tsl9HandsOnStatePure isaOnlyState = {};
+  portENTER_CRITICAL(&nagTsl9Mux);
+  if (handsOnRoute && method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
+  result = tsl9ApplyDasTransformForCanIdPure(
+      handsOnRoute ? nagTsl9State : isaOnlyState,
+      handsOnRoute && enabled && method == NAG_METHOD_TSL9_PURE,
+      sequence, downgradeWindow, isaRoute && isaSuppression, 0x399u,
+      out.data, out.data_length_code, nowMs);
+  if (result.handsOnModified) nagTsl9Modified++;
+  if (result.handsOnModified) nagTsl9HandsOnModified++;
+  portEXIT_CRITICAL(&nagTsl9Mux);
+  if (result.isaModified) {
+    portENTER_CRITICAL(&isaSuppressionControlMux);
+    isaSuppressionModified++;
+    portEXIT_CRITICAL(&isaSuppressionControlMux);
+  }
+  if (!result.modified) return false;
+
+  const uint32_t txEpoch = canTxEpochSnapshot();
+  // Independent ISA can modify every active-AP stock frame. Respect the
+  // shared Non-R79 admission ceiling without changing Nag-only TX policy.
+  const esp_err_t err = result.isaModified && !twaiNonSummonAdmissionOpen()
+      ? ESP_FAIL : canTxTwaiTransmitWithMaskTaggedGuarded(
+          &out, txEpoch, CAN_TX_FRESH_BOTH, CAN_TX_TRACE_SOURCE_DEFAULT,
+          &isaSuppressionGeneration, isaSuppressionGenerationSnapshot);
+  const bool ok = err == ESP_OK;
+  nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu),
+                  result.handsOnModified, result.isaModified);
+  return ok;
+}
+
 // ── Nag process frame from MCP2515 ──
 
 static void nagProcessMcpFrame(const struct can_frame& rxf) {
@@ -1723,6 +1940,8 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   const uint16_t id = rxf.can_id & 0x7FF;
   const uint8_t dlc = rxf.can_dlc;
   if (dlc < 1) return;
+
+  (void)nagProcessTsl9Mcp(rxf);
 
   const bool ylProfile = activeProfileIsYl();
   // Model Y L reads DAS/Summon status on CAN A / Party. Standard 3/Y
@@ -1739,8 +1958,9 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     }
   }
 
-  // Nag Killer requires CAN A to be Party. YL-specific Party parsing above remains model-gated.
-  if (!activeProfileNagSupported()) return;
+  // The steering-torque method requires CAN A to be Party. TSL9 on standard
+  // Body+Chassis is handled independently on Chassis CAN B above.
+  if (!activeProfileNagTorqueSupported()) return;
 
   uint16_t targetId, apStateId, steeringId;
   nagRxSelectorsSnapshot(targetId, apStateId, steeringId);
@@ -1756,9 +1976,15 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   if (ylProfile && id == apStateId) nagUpdateApState(rxf.data, dlc);
   if (id == steeringId) nagUpdateSteering(rxf.data, dlc);
 
+  uint8_t methodNow;
+  portENTER_CRITICAL(&nagCfgMux);
+  methodNow = nagMethodSanitizePure(nagCfg.method);
+  portEXIT_CRITICAL(&nagCfgMux);
+  if (methodNow != NAG_METHOD_TORQUE_PURE) return;
+
   if (id != targetId) return;
 
-  bool en;
+  bool en, ignoreApState;
   uint8_t modeNow;
   portENTER_CRITICAL(&nagCfgMux);
   // Revalidate the configurable target after taking the lock. A dashboard
@@ -1768,6 +1994,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     return;
   }
   en = nagCfg.enabled;
+  ignoreApState = nagCfg.ignoreApState;
   modeNow = nagCfg.mode;
   portEXIT_CRITICAL(&nagCfgMux);
 
@@ -1828,7 +2055,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   bool apValid, apActiveForNag;
   nagApGateSnapshot(apValid, apActiveForNag);
   const NagSkipReasonPure eligibility = nagEligibilityReasonPure(
-      en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag);
+      en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag, ignoreApState);
   if (eligibility != NAG_SKIP_NONE) {
     // A real gate closure cancels a Mode H event. A local self-echo is merely
     // ignored and must not tear down the live event session.
@@ -1922,8 +2149,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
       txf.data[3] = b3;
       if (modeNow == MODE_H && hoOverrideValid) {
         // Explicitly overwrite the complete 2-bit EPAS handsOnLevel field.
-        // Rev.3/Rev.4 may request HO=2; HO=3 is never generated because it can
-        // disengage Autosteer. Rev.1/Rev.2 still request only HO=1.
+        // Mode H may request HO=2; HO=3 is never generated.
         txf.data[4] = (uint8_t)((txf.data[4] & 0x3Fu) | ((hoLevel & 0x03u) << 6));
       } else if (setHo) {
         txf.data[4] = (uint8_t)(txf.data[4] | 0x40u);
@@ -1980,7 +2206,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
         const unsigned long now = millis();
         if (now - nagLastTxFailLog >= 2000) {
           nagLastTxFailLog = now;
-          Serial.printf("[NAG TX FAIL] MCP err=%d nag=%lu mcp=%lu\n",
+          T2CAN_SERIAL_PRINTF("[NAG TX FAIL] MCP err=%d nag=%lu mcp=%lu\n",
                         (int)err, (unsigned long)nagTxFail, (unsigned long)mcpTxFail);
         }
 #endif

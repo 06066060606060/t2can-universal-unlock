@@ -26,9 +26,3 @@ static inline bool ulcNoConfirmGateOpenWithTimingPure(bool profileAvailable,
   if (!dasStateValid) return false;
   return dasState4 == 3 || dasState4 == 4 || dasState4 == 5 || dasState4 == 6;
 }
-
-
-// UI_ulcStalkConfirm is byte[0] bit1 of 0x3F8 UI_driverAssistControl.
-static inline uint8_t ulcNoConfirmApplyByte0Pure(uint8_t byte0) {
-  return (uint8_t)(byte0 & (uint8_t)~0x02u);
-}

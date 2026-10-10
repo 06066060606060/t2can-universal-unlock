@@ -56,10 +56,6 @@ static inline bool formatCentiPure(int32_t centi, char *out, size_t outLen) {
   return formatFixedPure(centi, 2u, out, outLen);
 }
 
-static inline bool formatDeciPure(int32_t deci, char *out, size_t outLen) {
-  return formatFixedPure(deci, 1u, out, outLen);
-}
-
 // Parses a non-negative decimal and rounds to the nearest 0.01. This mirrors
 // the former strtod(value)*100 + 0.5 behavior for valid UI inputs without
 // pulling floating-point parsing into the firmware image.

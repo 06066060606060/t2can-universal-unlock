@@ -1,4 +1,7 @@
+#include "vision_speed_control_pure.h"
 #pragma once
+
+static bool r79DmsApplyFinal(uint8_t *data);
 
 // VEHICLE FEATURE LOGIC / R79 / SUMMON / ALC / VH RECORDER
 // Kept in the same translation unit to preserve proven runtime behavior.
@@ -8,11 +11,9 @@
 // v3.6 beta 2: R79 is default-on after a real stock 0x3FD mux1 template
 // is captured. Injection is suspended only for positively confirmed manual
 // Drive/Reverse. AP, Summon, Park, Neutral and unknown/stale state remain ON.
-// bit19 is fixed 0, bit47 fixed 1; bit18 remains an independent LAB option.
+// bit19 is fixed 0; bit47 is 1 unless Legacy V12/V13 HW3 selects STOCK.
+// bit18 remains an independent option.
 // ═══════════════════════════════════════════════════════════════
-static constexpr uint8_t R79LAB_APPLY_ECE_BIT = 19;
-static constexpr uint8_t R79LAB_SMART_SUMMON_CANDIDATE_BIT = 18;
-static constexpr uint8_t R79LAB_HARD_CORE_SUMMON_BIT = 47;
 static constexpr uint8_t R79LAB_ENABLE_CABIN_CAMERA_BIT =
     R79_DMS_ENABLE_CABIN_CAMERA_BIT_PURE;
 
@@ -26,15 +27,11 @@ enum R79RuntimeTxState : uint8_t {
   R79_TX_STATE_SUSPENDED = 1,
   R79_TX_STATE_WAIT_TEMPLATE = 2,
   R79_TX_STATE_CAN_OFFLINE = 3,
-  R79_TX_STATE_ADMIN_HOLD = 4
+  R79_TX_STATE_ADMIN_HOLD = 4,
+  R79_TX_STATE_AP_BLOCKED = 5,
+  R79_TX_STATE_AP_WAIT = 6,
+  R79_TX_STATE_AP_UNKNOWN = 7
 };
-
-static constexpr uint8_t R79LAB_BLOCK_NONE = 0;
-static constexpr uint8_t R79LAB_BLOCK_MANUAL = 1;
-static constexpr uint8_t R79LAB_BLOCK_TEMPLATE = 2;
-static constexpr uint8_t R79LAB_BLOCK_CAN_OFFLINE = 3;
-static constexpr uint8_t R79LAB_BLOCK_ADMIN_HOLD = 4;
-static constexpr uint8_t R79LAB_BLOCK_TX = 5;
 
 struct R79RuntimeStatus {
   uint8_t state;
@@ -46,40 +43,50 @@ struct R79RuntimeStatus {
   bool summonSessionActive;
   bool remoteStartupEvidence;
   bool manualLatchActive;
+  R79ApGateDecisionPure apGate;
 };
+
+// AP control is opt-in; configuration and session are protected by stateMux.
+static R79ApGateConfigPure r79ApGateConfig = {false, R79_AP_GATE_BLOCK_PURE, 2u};
+static R79ApGateSessionPure r79ApGateSession = {};
+static volatile uint32_t r79ApGateGeneration = 1u;
+static constexpr uint32_t R79_AP_DAS_FRESH_MS = 3000u;
 
 static portMUX_TYPE r79LabMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t r79Bit18Policy = R79_BIT18_DEFAULT_PURE;
-// v3.7.2 LAB-only DMS/NAG experiment. The user selection is persisted in
-// Preferences/NVS, while actual injection remains gated by the global LAB menu
-// and the active profile's Universal 0x3FD/R79 capability.
-static volatile bool r79DmsNagBit43Enabled = false;
-static volatile uint32_t r79LabLastAttemptMs = 0;
-static volatile uint32_t r79LabLastPeriodicRequestMs = 0;
-static volatile uint32_t r79LabLastPeriodicTxMs = 0;
+static volatile bool r79Hw3Enabled = false;
+static volatile bool visionControlRequestDisabledState = false;
+static volatile uint8_t visionControlBus = VISION_CONTROL_CHASSIS_PURE;
+static VisionControlStockPure visionControlStock[2] = {};
+static volatile uint32_t visionControlTxOk = 0u, visionControlTxFail = 0u;
+static volatile uint32_t visionControlGeneration = 1u;
+static bool visionControlApplyFinal(uint8_t *data, uint8_t bus);
+static void visionControlRecordTx(bool changed, uint8_t bus, bool ok);
+static void visionControlCacheStock(uint8_t bus, const uint8_t *raw, uint32_t epoch, uint32_t receivedMs);
+static volatile uint8_t r79TransportMode = R79_MODE_DEFAULT_PURE;
+static volatile uint8_t r79Mode1TxWaitMode = R79_MODE1_WAIT_DEFAULT_PURE;
+static volatile bool r79Mode1ReinjectEnabled = true;
+static volatile uint32_t r79Mode1PostMux2Generation = 1u;
+static volatile uint16_t r79Mode1DelayMs = R79_FIXED_QUIET_DELAY_MS_PURE;
+static volatile bool r79Mode2ReinjectEnabled = false;
+static volatile uint16_t r79Mode2DelayMs = R79_MODE2_DELAY_DEFAULT_MS_PURE;
+// Production DMS bit43 policy is owned by NagConfig. These counters are kept
+// separate from R79 so a best-effort DMS-only fallback cannot affect R79
+// deadlines, retry accounting, or last-success timestamps.
+static volatile uint32_t r79DmsOnlyTxOk = 0;
+static volatile uint32_t r79DmsOnlyTxFail = 0;
+static volatile uint32_t r79DmsOnlyBlockedByR79 = 0;
 static volatile uint32_t r79LabLastTxMs = 0;
-static volatile uint32_t r79LabNoTemplateSkip = 0;
-static volatile uint32_t r79LabManualSuspendSkip = 0;
-static volatile uint32_t r79LabCanOfflineSkip = 0;
-static volatile uint32_t r79LabAdminHoldSkip = 0;
-static volatile uint32_t r79LabBit47Changes = 0;
-static volatile uint32_t r79LabBit18Rx0 = 0;
-static volatile uint32_t r79LabBit18Rx1 = 0;
-static volatile uint32_t r79LabBit19Rx0 = 0;
-static volatile uint32_t r79LabBit19Rx1 = 0;
-static volatile uint32_t r79LabBit47Rx0 = 0;
-static volatile uint32_t r79LabBit47Rx1 = 0;
 static volatile uint32_t r79LabBit43Rx0 = 0;
 static volatile uint32_t r79LabBit43Rx1 = 0;
 static volatile uint32_t r79LabBit43Changes = 0;
-static volatile uint32_t r79LabImmediateTxOk = 0;
-static volatile uint32_t r79LabImmediateTxFail = 0;
 static volatile uint32_t r79LabPeriodicTxOk = 0;
 static volatile uint32_t r79LabPeriodicTxFail = 0;
 static volatile bool r79RetryPending = false;
 static volatile uint8_t r79RetryIndex = 0;
 static volatile uint8_t r79RetryOriginKind = R79LAB_TX_NONE;
 static volatile uint32_t r79RetryDueMs = 0;
+static volatile uint32_t r79RetryGeneration = 0u;
 static volatile uint32_t r79RetryScheduled = 0;
 static volatile uint32_t r79RetryTxOk = 0;
 static volatile uint32_t r79RetryTxFail = 0;
@@ -89,94 +96,44 @@ static volatile uint32_t r79EmergencyQueueFlushCount = 0;
 static volatile uint32_t r79FlushTriggeredRetryOk = 0;
 static volatile uint32_t r79FlushTriggeredRetryFail = 0;
 static R79FixedQuietStatePure r79FixedQuietState = {};
+static R79Mode2DelayedStatePure r79Mode2DelayedState = {};
 static volatile uint32_t r79QuietArmCount = 0;
-static volatile uint32_t r79QuietCancelCount = 0;
-static volatile uint32_t r79QuietDueCount = 0;
 static volatile uint32_t r79QuietFireCount = 0;
 static volatile uint32_t r79QuietGuardSkip = 0;
-static volatile uint32_t r79QuietDisallowedSkip = 0;
-static volatile uint32_t r79PeriodicRetryCancelledByStock = 0;
-static volatile uint32_t r79PeriodicSlotDue = 0;
-static volatile uint32_t r79PeriodicSlotFire = 0;
-static volatile uint32_t r79PeriodicSlotGuard = 0;
-static volatile uint8_t r79LabLastTxKind = R79LAB_TX_NONE;
 static volatile bool r79LabLastTxValid = false;
 static volatile bool r79LabStockValid = false;
-static volatile uint8_t r79LabStockApply = 0;
-static volatile uint8_t r79LabStockSmart = 0;
-static volatile uint8_t r79LabStockHardCore = 0;
 static volatile uint8_t r79LabStockCabinCamera = 0;
-static volatile uint8_t r79LabEffectiveApply = 0;
-static volatile uint8_t r79LabEffectiveSmart = 0;
-static volatile uint8_t r79LabEffectiveHardCore = 0;
 static volatile uint8_t r79LabEffectiveCabinCamera = 0;
-static volatile uint32_t r79LabLast3fdMs = 0;
 static volatile uint32_t r79Lab3fdRx = 0;
-static volatile uint32_t r79LabBit18Changes = 0;
-static volatile uint32_t r79LabBit19Changes = 0;
+static volatile uint32_t r79LabLastStockMs = 0;
 static volatile uint32_t r79LabTxOk = 0;
 static volatile uint32_t r79LabTxFail = 0;
-static volatile uint32_t r79LabAppliedFrames = 0;
-// v3.6d2 fast reactive echo telemetry. Latency is measured from the point the
-// CAN-B task dequeues the received 0x3FD mux1 frame from TWAI to the instant
-// the replacement TX request is submitted. It is intentionally not labeled as
-// physical wire RX->TX latency because the classic ESP32 TWAI API exposes no
-// hardware RX timestamp.
 static volatile uint32_t r79FastEchoAttempts = 0;
 static volatile uint32_t r79FastEchoTxOk = 0;
 static volatile uint32_t r79FastEchoTxFail = 0;
-static volatile uint32_t r79FastEchoBlocked = 0;
-static volatile uint32_t r79FastEchoLatencyLastUs = 0;
-static volatile uint32_t r79FastEchoLatencyMinUs = 0;
-static volatile uint32_t r79FastEchoLatencyMaxUs = 0;
-static uint64_t r79FastEchoLatencyTotalUs = 0;
-static volatile uint32_t r79FastEchoLatencySamples = 0;
-static volatile uint32_t r79FastEchoLt100Us = 0;
-static volatile uint32_t r79FastEchoLt250Us = 0;
-static volatile uint32_t r79FastEchoLt1000Us = 0;
-static volatile uint32_t r79FastEchoGe1000Us = 0;
-// d3 best-effort wire-completion telemetry. A sample is armed only when the
-// TWAI TX pipeline was observed idle immediately before the fast R79 enqueue.
-// It is then accepted only if no later CAN-B application enqueue occurred
-// before a TX_SUCCESS alert is observed. The timestamp is therefore a
-// software-observed upper bound, not a hardware wire timestamp.
-static volatile bool r79FastSuccessPending = false;
-static volatile uint32_t r79FastSuccessAcceptedSerial = 0;
-static int64_t r79FastSuccessRxDequeueUs = 0;
-static int64_t r79FastSuccessRequestUs = 0;
-static volatile uint32_t r79FastSuccessSamples = 0;
-static volatile uint32_t r79FastSuccessAmbiguous = 0;
-static volatile uint32_t r79FastSuccessLastRxUs = 0;
-static volatile uint32_t r79FastSuccessMinRxUs = 0;
-static volatile uint32_t r79FastSuccessMaxRxUs = 0;
-static uint64_t r79FastSuccessTotalRxUs = 0;
-static volatile uint32_t r79FastSuccessLastReqUs = 0;
-static volatile uint32_t r79FastSuccessMinReqUs = 0;
-static volatile uint32_t r79FastSuccessMaxReqUs = 0;
-static uint64_t r79FastSuccessTotalReqUs = 0;
-static volatile uint8_t r79LabLastBlockReason = R79LAB_BLOCK_NONE;
-static volatile uint32_t r79LabLastBlockMs = 0;
 static uint8_t r79LabLastStockRaw[8] = {0};
-static uint8_t r79LabLastEffectiveRaw[8] = {0};
-static volatile bool r79Lab7ffSeen = false;
-static volatile uint8_t r79Lab7ffBus = T2CAN_BUS_VH;
-static volatile uint8_t r79Lab7ffPage = 0xFF;
-static volatile uint32_t r79Lab7ffRx = 0;
-static volatile uint32_t r79Lab7ffLastMs = 0;
-static uint8_t r79Lab7ffRaw[8] = {0};
 
 static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now);
-static void r79LabRecordSuppressedState(const R79RuntimeStatus &status, uint32_t now);
-static bool r79LabApplySelectedBits(uint8_t *data);
 static void r79LabRecordTxResult(bool ok, const twai_message_t &out, uint8_t txKind);
-static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now, uint8_t txKind);
-static bool r79FixedFastEcho(const twai_message_t &src, int64_t rxDequeueUs);
+static bool r79LabTransmitShadow(const uint8_t *stock, uint8_t txKind,
+                                 uint32_t hardDeadlineMs,
+                                 uint32_t expectedGeneration);
+static bool r79FixedFastEcho(const twai_message_t &src);
 static void r79FixedObserveStock(uint8_t mux, uint32_t nowMs);
 static void r79FixedTick();
+static bool r79Mode2FastEcho(const twai_message_t &src);
+static void r79Mode2ObserveStock(uint8_t mux, uint32_t nowMs);
+static void r79Mode2Tick();
+static bool r79ProcessStockFrame(const twai_message_t &src, uint8_t mux,
+                                 uint32_t nowMs);
+static void r79TransportTick();
 static bool r79CopyLatestStock(uint8_t out[8]);
 static void r79LabRetryTick();
 static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
-                               uint8_t txKind, esp_err_t *errOut);
+                               uint8_t txKind, esp_err_t *errOut = nullptr,
+                               uint16_t waitMs = R79_FIXED_FAST_WAIT_MS_PURE,
+                               const volatile uint32_t *generation = nullptr,
+                               uint32_t expectedGeneration = 0u);
 
 // ═══════════════════════════════════════════════════════════════
 // SUMMON MONITOR / VH OVERLAYS (CAN B - TWAI)
@@ -195,16 +152,106 @@ static inline void setBit(uint8_t *data, int bit, bool val) {
     else     data[bit / 8] &= ~mask;
 }
 
-static bool r79DmsNagLabActive() {
+static bool r79Hw3Active() {
   bool enabled;
   portENTER_CRITICAL(&r79LabMux);
-  enabled = r79DmsNagBit43Enabled;
+  enabled = r79Hw3Enabled;
   portEXIT_CRITICAL(&r79LabMux);
-  return labMenuEnabled && activeProfileDmsNagSupported() && enabled;
+  return enabled && activeProfileR79Hw3Supported();
 }
 
-static inline void r79DmsNagLabApply(uint8_t *data) {
-  r79DmsNagLabApplyPure(data, r79DmsNagLabActive());
+
+// This helper is only used for physical CAN B clones. Body never overlays CAN B.
+// The display-only/DMS/ULC stock clones use the ordinary epoch/freshness and
+// non-Summon admission rules. They never apply the R79 bit18/19/47 transform.
+static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
+                                     uint32_t expectedEpoch,
+                                     uint8_t requiredFreshMask,
+                                     bool requireVisionChange,
+                                     uint32_t receivedMs = (uint32_t)millis(),
+                                     bool requireDms = false) {
+  if (!msg || msg->extd || msg->rtr || msg->identifier != 0x3FDu ||
+      msg->data_length_code != 8u || readMuxID(msg->data) != 1u) return ESP_ERR_INVALID_ARG;
+  const uint32_t displayGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
+    return ESP_ERR_INVALID_STATE;
+  twai_message_t out = *msg;
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (!canTxAdministrativeHold && twaiReady &&
+      vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology) &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask) &&
+      twaiNonSummonAdmissionOpen()) {
+    const bool displayGenerationValid = displayGeneration ==
+        __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
+    const bool stockFresh = (uint32_t)((uint32_t)millis() - receivedMs) <= VISION_CONTROL_FRESH_MS_PURE;
+    const bool visionChanged = stockFresh && visionControlApplyFinal(out.data, VISION_CONTROL_CHASSIS_PURE);
+    const bool dmsChanged = r79DmsApplyFinal(out.data);
+    if ((!requireDms || dmsChanged) && (!requireVisionChange || (displayGenerationValid && visionChanged))) {
+      err = twai_transmit(&out, 0);
+      canBTraceRecordTx(&out, err);
+
+      visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
+    }
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return err;
+}
+
+// canTxBarrierMutex is held by the caller.
+static void mux1CancelPendingLocked() {
+  portENTER_CRITICAL(&r79LabMux);
+  __atomic_add_fetch(&r79ApGateGeneration, 1u, __ATOMIC_ACQ_REL);
+  __atomic_add_fetch(&r79Mode1PostMux2Generation, 1u, __ATOMIC_ACQ_REL);
+  r79FixedQuietState = {};
+  r79Mode2DelayedState = {};
+  r79RetryPending = false;
+  r79RetryIndex = 0u;
+  r79RetryOriginKind = R79LAB_TX_NONE;
+  r79RetryDueMs = 0u;
+  r79RetryGeneration = 0u;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+
+static bool driverMonitoringControlSnapshot() {
+  portENTER_CRITICAL(&driverMonitoringControlMux);
+  const bool enabled = driverMonitoringDisableEnabled;
+  portEXIT_CRITICAL(&driverMonitoringControlMux);
+  return enabled;
+}
+
+static bool isaSuppressionControlSnapshot() {
+  portENTER_CRITICAL(&isaSuppressionControlMux);
+  const bool enabled = isaSuppressionEnabled;
+  portEXIT_CRITICAL(&isaSuppressionControlMux);
+  return enabled;
+}
+
+static void isaSuppressionControlSnapshot(bool &enabledOut,
+                                          uint32_t &generationOut) {
+  portENTER_CRITICAL(&isaSuppressionControlMux);
+  enabledOut = isaSuppressionEnabled;
+  generationOut = __atomic_load_n(
+      &isaSuppressionGeneration, __ATOMIC_ACQUIRE);
+  portEXIT_CRITICAL(&isaSuppressionControlMux);
+}
+
+static bool isaSuppressionControlActive() {
+  bool apValid, apActive;
+  nagApGateSnapshot(apValid, apActive);
+  return isaSuppressionControlSnapshot() && activeProfileIsaSuppressionSupported() &&
+      apValid && apActive;
+}
+
+static bool r79DmsControlActive() {
+  bool apValid, apActive;
+  nagApGateSnapshot(apValid, apActive);
+  return driverMonitoringDisablePolicyActivePure(
+      driverMonitoringControlSnapshot(), activeProfileDmsNagSupported(),
+      apValid, apActive);
+}
+
+static inline bool r79DmsApplyFinal(uint8_t *data) {
+  return r79DmsApplyFinalOverlayPure(data, r79DmsControlActive());
 }
 
 static const char* r79RuntimeStateName(uint8_t state) {
@@ -214,6 +261,9 @@ static const char* r79RuntimeStateName(uint8_t state) {
     case R79_TX_STATE_WAIT_TEMPLATE: return "WAIT TEMPLATE";
     case R79_TX_STATE_CAN_OFFLINE: return "CAN OFFLINE";
     case R79_TX_STATE_ADMIN_HOLD: return "ADMIN HOLD";
+    case R79_TX_STATE_AP_BLOCKED: return "AP BLOCKED";
+    case R79_TX_STATE_AP_WAIT: return "AP WAIT";
+    case R79_TX_STATE_AP_UNKNOWN: return "AP UNKNOWN";
     default: return "UNKNOWN";
   }
 }
@@ -228,42 +278,18 @@ static const char* r79GearName(uint8_t raw) {
   }
 }
 
-static const char* r79LabBlockReasonName(uint8_t reason) {
-  switch (reason) {
-    case R79LAB_BLOCK_MANUAL: return "MANUAL_DRIVING";
-    case R79LAB_BLOCK_TEMPLATE: return "NO_TEMPLATE";
-    case R79LAB_BLOCK_CAN_OFFLINE: return "CAN_OFFLINE";
-    case R79LAB_BLOCK_ADMIN_HOLD: return "ADMIN_HOLD";
-    case R79LAB_BLOCK_TX: return "TX_ERROR";
-    default: return "NONE";
-  }
-}
-
 static void r79LabObserve3fdMux1(const uint8_t *data, uint8_t dlc) {
   if (!data || dlc < 8) return;
   const uint32_t now = (uint32_t)millis();
-  const uint8_t smart = getBit(data, R79LAB_SMART_SUMMON_CANDIDATE_BIT) ? 1 : 0;
-  const uint8_t apply = getBit(data, R79LAB_APPLY_ECE_BIT) ? 1 : 0;
-  const uint8_t hard = getBit(data, R79LAB_HARD_CORE_SUMMON_BIT) ? 1 : 0;
   const uint8_t cabin = getBit(data, R79LAB_ENABLE_CABIN_CAMERA_BIT) ? 1 : 0;
   portENTER_CRITICAL(&r79LabMux);
-  if (r79LabStockValid) {
-    if (smart != r79LabStockSmart) { r79LabBit18Changes++; }
-    if (apply != r79LabStockApply) { r79LabBit19Changes++; }
-    if (hard != r79LabStockHardCore) { r79LabBit47Changes++; }
-    if (cabin != r79LabStockCabinCamera) { r79LabBit43Changes++; }
-  }
-  if (smart) r79LabBit18Rx1++; else r79LabBit18Rx0++;
-  if (apply) r79LabBit19Rx1++; else r79LabBit19Rx0++;
-  if (hard)  r79LabBit47Rx1++; else r79LabBit47Rx0++;
+  if (r79LabStockValid && cabin != r79LabStockCabinCamera)
+    r79LabBit43Changes++;
   if (cabin) r79LabBit43Rx1++; else r79LabBit43Rx0++;
   r79LabStockValid = true;
-  r79LabStockSmart = smart;
-  r79LabStockApply = apply;
-  r79LabStockHardCore = hard;
   r79LabStockCabinCamera = cabin;
-  r79LabLast3fdMs = now;
   r79Lab3fdRx++;
+  r79LabLastStockMs = now;
   memcpy(r79LabLastStockRaw, data, 8);
   // Do NOT overwrite LAST TX here. Stock RX and our last injected frame are
   // deliberately independent so the LAB UI cannot flicker STOCK -> STOCK
@@ -274,48 +300,16 @@ static void r79LabObserve3fdMux1(const uint8_t *data, uint8_t dlc) {
   // accepted stock template and production counters afterward.
 }
 
-static bool r79LabApplySelectedBits(uint8_t *data) {
-  if (!data) return false;
-  uint8_t bit18Policy;
-  portENTER_CRITICAL(&r79LabMux);
-  bit18Policy = r79Bit18Policy;
-  portEXIT_CRITICAL(&r79LabMux);
-  r79FixedApplyBitsPure(data, bit18Policy);
-  r79DmsNagLabApply(data);
-  return true;
-}
-
 static void r79LabRecordTxResult(bool ok, const twai_message_t &out, uint8_t txKind) {
   portENTER_CRITICAL(&r79LabMux);
   if (ok) r79LabTxOk++; else r79LabTxFail++;
-  if (txKind == R79LAB_TX_IMMEDIATE) {
-    if (ok) r79LabImmediateTxOk++; else r79LabImmediateTxFail++;
-  } else if (txKind == R79LAB_TX_PERIODIC) {
+  if (txKind == R79LAB_TX_PERIODIC) {
     if (ok) r79LabPeriodicTxOk++; else r79LabPeriodicTxFail++;
   }
   if (ok && out.data_length_code >= 8) {
     r79LabLastTxValid = true;
-    r79LabLastTxKind = txKind;
-    r79LabEffectiveSmart = getBit(out.data, R79LAB_SMART_SUMMON_CANDIDATE_BIT) ? 1 : 0;
-    r79LabEffectiveApply = getBit(out.data, R79LAB_APPLY_ECE_BIT) ? 1 : 0;
-    r79LabEffectiveHardCore = getBit(out.data, R79LAB_HARD_CORE_SUMMON_BIT) ? 1 : 0;
     r79LabEffectiveCabinCamera = getBit(out.data, R79LAB_ENABLE_CABIN_CAMERA_BIT) ? 1 : 0;
-    memcpy(r79LabLastEffectiveRaw, out.data, 8);
   }
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
-static void r79LabObserve7ff(uint8_t bus, uint8_t dlc, const uint8_t *data) {
-  if (!data || dlc < 1) return;
-  const uint8_t n = dlc > 8 ? 8 : dlc;
-  portENTER_CRITICAL(&r79LabMux);
-  r79Lab7ffSeen = true;
-  r79Lab7ffBus = bus;
-  r79Lab7ffPage = data[0];
-  r79Lab7ffRx++;
-  r79Lab7ffLastMs = (uint32_t)millis();
-  memset(r79Lab7ffRaw, 0, sizeof(r79Lab7ffRaw));
-  memcpy(r79Lab7ffRaw, data, n);
   portEXIT_CRITICAL(&r79LabMux);
 }
 static inline uint8_t readVehicleGear(const uint8_t *data) {
@@ -356,35 +350,34 @@ static volatile bool gateNOAActive = false;   // raw DAS_autopilotState == ACTIV
 static volatile uint8_t dasAutopilotState4 = 0xFF; // low nibble of Party-CAN 0x399 byte0
 static volatile bool dasAutopilotStateValid = false; // latched until CAN A recovery / next valid 0x399
 static volatile uint32_t lastDASStatusMillis = 0;  // diagnostic age only; not a functional AP timeout
+// Presentation-only cache. Hard CAN reinitialization may retain the last
+// confirmed AP label briefly while every functional AP gate remains invalid.
+static ApDisplayHoldPure apDisplayHold = {};
 
-// AP right-scroll pulse on CAN B 0x3C2 mux1. Model YL uses VH; Standard
-// profiles use Chassis. Configuration is NVS-backed; scheduler state is not.
-static portMUX_TYPE apRightScrollMux = portMUX_INITIALIZER_UNLOCKED;
-static volatile bool apRightScrollEnabled = false;
-static volatile uint16_t apRightScrollIntervalSeconds = AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE;
-static volatile uint8_t apRightScrollVisualRepeatSeconds = AP_RIGHT_SCROLL_DEFAULT_WARNING_REPEAT_S_PURE;
-static ApRightScrollStatePure apRightScrollState = {};
-static volatile uint32_t apRightScrollMux1Rx = 0;
-static volatile uint32_t apRightScrollPhysicalDeferrals = 0;
-static volatile uint32_t apRightScrollTxUpOk = 0;
-static volatile uint32_t apRightScrollTxDownOk = 0;
-static volatile uint32_t apRightScrollTxFail = 0;
-static volatile uint32_t apRightScrollLastTxMs = 0;
-static volatile uint8_t apRightScrollLastTxValue = 0;
+// NAG right-speed assistance. Torque mode restores the former independently
+// configurable periodic pulse and can use either the four-step V8.2 waveform
+// or the compact +1/-1 pair. TSL9 periodic injection is opt-in and only valid
+// while Right Speed is selected. The timer-owned TSL9 input scheduler is the
+// sole producer for both methods so warning, periodic, cleanup, and retries
+// cannot overlap.
+static constexpr uint8_t NAG_RIGHT_SCROLL_PATTERN_FOUR_STEP = 0u;
+static constexpr uint8_t NAG_RIGHT_SCROLL_PATTERN_PAIR = 1u;
+static constexpr uint8_t NAG_RIGHT_SCROLL_PATTERN_DEFAULT =
+    NAG_RIGHT_SCROLL_PATTERN_PAIR;
+static portMUX_TYPE nagRightScrollMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool nagTorqueRightScrollEnabled = false;
+static volatile uint16_t nagTorqueRightScrollIntervalSeconds =
+    AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE;
+static volatile uint8_t nagTorqueRightScrollPattern =
+    NAG_RIGHT_SCROLL_PATTERN_DEFAULT;
+static volatile bool nagTsl9RightPeriodicEnabled = false;
+static volatile uint16_t nagTsl9RightPeriodicIntervalSeconds =
+    AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE;
 
-static void apRightScrollRuntimeReset(bool resetCounters) {
-  portENTER_CRITICAL(&apRightScrollMux);
-  apRightScrollState = {};
-  if (resetCounters) {
-    apRightScrollMux1Rx = 0;
-    apRightScrollPhysicalDeferrals = 0;
-    apRightScrollTxUpOk = 0;
-    apRightScrollTxDownOk = 0;
-    apRightScrollTxFail = 0;
-    apRightScrollLastTxMs = 0;
-    apRightScrollLastTxValue = 0;
-  }
-  portEXIT_CRITICAL(&apRightScrollMux);
+static inline uint8_t nagRightScrollPatternSanitize(uint8_t pattern) {
+  return pattern == NAG_RIGHT_SCROLL_PATTERN_FOUR_STEP
+      ? NAG_RIGHT_SCROLL_PATTERN_FOUR_STEP
+      : NAG_RIGHT_SCROLL_PATTERN_PAIR;
 }
 
 // AP/NOA is a latched state, not a periodic command. Keep the last valid Party
@@ -473,6 +466,227 @@ static volatile uint32_t sumRx1016   = 0;
 #define VCLEFT_SWITCH_SNA  0
 #define VCLEFT_SWITCH_OFF  1
 #define VCLEFT_SWITCH_ON   2
+
+static portMUX_TYPE driverWindowLabMux = portMUX_INITIALIZER_UNLOCKED;
+static DriverWindowLabStatePure driverWindowLabState = {};
+static volatile uint32_t driverWindowLabCancelGeneration = 1u;
+static volatile bool driverWindowLabStockValid = false;
+static volatile uint32_t driverWindowLabStockMs = 0;
+static uint8_t driverWindowLabStockRaw[8] = {};
+static volatile bool driverWindowLabLastTxValid = false;
+static volatile uint32_t driverWindowLabLastTxMs = 0;
+static uint8_t driverWindowLabLastTxRaw[8] = {};
+static volatile uint32_t driverWindowLabRequests = 0;
+static volatile uint32_t driverWindowLabCompleted = 0;
+static volatile uint32_t driverWindowLabTxOk = 0;
+static volatile uint32_t driverWindowLabTxFail = 0;
+static volatile uint32_t driverWindowLabBlocked = 0;
+static volatile uint8_t driverWindowLabLastArmResult = DRIVER_WINDOW_ARM_STOCK_MISSING;
+static volatile uint8_t driverWindowLabLastConsumeReason = DRIVER_WINDOW_CONSUME_NONE;
+enum DriverWindowLastResultRuntime : uint8_t {
+  DRIVER_WINDOW_RESULT_IDLE = 0,
+  DRIVER_WINDOW_RESULT_ARMED,
+  DRIVER_WINDOW_RESULT_COMPLETED,
+  DRIVER_WINDOW_RESULT_CANCELED,
+  DRIVER_WINDOW_RESULT_BLOCKED,
+  DRIVER_WINDOW_RESULT_REJECTED,
+};
+static volatile uint8_t driverWindowLabLastResult = DRIVER_WINDOW_RESULT_IDLE;
+
+static const char *driverWindowLabArmResultName(uint8_t result) {
+  switch (result) {
+    case DRIVER_WINDOW_ARM_OK: return "ARMED";
+    case DRIVER_WINDOW_ARM_LAB_DISABLED: return "LAB_DISABLED";
+    case DRIVER_WINDOW_ARM_UNSUPPORTED_PROFILE: return "UNSUPPORTED_PROFILE";
+    case DRIVER_WINDOW_ARM_GEAR_STALE: return "GEAR_STALE";
+    case DRIVER_WINDOW_ARM_NOT_PARKED: return "NOT_PARKED";
+    case DRIVER_WINDOW_ARM_STOCK_MISSING: return "STOCK_MISSING";
+    case DRIVER_WINDOW_ARM_STOCK_STALE: return "STOCK_STALE";
+    case DRIVER_WINDOW_ARM_PHYSICAL_INPUT: return "PHYSICAL_INPUT";
+    case DRIVER_WINDOW_ARM_CAN_UNAVAILABLE: return "CAN_UNAVAILABLE";
+    case DRIVER_WINDOW_ARM_BUSY: return "BUSY";
+    default: return "UNKNOWN";
+  }
+}
+
+static const char *driverWindowLabConsumeReasonName(uint8_t reason) {
+  switch (reason) {
+    case DRIVER_WINDOW_CONSUME_NONE: return "NONE";
+    case DRIVER_WINDOW_CONSUME_PHYSICAL_INPUT: return "PHYSICAL_INPUT";
+    case DRIVER_WINDOW_CONSUME_EPOCH_CHANGED: return "EPOCH_CHANGED";
+    case DRIVER_WINDOW_CONSUME_TIMEOUT: return "TIMEOUT";
+    case DRIVER_WINDOW_CONSUME_LAB_DISABLED: return "LAB_DISABLED";
+    case DRIVER_WINDOW_CONSUME_UNSUPPORTED_PROFILE: return "UNSUPPORTED_PROFILE";
+    case DRIVER_WINDOW_CONSUME_GEAR_STALE: return "GEAR_STALE";
+    case DRIVER_WINDOW_CONSUME_NOT_PARKED: return "NOT_PARKED";
+    case DRIVER_WINDOW_CONSUME_STOCK_STALE: return "STOCK_STALE";
+    case DRIVER_WINDOW_CONSUME_CAN_UNAVAILABLE: return "CAN_UNAVAILABLE";
+    case DRIVER_WINDOW_CONSUME_TX_FAILED: return "TX_FAILED";
+    default: return "UNKNOWN";
+  }
+}
+
+static bool driverWindowLabProfileSupported() {
+  return driverWindowLabProfileSupportedPure(
+      activeVehicleProfile, activeVehicleTopology);
+}
+
+static DriverWindowArmContextPure driverWindowLabArmContextSnapshot(
+    uint32_t now, bool &pendingOut, uint32_t &epochOut) {
+  DriverWindowArmContextPure context = {};
+  context.labEnabled = labMenuEnabled;
+  context.modelYlPartyVh = driverWindowLabProfileSupported();
+
+  uint8_t gearRaw = TESLA_GEAR_INVALID;
+  portENTER_CRITICAL(&stateMux);
+  context.gearFresh = r79FreshGearRawLocked(now, gearRaw);
+  context.parked = context.gearFresh && gearRaw == TESLA_GEAR_P;
+  portEXIT_CRITICAL(&stateMux);
+
+  portENTER_CRITICAL(&driverWindowLabMux);
+  context.stockValid = driverWindowLabStockValid;
+  context.stockAgeMs = context.stockValid
+      ? (uint32_t)(now - driverWindowLabStockMs) : UINT32_MAX;
+  context.stockInputIdle = context.stockValid &&
+      driverWindowPhysicalInputIdlePure(driverWindowLabStockRaw);
+  pendingOut = driverWindowLabState.pending;
+  portEXIT_CRITICAL(&driverWindowLabMux);
+
+  epochOut = canTxEpochSnapshot();
+  context.canTxAllowed = !canTxAdministrativeHold && twaiReady && epochOut != 0u;
+  context.guardGeneration = canTxCancellationGenerationSnapshot(
+      &driverWindowLabCancelGeneration);
+  return context;
+}
+
+static DriverWindowArmResultPure driverWindowLabAvailability(uint32_t now) {
+  bool pending = false;
+  uint32_t epoch = 0;
+  const DriverWindowArmContextPure context =
+      driverWindowLabArmContextSnapshot(now, pending, epoch);
+  DriverWindowLabStatePure probe = {};
+  probe.pending = pending;
+  return driverWindowLabArmPure(probe, now, epoch, context);
+}
+
+static DriverWindowArmResultPure driverWindowLabRequestOpen() {
+  const uint32_t now = (uint32_t)millis();
+  bool pending = false;
+  uint32_t epoch = 0;
+  const DriverWindowArmContextPure context =
+      driverWindowLabArmContextSnapshot(now, pending, epoch);
+  portENTER_CRITICAL(&driverWindowLabMux);
+  const DriverWindowArmResultPure result =
+      driverWindowLabArmPure(driverWindowLabState, now, epoch, context);
+  driverWindowLabLastArmResult = result;
+  driverWindowLabLastConsumeReason = DRIVER_WINDOW_CONSUME_NONE;
+  if (result == DRIVER_WINDOW_ARM_OK) {
+    driverWindowLabRequests++;
+    driverWindowLabLastResult = DRIVER_WINDOW_RESULT_ARMED;
+  } else {
+    driverWindowLabBlocked++;
+    driverWindowLabLastResult = DRIVER_WINDOW_RESULT_REJECTED;
+  }
+  portEXIT_CRITICAL(&driverWindowLabMux);
+  return result;
+}
+
+static void driverWindowLabResetRuntime() {
+  canTxCancellationGenerationAdvance(&driverWindowLabCancelGeneration);
+  portENTER_CRITICAL(&driverWindowLabMux);
+  if (driverWindowLabState.pending)
+    driverWindowLabLastResult = DRIVER_WINDOW_RESULT_CANCELED;
+  driverWindowLabResetPure(driverWindowLabState);
+  driverWindowLabStockValid = false;
+  driverWindowLabStockMs = 0;
+  memset(driverWindowLabStockRaw, 0, sizeof(driverWindowLabStockRaw));
+  portEXIT_CRITICAL(&driverWindowLabMux);
+}
+
+static void driverWindowLabResetRuntimeUnderTxBarrier() {
+  __atomic_add_fetch(&driverWindowLabCancelGeneration, 1u, __ATOMIC_ACQ_REL);
+  portENTER_CRITICAL(&driverWindowLabMux);
+  if (driverWindowLabState.pending)
+    driverWindowLabLastResult = DRIVER_WINDOW_RESULT_CANCELED;
+  driverWindowLabResetPure(driverWindowLabState);
+  driverWindowLabStockValid = false;
+  driverWindowLabStockMs = 0;
+  memset(driverWindowLabStockRaw, 0, sizeof(driverWindowLabStockRaw));
+  portEXIT_CRITICAL(&driverWindowLabMux);
+}
+
+static void driverWindowLabServiceTick() {
+  const uint32_t now = (uint32_t)millis();
+  bool pending = false;
+  uint32_t epoch = 0;
+  const DriverWindowArmContextPure context =
+      driverWindowLabArmContextSnapshot(now, pending, epoch);
+  if (!pending) return;
+  portENTER_CRITICAL(&driverWindowLabMux);
+  const DriverWindowConsumeResultPure decision =
+      driverWindowLabConsumeStockPure(
+          driverWindowLabState, now, epoch, context, nullptr, 0u);
+  if (decision.blocked) {
+    driverWindowLabBlocked++;
+    driverWindowLabLastConsumeReason = decision.reason;
+    driverWindowLabLastResult = DRIVER_WINDOW_RESULT_BLOCKED;
+  }
+  portEXIT_CRITICAL(&driverWindowLabMux);
+}
+
+static void handleDriverWindowLab3C2CanB(const twai_message_t &incoming) {
+  if (incoming.data_length_code < 8 || !driverWindowMux0Pure(incoming.data)) return;
+  const uint32_t now = (uint32_t)millis();
+  bool pending = false;
+  uint32_t txEpoch = 0;
+  const DriverWindowArmContextPure context =
+      driverWindowLabArmContextSnapshot(now, pending, txEpoch);
+  DriverWindowConsumeResultPure decision = {};
+
+  portENTER_CRITICAL(&driverWindowLabMux);
+  decision = driverWindowLabConsumeStockPure(
+      driverWindowLabState, now, txEpoch, context, incoming.data,
+      incoming.data_length_code);
+  driverWindowLabStockValid = true;
+  driverWindowLabStockMs = now;
+  memcpy(driverWindowLabStockRaw, incoming.data, 8);
+  if (decision.blocked) {
+    driverWindowLabBlocked++;
+    driverWindowLabLastConsumeReason = decision.reason;
+    driverWindowLabLastResult = DRIVER_WINDOW_RESULT_BLOCKED;
+  }
+  portEXIT_CRITICAL(&driverWindowLabMux);
+  if (!decision.transmit) return;
+
+  twai_message_t out = incoming;
+  memcpy(out.data, decision.data, 8);
+  const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
+      &out, txEpoch, CAN_TX_FRESH_VH,
+      CAN_TX_TRACE_SOURCE_DRIVER_WINDOW_LAB,
+      &driverWindowLabCancelGeneration, decision.guardGeneration);
+
+  portENTER_CRITICAL(&driverWindowLabMux);
+  driverWindowLabLastTxValid = true;
+  driverWindowLabLastTxMs = now;
+  memcpy(driverWindowLabLastTxRaw, decision.data, 8);
+  if (err == ESP_OK) {
+    driverWindowLabTxOk++;
+    driverWindowLabLastConsumeReason = DRIVER_WINDOW_CONSUME_NONE;
+    if (decision.completed) {
+      driverWindowLabCompleted++;
+      driverWindowLabLastResult = DRIVER_WINDOW_RESULT_COMPLETED;
+    } else {
+      driverWindowLabLastResult = DRIVER_WINDOW_RESULT_ARMED;
+    }
+  } else {
+    driverWindowLabTxFail++;
+    driverWindowLabBlocked++;
+    driverWindowLabLastConsumeReason = DRIVER_WINDOW_CONSUME_TX_FAILED;
+    driverWindowLabLastResult = DRIVER_WINDOW_RESULT_BLOCKED;
+    driverWindowLabResetPure(driverWindowLabState);
+  }
+  portEXIT_CRITICAL(&driverWindowLabMux);
+}
 
 #define STALK_IDLE    0
 #define STALK_UP_1    2
@@ -798,7 +1012,6 @@ static void handleS3xySingleAction() {
 static portMUX_TYPE lab3f8Mux = portMUX_INITIALIZER_UNLOCKED;
 static constexpr uint8_t LAB3F8_STOCK = 0xFF;
 static constexpr uint8_t LAB3F8_ALC_STOCK = 0;
-static constexpr uint8_t LAB3F8_ALC_FORCE_OFF = 1;
 static constexpr uint8_t LAB3F8_ALC_FORCE_ON = 2;
 
 static volatile uint8_t uiUlcBlindSpotConfig = 0;       // stock bits 52-53
@@ -813,14 +1026,6 @@ static volatile uint8_t lab3f8UlcOffHighwayMode = LAB3F8_STOCK;
 static volatile uint32_t lab3f8TxOk = 0;
 static volatile uint32_t lab3f8TxFail = 0;
 static volatile uint32_t lab3f8GateBlocked = 0;
-static volatile bool lab3f8LastTxValid = false;
-static volatile uint8_t lab3f8LastTxBlind = 0;
-static volatile uint8_t lab3f8LastTxStockBlind = 0;
-static volatile uint8_t lab3f8LastTxSelectedBlind = LAB3F8_STOCK;
-static volatile bool lab3f8LastTxBlindChanged = false;
-static volatile uint8_t lab3f8LastTxResult = 0; // 0=NONE, 1=QUEUED, 2=FAILED
-static volatile uint32_t lab3f8LastTxMs = 0;
-static volatile bool lab3f8LastTxBit56 = false;
 
 // AP-active 0x3F8 ULC policy counters/state.
 static volatile uint32_t ulcOffHighwayTxOk = 0;
@@ -849,9 +1054,24 @@ static volatile uint32_t ulcNoConfirmLastTxMs = 0;
 static volatile bool lab3f8CanBValid = false;
 static volatile uint32_t lab3f8CanBRx = 0;
 static volatile uint32_t lab3f8CanBLastMs = 0;
+static volatile uint32_t lab3f8CanBEpoch = 0;
 static volatile uint32_t lab3f8CanBPeriodMs = 0;
 static volatile uint8_t lab3f8CanBDlc = 0;
 static uint8_t lab3f8CanBData[8] = {};
+static volatile uint32_t lab3f8Generation = 1u;
+
+// LAB-only session override for 0x3F8 UI_summonHeartbeat (bits 2-3).
+// Deliberately RAM-only: every boot and CAN full-recovery starts disabled.
+static volatile bool summonHeartbeatOverrideEnabled = false;
+static volatile uint8_t summonHeartbeatOverrideValue = 2u;
+static volatile bool summonHeartbeatLastAppliedValid = false;
+static volatile uint8_t summonHeartbeatLastAppliedValue = 0xFFu;
+static volatile uint32_t summonHeartbeatLastAppliedMs = 0u;
+static volatile uint32_t summonHeartbeatAppliedCount = 0u;
+static volatile uint32_t summonHeartbeatTxFail = 0u;
+static volatile uint32_t summonHeartbeatBlocked = 0u;
+// Set by the CAN-B task immediately after receive, before normal decoding.
+static uint32_t lab3f8FrameRxMs = 0u, lab3f8FrameRxEpoch = 0u;
 
 // 0x293 UI_chassisControl research. Observe both physical CAN buses because
 // Tesla routes/mirrors this frame differently across YL and Standard 3/Y.
@@ -879,6 +1099,149 @@ static volatile bool uiAutoLaneChangeLastTxValid = false;
 static volatile uint8_t uiAutoLaneChangeLastTxBus = 0; // 1=A, 2=B
 static volatile uint8_t uiAutoLaneChangeLastTxRaw = 0xFF;
 static volatile uint32_t uiAutoLaneChangeLastTxMs = 0;
+
+// Country/region settings overlay. STOCK is fail-closed. Active presets
+// follow fresh 0x238/0x7FF stock frames back onto their source bus only while
+// the production R79 runtime is ACTIVE; manual-driving suspension therefore
+// stops this overlay without needing a separate driving-state policy.
+static portMUX_TYPE countryOverrideMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint8_t countryOverrideMode = COUNTRY_OVERRIDE_STOCK_PURE;
+static volatile uint8_t countryOverrideMapMode = MAP_REGION_STOCK_PURE;
+static volatile uint32_t countryOverrideRx238 = 0;
+static volatile uint32_t countryOverrideRx7ffA = 0;
+static volatile uint32_t countryOverrideRx7ffB = 0;
+static volatile uint32_t countryOverrideBlocked = 0;
+static volatile uint32_t countryOverrideTxOk = 0;
+static volatile uint32_t countryOverrideTxFail = 0;
+static volatile uint32_t countryOverrideCancelGeneration = 1;
+static volatile bool countryOverrideR79AuthorizationOpen = false;
+static volatile bool countryOverrideLastValid = false;
+static volatile uint8_t countryOverrideLastResult = 0; // 0=NONE, 1=QUEUED, 2=FAILED
+static volatile uint8_t countryOverrideLastBus = 0; // 1=CAN A, 2=CAN B
+static volatile uint8_t countryOverrideLastPage = 0xFF; // 0xFF = 0x238
+static volatile uint16_t countryOverrideLastId = 0;
+static volatile uint32_t countryOverrideLastMs = 0;
+static uint8_t countryOverrideLastRaw[8] = {};
+
+static bool countryOverrideSetModeWithBarrier(uint8_t mode, uint8_t mapMode = 0xFFu) {
+  if (!countryOverrideModeValidPure(mode) ||
+      (mapMode != 0xFFu && !mapRegionModeValidPure(mapMode)) || !canTxBarrierMutex) return false;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  portENTER_CRITICAL(&countryOverrideMux);
+  countryOverrideMode = mode;
+  if (mapMode != 0xFFu) countryOverrideMapMode = mapMode;
+  portEXIT_CRITICAL(&countryOverrideMux);
+  __atomic_add_fetch(&countryOverrideCancelGeneration, 1u, __ATOMIC_ACQ_REL);
+  xSemaphoreGive(canTxBarrierMutex);
+  return true;
+}
+
+// One NVS scalar commits both selectors. A failed write never publishes either.
+static bool countryOverrideApplySelection(uint8_t country, uint8_t map) {
+  if (!countryOverrideModeValidPure(country) || !mapRegionModeValidPure(map) ||
+      !canTxBarrierMutex) return false;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  Preferences p;
+  if (!p.begin("countrylab", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  const uint16_t packed = (uint16_t)country | ((uint16_t)map << 8);
+  const bool saved = p.putUShort("selection", packed) == sizeof(uint16_t);
+  p.end();
+  if (saved) {
+    portENTER_CRITICAL(&countryOverrideMux);
+    countryOverrideMode = country;
+    countryOverrideMapMode = map;
+    portEXIT_CRITICAL(&countryOverrideMux);
+    __atomic_add_fetch(&countryOverrideCancelGeneration, 1u, __ATOMIC_ACQ_REL);
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return saved;
+}
+
+static bool countryOverrideSetLabEnabledWithBarrier(bool enabled, bool persist) {
+  if (!canTxBarrierMutex) return false;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (persist && !featureCfgPersistLab(enabled)) {
+    xSemaphoreGive(canTxBarrierMutex);
+    return false;
+  }
+  const bool changed = labMenuEnabled != enabled;
+  labMenuEnabled = enabled;
+  bool heartbeatChanged = false;
+  if (!enabled) {
+    portENTER_CRITICAL(&lab3f8Mux);
+    heartbeatChanged = summonHeartbeatOverrideEnabled;
+    summonHeartbeatOverrideEnabled = false;
+    portEXIT_CRITICAL(&lab3f8Mux);
+  }
+  if (changed) mux1CancelPendingLocked();
+  if (changed || heartbeatChanged)
+    __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
+  // Country settings are independent of LAB menu visibility.
+  xSemaphoreGive(canTxBarrierMutex);
+  return true;
+}
+
+static bool summonHeartbeatOverrideSupported() {
+  return vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology);
+}
+
+static bool summonHeartbeatOverrideApply(bool enabled, uint8_t value) {
+  if (value > 3u || !canTxBarrierMutex) return false;
+  if (enabled && (!labMenuEnabled || !summonHeartbeatOverrideSupported()))
+    return false;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (enabled && (!labMenuEnabled || !summonHeartbeatOverrideSupported())) {
+    xSemaphoreGive(canTxBarrierMutex);
+    return false;
+  }
+  portENTER_CRITICAL(&lab3f8Mux);
+  summonHeartbeatOverrideValue = value;
+  summonHeartbeatOverrideEnabled = enabled;
+  portEXIT_CRITICAL(&lab3f8Mux);
+  __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
+  xSemaphoreGive(canTxBarrierMutex);
+  return true;
+}
+
+// Called only while canTxBarrierMutex is already held.
+static void summonHeartbeatOverrideResetUnderTxBarrier() {
+  portENTER_CRITICAL(&lab3f8Mux);
+  const bool changed = summonHeartbeatOverrideEnabled;
+  summonHeartbeatOverrideEnabled = false;
+  summonHeartbeatLastAppliedValid = false;
+  summonHeartbeatLastAppliedValue = 0xFFu;
+  summonHeartbeatLastAppliedMs = 0u;
+  portEXIT_CRITICAL(&lab3f8Mux);
+  if (changed) __atomic_add_fetch(&lab3f8Generation, 1u, __ATOMIC_ACQ_REL);
+}
+
+// Every path that can change R79 authorization takes the TX barrier before
+// stateMux. Taking it even while the country overlay is STOCK closes the race
+// where an override could be enabled between an "armed" snapshot and the state
+// update. The uncontended take is intentionally preferred over a conditional
+// optimization on these safety-relevant transitions.
+static bool countryOverrideAuthorizationBarrierLock() {
+  return canTxBarrierMutex &&
+         xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE;
+}
+
+static void countryOverrideAuthorizationBarrierUnlock(bool locked) {
+  if (locked) xSemaphoreGive(canTxBarrierMutex);
+}
+
+// stateMux and, during normal runtime, the TX barrier must already be held.
+// At early startup a missing barrier is harmless because no guarded country
+// transmission can be admitted without that same mutex.
+static void countryOverrideUpdateR79AuthorizationLocked(
+    bool open, bool txBarrierAlreadyHeld) {
+  const bool previous = __atomic_load_n(
+      &countryOverrideR79AuthorizationOpen, __ATOMIC_ACQUIRE);
+  if (previous == open) return;
+
+  (void)txBarrierAlreadyHeld;
+  __atomic_store_n(&countryOverrideR79AuthorizationOpen, open, __ATOMIC_RELEASE);
+  __atomic_add_fetch(&countryOverrideCancelGeneration, 1u, __ATOMIC_ACQ_REL);
+}
 
 
 static const char *pedalMapName(uint8_t v) {
@@ -981,6 +1344,7 @@ static bool r79FreshGearRawLocked(uint32_t now, uint8_t &rawOut) {
          rawOut == TESLA_GEAR_N || rawOut == TESLA_GEAR_D;
 }
 
+// Reuse an owned TX barrier; otherwise acquire it before cancellation. No CAN I/O.
 // Fresh one-sided ACA/SPR evidence is used only to avoid entering manual
 // suppression during the first moments of a remote Summon startup. It is not a
 // confirmed Summon session and therefore never labels the dashboard SUMMON.
@@ -1018,25 +1382,74 @@ static const char* summonPriorityStateName(uint8_t state) {
   }
 }
 
-static void updateR79ManualSuppressionLocked(uint32_t now) {
+// stateMux is held. A missing/stale DAS observation never opens the opt-in gate.
+static bool r79ApDasFreshLocked(uint32_t now) {
+  return dasAutopilotStateValid &&
+      (dasStateApActivePure(true, dasAutopilotState4) ||
+       dasStateManualPure(true, dasAutopilotState4)) &&
+      (uint32_t)(now - lastDASStatusMillis) <= R79_AP_DAS_FRESH_MS;
+}
+
+static R79ApGateDecisionPure r79ApGateDecisionLocked(uint32_t now) {
+  return r79ApGateDecisionPure(
+      r79ApGateConfig, r79ApGateSession, now, r79ApDasFreshLocked(now),
+      dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4));
+}
+
+static void r79ApGateObserveLocked(uint32_t now) {
+  const bool wasActive = r79ApGateSession.active;
+  const bool wasReleased = r79ApGateSession.released;
+  r79ApGateObservePure(r79ApGateSession, r79ApGateConfig, now,
+      r79ApDasFreshLocked(now),
+      dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4));
+  if (r79ApGateConfig.enabled &&
+      (wasActive != r79ApGateSession.active ||
+       (wasReleased && !r79ApGateSession.released)))
+    __atomic_add_fetch(&r79ApGateGeneration, 1u, __ATOMIC_ACQ_REL);
+}
+
+static uint32_t r79ApGateGenerationSnapshot() {
+  return __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
+}
+
+static const char *r79ApGateReasonName(uint8_t reason) {
+  switch (reason) {
+    case R79_AP_GATE_BYPASS_PURE: return "BYPASS";
+    case R79_AP_GATE_NON_AP_PURE: return "NON_AP";
+    case R79_AP_GATE_BLOCKED_PURE: return "AP_BLOCKED";
+    case R79_AP_GATE_WAITING_PURE: return "AP_WAIT";
+    case R79_AP_GATE_READY_PURE: return "AP_READY";
+    default: return "AP_UNKNOWN";
+  }
+}
+
+static void updateR79ManualSuppressionLocked(
+    uint32_t now, bool txBarrierAlreadyHeld) {
   uint8_t gearRaw = TESLA_GEAR_INVALID;
   const bool gearValid = r79FreshGearRawLocked(now, gearRaw);
   const bool dasValid = dasAutopilotStateValid;
   const bool apActive = dasStateApActivePure(dasValid, dasAutopilotState4);
   const bool manualState = dasStateManualPure(dasValid, dasAutopilotState4);
   const bool remoteStartupEvidence = r79RemoteStartupEvidenceLocked(now);
+  r79ApGateObserveLocked(now);
   r79ManualSuppressionUpdatePure(
       r79ManualSuppression,
       gearValid, gearRaw,
       dasValid, apActive, manualState,
       gateSummoning, remoteStartupEvidence);
+  const bool authorizationOpen = r79TxDecisionPure(
+      apActive, gateSummoning, r79ManualSuppression,
+      r79ApGateConfig.allowManualDriving).txEnabled;
+  countryOverrideUpdateR79AuthorizationLocked(
+      authorizationOpen, txBarrierAlreadyHeld);
 }
 
 // Recompute the live Summon monitor state and R79 manual-suppression latch.
 // v3.6d2 derives CAN-B transport priority separately from fresh real gear plus
 // ACA/SPR evidence; the V2.6 compatibility PARK fallback is monitor/gate-only.
 // stateMux must already be held.
-static void refreshSummonDerivedStateLocked(uint32_t now) {
+static void refreshSummonDerivedStateLocked(
+    uint32_t now, bool txBarrierAlreadyHeld) {
   SummonV26CompatStatePure compat = {
       gateParked, gateSummoning, lastAca, sprSeen, last280Millis};
   summonV26CompatTickPure(compat, now, PARKED_TIMEOUT_MS);
@@ -1052,7 +1465,7 @@ static void refreshSummonDerivedStateLocked(uint32_t now) {
   if (summonGearLatchApplyDecisionPure(summonConfirmedGearLatch, gear))
     summonConfirmedGearTransitions++;
 
-  updateR79ManualSuppressionLocked(now);
+  updateR79ManualSuppressionLocked(now, txBarrierAlreadyHeld);
 }
 
 static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now) {
@@ -1066,6 +1479,7 @@ static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now) {
   portEXIT_CRITICAL(&r79LabMux);
 
   bool apActive = false;
+  bool allowManualDriving = false;
   R79ManualSuppressionPure manual = {};
   portENTER_CRITICAL(&stateMux);
   out.gearValid = r79FreshGearRawLocked(now, out.gearRaw);
@@ -1074,25 +1488,35 @@ static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now) {
   out.summonSessionActive = gateSummoning;
   out.remoteStartupEvidence = r79RemoteStartupEvidenceLocked(now);
   manual = r79ManualSuppression;
+  allowManualDriving = r79ApGateConfig.allowManualDriving;
   out.manualLatchActive = manual.active;
+  out.apGate = r79ApGateDecisionLocked(now);
   apActive = dasStateApActivePure(out.dasValid, out.dasState4);
   portEXIT_CRITICAL(&stateMux);
 
-  out.decision = r79TxDecisionPure(apActive, out.summonSessionActive, manual);
+  out.decision = r79TxDecisionPure(apActive, out.summonSessionActive, manual, allowManualDriving);
 
   if (canTxAdministrativeHold) out.state = R79_TX_STATE_ADMIN_HOLD;
   else if (!twaiReady) out.state = R79_TX_STATE_CAN_OFFLINE;
   else if (!stockValid) out.state = R79_TX_STATE_WAIT_TEMPLATE;
   else if (!out.decision.txEnabled) out.state = R79_TX_STATE_SUSPENDED;
+  else if (!out.apGate.allowed) {
+    out.state = out.apGate.reason == R79_AP_GATE_BLOCKED_PURE
+        ? R79_TX_STATE_AP_BLOCKED
+        : out.apGate.reason == R79_AP_GATE_WAITING_PURE
+            ? R79_TX_STATE_AP_WAIT : R79_TX_STATE_AP_UNKNOWN;
+  }
   else out.state = R79_TX_STATE_ACTIVE;
   return out;
 }
 
 static void refreshSummonState() {
   const uint32_t now = (uint32_t)millis();
+  const bool countryBarrierLocked = countryOverrideAuthorizationBarrierLock();
   portENTER_CRITICAL(&stateMux);
-  refreshSummonDerivedStateLocked(now);
+  refreshSummonDerivedStateLocked(now, countryBarrierLocked);
   portEXIT_CRITICAL(&stateMux);
+  countryOverrideAuthorizationBarrierUnlock(countryBarrierLocked);
 }
 
 static bool summonLoadSheddingActive() {
@@ -1585,7 +2009,7 @@ static void blinkerTxCancelLegacyLocked() {
 static bool blinkerTxSetMode(uint8_t requested) {
   portENTER_CRITICAL(&blinkAMux);
   const BlinkerTxModeTransitionPure transition =
-      blinkerTxModeTransitionPure(blinkerTxMode, requested, labMenuEnabled);
+      blinkerTxModeTransitionPure(blinkerTxMode, requested);
   if (!transition.valid) {
     portEXIT_CRITICAL(&blinkAMux);
     return false;
@@ -1599,8 +2023,7 @@ static bool blinkerTxSetMode(uint8_t requested) {
 static bool requestBlinkerTx(uint8_t dir, uint8_t source,
                              uint32_t eventToken, uint32_t now) {
   portENTER_CRITICAL(&blinkAMux);
-  const uint8_t effective =
-      blinkerTxEffectiveModePure(blinkerTxMode, labMenuEnabled);
+  const uint8_t effective = blinkerTxMode;
   const bool accepted = effective == BLINKER_TX_MODE_SINGLE_PURE
       ? blinkerTxArmPure(blinkerTxRequestState, dir, source, eventToken, now)
       : blinkerLegacyStartLocked(dir, source, now);
@@ -1673,6 +2096,51 @@ static void handle249OnCanB(const uint8_t *data, uint8_t dlc) {
   }
 }
 
+static uint8_t stalkFrameSource(bool directUser) {
+  return directUser ? BLINKER_TX_SOURCE_S3XY_PURE
+                    : BLINKER_TX_SOURCE_AUTO_PURE;
+}
+
+static bool stalkFrameSnapshot(uint8_t &counter, uint8_t stockTemplate[4]) {
+  bool haveStockTemplate = false;
+  portENTER_CRITICAL(&blinkAMux);
+  counter = (blinkACounter + 1u) & 0x0Fu;
+  blinkACounter = counter;
+  haveStockTemplate = seen249 && realDlc >= 4u;
+  if (haveStockTemplate) memcpy(stockTemplate, realRaw249, 4u);
+  portEXIT_CRITICAL(&blinkAMux);
+  return haveStockTemplate;
+}
+
+static void stalkFrameRecordBlocked(uint8_t turn, bool directUser) {
+  portENTER_CRITICAL(&blinkAMux);
+  blkATxFail++;
+  blinkerTxBlockedCount++;
+  blinkerTxRecordLocked(turnToDir(turn), stalkFrameSource(directUser), 4);
+  portEXIT_CRITICAL(&blinkAMux);
+}
+
+static void stalkFrameRecordResult(uint8_t turn, bool directUser,
+                                   bool success, bool mcpPath) {
+  portENTER_CRITICAL(&blinkAMux);
+  if (success) {
+    blkATxOk++;
+    if (mcpPath) {
+      mcpTxOk++;
+      mcpTxFailConsecutive = 0;
+    }
+  } else {
+    blkATxFail++;
+    if (mcpPath) {
+      mcpTxFail++;
+      if (mcpTxFailConsecutive < 255u) mcpTxFailConsecutive++;
+    }
+  }
+  blinkerTxRecordLocked(turnToDir(turn), stalkFrameSource(directUser),
+                        success ? 2 : 3);
+  portEXIT_CRITICAL(&blinkAMux);
+}
+
 // Send SCCM_turnIndicatorStalkStatus on CAN B.
 //
 // Do not fabricate a 0x249 payload from zeros. The newest real
@@ -1684,25 +2152,12 @@ static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser) 
   if (!directUser && ulcNoConfirmEnabledSnapshot()) return;
   uint8_t cnt;
   uint8_t stockTemplate[4] = {0};
-  bool haveStockTemplate = false;
-
-  portENTER_CRITICAL(&blinkAMux);
-  cnt = (blinkACounter + 1) & 0x0F;
-  blinkACounter = cnt;
-  haveStockTemplate = seen249 && realDlc >= 4;
-  if (haveStockTemplate) memcpy(stockTemplate, realRaw249, sizeof(stockTemplate));
-  portEXIT_CRITICAL(&blinkAMux);
+  const bool haveStockTemplate = stalkFrameSnapshot(cnt, stockTemplate);
 
   // Do not inject a guessed SCCM frame before a real Model YL 0x249 template
   // has been observed on the bus.
   if (!haveStockTemplate) {
-    portENTER_CRITICAL(&blinkAMux);
-    blkATxFail++;
-    blinkerTxBlockedCount++;
-    blinkerTxRecordLocked(
-        turnToDir(turn), directUser ? BLINKER_TX_SOURCE_S3XY_PURE
-                                    : BLINKER_TX_SOURCE_AUTO_PURE, 4);
-    portEXIT_CRITICAL(&blinkAMux);
+    stalkFrameRecordBlocked(turn, directUser);
     return;
   }
 
@@ -1710,11 +2165,8 @@ static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser) 
   out.identifier = LEFTSTALK_ID;
   out.data_length_code = 4;
   out.flags = 0;
-  memcpy(out.data, stockTemplate, sizeof(stockTemplate));
-
-  out.data[1] = (uint8_t)((out.data[1] & 0xF0) | (cnt & 0x0F));
-  out.data[2] = (uint8_t)((out.data[2] & 0xF0) | (turn & 0x0F));
-  out.data[0] = leftStalkChecksum(out.data, cnt);
+  (void)stalkFramePreparePure(stockTemplate, sizeof(stockTemplate), cnt, turn,
+                              out.data);
 
   // Auto Blinker is lower priority than Summon. Never block CAN B RX.
   esp_err_t err = ESP_ERR_TIMEOUT;
@@ -1723,14 +2175,7 @@ static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser) 
       : CAN_TX_TRACE_SOURCE_AUTO_BLINKER;
   if (twaiNonSummonAdmissionOpen())
     err = canTxTwaiTransmitTagged(&out, txEpoch, traceSource);
-  portENTER_CRITICAL(&blinkAMux);
-  if (err == ESP_OK) blkATxOk++;
-  else blkATxFail++;
-  blinkerTxRecordLocked(
-      turnToDir(turn), directUser ? BLINKER_TX_SOURCE_S3XY_PURE
-                                  : BLINKER_TX_SOURCE_AUTO_PURE,
-      err == ESP_OK ? 2 : 3);
-  portEXIT_CRITICAL(&blinkAMux);
+  stalkFrameRecordResult(turn, directUser, err == ESP_OK, false);
 }
 
 static void handle249OnCanA(const uint8_t *data, uint8_t dlc) {
@@ -1746,45 +2191,25 @@ static void sendStalkFrameCanA(uint8_t turn, uint32_t txEpoch, bool directUser) 
   if (!directUser && ulcNoConfirmEnabledSnapshot()) return;
   uint8_t cnt;
   uint8_t stockTemplate[4] = {0};
-  bool haveStockTemplate = false;
-  portENTER_CRITICAL(&blinkAMux);
-  cnt = (blinkACounter + 1) & 0x0F;
-  blinkACounter = cnt;
-  haveStockTemplate = seen249 && realDlc >= 4;
-  if (haveStockTemplate) memcpy(stockTemplate, realRaw249, sizeof(stockTemplate));
-  portEXIT_CRITICAL(&blinkAMux);
+  const bool haveStockTemplate = stalkFrameSnapshot(cnt, stockTemplate);
   if (!haveStockTemplate) {
-    portENTER_CRITICAL(&blinkAMux);
-    blkATxFail++;
-    blinkerTxBlockedCount++;
-    blinkerTxRecordLocked(
-        turnToDir(turn), directUser ? BLINKER_TX_SOURCE_S3XY_PURE
-                                    : BLINKER_TX_SOURCE_AUTO_PURE, 4);
-    portEXIT_CRITICAL(&blinkAMux);
+    stalkFrameRecordBlocked(turn, directUser);
     return;
   }
 
   struct can_frame out = {};
   out.can_id = LEFTSTALK_ID;
   out.can_dlc = 4;
-  memcpy(out.data, stockTemplate, sizeof(stockTemplate));
-  out.data[1] = (uint8_t)((out.data[1] & 0xF0) | (cnt & 0x0F));
-  out.data[2] = (uint8_t)((out.data[2] & 0xF0) | (turn & 0x0F));
-  out.data[0] = leftStalkChecksum(out.data, cnt);
+  (void)stalkFramePreparePure(stockTemplate, sizeof(stockTemplate), cnt, turn,
+                              out.data);
   MCP2515::ERROR mcpErr = MCP2515::ERROR_FAIL;
   const uint8_t traceSource = directUser
       ? CAN_TX_TRACE_SOURCE_S3XY_BUTTON
       : CAN_TX_TRACE_SOURCE_AUTO_BLINKER;
   const bool attempted = canTxMcpSendTagged(
       &out, txEpoch, traceSource, mcpErr, nullptr);
-  portENTER_CRITICAL(&blinkAMux);
-  if (attempted && mcpErr == MCP2515::ERROR_OK) { blkATxOk++; mcpTxOk++; mcpTxFailConsecutive = 0; }
-  else { blkATxFail++; mcpTxFail++; if (mcpTxFailConsecutive < 255) mcpTxFailConsecutive++; }
-  blinkerTxRecordLocked(
-      turnToDir(turn), directUser ? BLINKER_TX_SOURCE_S3XY_PURE
-                                  : BLINKER_TX_SOURCE_AUTO_PURE,
-      attempted && mcpErr == MCP2515::ERROR_OK ? 2 : 3);
-  portEXIT_CRITICAL(&blinkAMux);
+  stalkFrameRecordResult(turn, directUser,
+                         attempted && mcpErr == MCP2515::ERROR_OK, true);
 }
 
 
@@ -1793,18 +2218,39 @@ static void handle3C2OnCanA(const struct can_frame &incoming) {
   const uint32_t now = (uint32_t)millis();
   const uint8_t left = vcleftLeftButtonPure(incoming.data);
   const uint8_t right = vcleftRightButtonPure(incoming.data);
+  const bool physicalPressed =
+      left == VCLEFT_SWITCH_ON || right == VCLEFT_SWITCH_ON;
   bool inject = false;
   bool directUser = false;
   uint8_t turn = STALK_IDLE;
   uint8_t switchState = VCLEFT_SWITCH_SNA;
+  BlinkerTxConsumeResultPure singleRequest = {};
 
   portENTER_CRITICAL(&blinkAMux);
+  const uint8_t pendingDir = blinkerTxRequestState.pendingDir;
+  const uint8_t pendingSource = blinkerTxRequestState.pendingSource;
+  if (activeTurnSignalVariant == TURN_SIGNAL_STALKLESS && pendingDir != 0u) {
+    singleRequest = blinkerTxConsumeStockPure(
+        blinkerTxRequestState, now, !physicalPressed,
+        BLINKA_S3XY_STOCK_TIMEOUT_MS);
+    if (!singleRequest.transmit) {
+      blinkerTxBlockedCount++;
+      blinkerTxRecordLocked(pendingDir, pendingSource, 4);
+    }
+  }
   // A physical steering-wheel button press always wins over an injected pulse.
-  if ((left == VCLEFT_SWITCH_ON || right == VCLEFT_SWITCH_ON) && oneShotTurn != STALK_IDLE) {
-    autoBlinkerClearPendingLocked();
-    oneShotTurn = STALK_IDLE; oneShotDirect = false;
-    oneShotSource = BLINKER_TX_SOURCE_NONE_PURE;
-    oneShotUntil = 0; oneShotReleaseAt = 0; activeTurn = STALK_IDLE;
+  if (physicalPressed) {
+    if (oneShotTurn != STALK_IDLE) {
+      autoBlinkerClearPendingLocked();
+      oneShotTurn = STALK_IDLE; oneShotDirect = false;
+      oneShotSource = BLINKER_TX_SOURCE_NONE_PURE;
+      oneShotUntil = 0; oneShotReleaseAt = 0; activeTurn = STALK_IDLE;
+    }
+  } else if (singleRequest.transmit) {
+    inject = true;
+    directUser = singleRequest.source == BLINKER_TX_SOURCE_S3XY_PURE;
+    turn = dirToTurn(singleRequest.dir);
+    switchState = VCLEFT_SWITCH_ON;
   } else if (activeTurnSignalVariant == TURN_SIGNAL_STALKLESS &&
              oneShotTurn != STALK_IDLE && (int32_t)(oneShotUntil - now) > 0) {
     inject = true;
@@ -1826,70 +2272,276 @@ static void handle3C2OnCanA(const struct can_frame &incoming) {
   const uint32_t txEpoch = canTxEpochSnapshot();
   MCP2515::ERROR mcpErr = MCP2515::ERROR_FAIL;
   const bool attempted = canTxMcpSend(&out, txEpoch, mcpErr, nullptr);
-  portENTER_CRITICAL(&blinkAMux);
-  if (attempted && mcpErr == MCP2515::ERROR_OK) { blkATxOk++; mcpTxOk++; mcpTxFailConsecutive = 0; }
-  else { blkATxFail++; mcpTxFail++; if (mcpTxFailConsecutive < 255) mcpTxFailConsecutive++; }
-  portEXIT_CRITICAL(&blinkAMux);
+  stalkFrameRecordResult(turn, directUser,
+                         attempted && mcpErr == MCP2515::ERROR_OK, true);
 }
 
-static void handle3C2OnCanBRightScroll(const twai_message_t &incoming) {
-  if (!activeProfileApRightScrollSupported() || incoming.data_length_code < 8 ||
-      apRightScrollMuxPure(incoming.data) != AP_RIGHT_SCROLL_MUX1_PURE) return;
+// TSL9 input assistance is timer-owned like v8.2. Accepted stock MUX1 frames
+// update a short-lived template only; generated +1,0,-1,0 steps are serviced
+// independently at 100 ms cadence. This prevents stock RX cadence from
+// stretching the sequence and removes all ordinary/background scrolling.
+static portMUX_TYPE tsl9InputMux = portMUX_INITIALIZER_UNLOCKED;
+static Tsl9InputSchedulerPure tsl9InputScheduler = {};
+static struct can_frame tsl9InputCanATemplate = {};
+static twai_message_t tsl9InputCanBTemplate = {};
+static volatile bool tsl9InputCanATemplateValid = false;
+static volatile bool tsl9InputCanBTemplateValid = false;
+static volatile uint32_t tsl9InputCanATemplateMs = 0;
+static volatile uint32_t tsl9InputCanBTemplateMs = 0;
+static volatile uint32_t tsl9InputMux1Rx = 0;
+static volatile uint32_t tsl9InputTxOk = 0;
+static volatile uint32_t tsl9InputTxFail = 0;
+static volatile uint32_t tsl9InputCleanupTx = 0;
 
+static void tsl9InputHardResetAfterQuiesce(bool resetCounters) {
+  portENTER_CRITICAL(&tsl9InputMux);
+  tsl9InputScheduler = {};
+  tsl9InputCanATemplate = {};
+  tsl9InputCanBTemplate = {};
+  tsl9InputCanATemplateValid = false;
+  tsl9InputCanBTemplateValid = false;
+  tsl9InputCanATemplateMs = 0;
+  tsl9InputCanBTemplateMs = 0;
+  if (resetCounters) {
+    tsl9InputMux1Rx = 0;
+    tsl9InputTxOk = 0;
+    tsl9InputTxFail = 0;
+    tsl9InputCleanupTx = 0;
+  }
+  portEXIT_CRITICAL(&tsl9InputMux);
+}
+
+static void tsl9InputRequestCancel(Tsl9InputFailurePure reason,
+                                   bool invalidateTemplates) {
+  portENTER_CRITICAL(&tsl9InputMux);
+  (void)tsl9InputScheduler.forceCancel(reason, (uint32_t)millis());
+  if (invalidateTemplates) {
+    tsl9InputCanATemplateValid = false;
+    tsl9InputCanBTemplateValid = false;
+    tsl9InputCanATemplateMs = 0u;
+    tsl9InputCanBTemplateMs = 0u;
+  }
+  portEXIT_CRITICAL(&tsl9InputMux);
+}
+
+static void tsl9InputResetCounters() {
+  portENTER_CRITICAL(&tsl9InputMux);
+  tsl9InputScheduler.resetCounters();
+  tsl9InputMux1Rx = 0u;
+  tsl9InputTxOk = 0u;
+  tsl9InputTxFail = 0u;
+  tsl9InputCleanupTx = 0u;
+  portEXIT_CRITICAL(&tsl9InputMux);
+}
+
+static void tsl9InputObserveCanA(const struct can_frame &incoming) {
+  if (!activeProfileTsl9InputOnBodyCanA() || incoming.can_dlc < 8 ||
+      tsl9InputMuxPure(incoming.data) != TSL9_INPUT_MUX1_PURE) return;
   const uint32_t now = (uint32_t)millis();
+  const int8_t left = tsl9InputDecodeSignedSixBitPure(incoming.data[2]);
+  const int8_t right = tsl9InputDecodeSignedSixBitPure(incoming.data[3]);
+  portENTER_CRITICAL(&tsl9InputMux);
+  tsl9InputCanATemplate = incoming;
+  tsl9InputCanATemplateValid = true;
+  tsl9InputCanATemplateMs = now;
+  tsl9InputMux1Rx++;
+  tsl9InputScheduler.observeManualTicks(left, right, now);
+  portEXIT_CRITICAL(&tsl9InputMux);
+}
+
+static void tsl9InputObserveCanB(const twai_message_t &incoming) {
+  if (activeProfileTsl9InputOnBodyCanA() ||
+      !activeProfileTsl9InputSupported() || incoming.data_length_code < 8 ||
+      tsl9InputMuxPure(incoming.data) != TSL9_INPUT_MUX1_PURE) return;
+  const uint32_t now = (uint32_t)millis();
+  const int8_t left = tsl9InputDecodeSignedSixBitPure(incoming.data[2]);
+  const int8_t right = tsl9InputDecodeSignedSixBitPure(incoming.data[3]);
+  portENTER_CRITICAL(&tsl9InputMux);
+  tsl9InputCanBTemplate = incoming;
+  tsl9InputCanBTemplateValid = true;
+  tsl9InputCanBTemplateMs = now;
+  tsl9InputMux1Rx++;
+  tsl9InputScheduler.observeManualTicks(left, right, now);
+  portEXIT_CRITICAL(&tsl9InputMux);
+}
+
+static Tsl9InputInputsPure tsl9InputInputsSnapshot(uint32_t now,
+                                                   bool onBodyCanA) {
+  Tsl9InputInputsPure in = {};
   bool apActive;
   portENTER_CRITICAL(&stateMux);
   apActive = dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4);
   portEXIT_CRITICAL(&stateMux);
-
-  uint32_t visualWarningEpoch;
+  bool scrollWarningActive;
   bool visualWarningActive;
   portENTER_CRITICAL(&nagCtxMux);
-  visualWarningEpoch = nagCtx.visualWarningEpoch;
+  scrollWarningActive = nagCtx.scrollWarningActive;
   visualWarningActive = nagCtx.visualWarningActive;
   portEXIT_CRITICAL(&nagCtxMux);
+  bool nagEnabled;
+  uint8_t method;
+  uint8_t tsl9Mode;
+  portENTER_CRITICAL(&nagCfgMux);
+  nagEnabled = nagCfg.enabled;
+  method = nagMethodSanitizePure(nagCfg.method);
+  tsl9Mode = tsl9InputModeSanitizePure(nagCfg.tsl9InputMode);
+  portEXIT_CRITICAL(&nagCfgMux);
 
-  bool enabled;
-  uint16_t intervalSeconds;
-  uint8_t warningRepeatSeconds;
-  ApRightScrollActionPure action;
-  const uint8_t physicalValue = apRightScrollValuePure(incoming.data);
-  portENTER_CRITICAL(&apRightScrollMux);
-  enabled = apRightScrollEnabled;
-  intervalSeconds = apRightScrollIntervalSeconds;
-  warningRepeatSeconds = apRightScrollVisualRepeatSeconds;
-  const bool gateOpen = enabled && apActive && twaiReady &&
-                        !canTxAdministrativeHold;
-  apRightScrollMux1Rx++;
-  if (physicalValue != 0U && gateOpen && apRightScrollState.gateWasOpen)
-    apRightScrollPhysicalDeferrals++;
-  action = apRightScrollStepPure(apRightScrollState, now, gateOpen,
-                                 intervalSeconds, warningRepeatSeconds,
-                                 visualWarningEpoch, visualWarningActive,
-                                 true, physicalValue);
-  portEXIT_CRITICAL(&apRightScrollMux);
-  if (action == AP_RIGHT_SCROLL_ACTION_NONE_PURE) return;
+  bool torqueRightEnabled;
+  bool tsl9RightPeriodicEnabled;
+  uint16_t torqueInterval;
+  uint16_t tsl9Interval;
+  uint8_t torquePattern;
+  portENTER_CRITICAL(&nagRightScrollMux);
+  torqueRightEnabled = nagTorqueRightScrollEnabled;
+  torqueInterval = nagTorqueRightScrollIntervalSeconds;
+  torquePattern = nagRightScrollPatternSanitize(nagTorqueRightScrollPattern);
+  tsl9RightPeriodicEnabled = nagTsl9RightPeriodicEnabled;
+  tsl9Interval = nagTsl9RightPeriodicIntervalSeconds;
+  portEXIT_CRITICAL(&nagRightScrollMux);
 
-  twai_message_t out = incoming;
-  const uint8_t value = action == AP_RIGHT_SCROLL_ACTION_UP_PURE
-      ? AP_RIGHT_SCROLL_UP_PURE : AP_RIGHT_SCROLL_DOWN_PURE;
-  apRightScrollSetValuePure(out.data, value);
+  const bool torqueSelected = nagEnabled &&
+      method == NAG_METHOD_TORQUE_PURE && torqueRightEnabled;
+  const bool tsl9Selected = nagEnabled && method == NAG_METHOD_TSL9_PURE;
+  const bool routeMatches = activeProfileTsl9InputSupported() &&
+      activeProfileTsl9InputOnBodyCanA() == onBodyCanA;
+  in.nowMs = now;
+  in.enabled = routeMatches && (torqueSelected || tsl9Selected) && apActive;
+  in.warningActive = in.enabled && (torqueSelected
+      ? visualWarningActive : scrollWarningActive);
+  in.txAllowed = !canTxAdministrativeHold &&
+      (onBodyCanA ? mcpReady : twaiReady);
+  in.mode = torqueSelected ? TSL9_INPUT_MODE_RIGHT_SPEED_PURE : tsl9Mode;
+  in.randomValue = 0u;
+  in.periodicIntervalSeconds = torqueSelected
+      ? torqueInterval
+      : (tsl9Selected && tsl9Mode == TSL9_INPUT_MODE_RIGHT_SPEED_PURE &&
+                 tsl9RightPeriodicEnabled
+             ? tsl9Interval : 0u);
+  in.sequencePattern = torqueSelected
+      ? (torquePattern == NAG_RIGHT_SCROLL_PATTERN_PAIR
+             ? TSL9_INPUT_PATTERN_PAIR_PURE
+             : TSL9_INPUT_PATTERN_FOUR_STEP_PURE)
+      : TSL9_INPUT_PATTERN_FOUR_STEP_PURE;
+  in.warningEdgeOnly = torqueSelected;
+  return in;
+}
+
+static bool tsl9InputSendCanA(const struct can_frame &stock,
+                              const Tsl9InputCommandPure &command) {
+  struct can_frame out = stock;
+  tsl9InputApplyCommandPure(command, out.data);
   const uint32_t txEpoch = canTxEpochSnapshot();
-  const esp_err_t err = canTxTwaiTransmitWithMask(&out, txEpoch, CAN_TX_FRESH_VH);
+  MCP2515::ERROR err = MCP2515::ERROR_FAIL;
+  Tsl9InputCommandPure prepared = command;
+  const bool attempted = canTxMcpSendValidated(&out, txEpoch, continuousApValidateNagCanA, &prepared, err);
+  return attempted && err == MCP2515::ERROR_OK;
+}
+
+static bool tsl9InputSendCanB(const twai_message_t &stock,
+                              const Tsl9InputCommandPure &command) {
+  twai_message_t out = stock;
+  tsl9InputApplyCommandPure(command, out.data);
+  const uint32_t txEpoch = canTxEpochSnapshot();
+  Tsl9InputCommandPure prepared = command;
+  const esp_err_t err = canTxTwaiTransmitValidated(
+      &out, txEpoch, CAN_TX_FRESH_VH, continuousApValidateNagCanB, &prepared);
   researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code,
                              out.data, err == ESP_OK);
+  return err == ESP_OK;
+}
 
-  portENTER_CRITICAL(&apRightScrollMux);
-  apRightScrollTxResultPure(apRightScrollState, now, action, err == ESP_OK);
-  if (err == ESP_OK) {
-    if (action == AP_RIGHT_SCROLL_ACTION_UP_PURE) apRightScrollTxUpOk++;
-    else apRightScrollTxDownOk++;
-    apRightScrollLastTxMs = now;
-    apRightScrollLastTxValue = value;
-  } else {
-    apRightScrollTxFail++;
+static void tsl9InputServiceCanA() {
+  if (continuousApOwnsInputRoute(ContApRoute::BodyA)) return;
+  if (!activeProfileTsl9InputOnBodyCanA()) return;
+  const uint32_t now = (uint32_t)millis();
+  Tsl9InputInputsPure in = tsl9InputInputsSnapshot(now, true);
+  Tsl9InputCommandPure command = {};
+  struct can_frame stock = {};
+  bool haveTemplate = false;
+  portENTER_CRITICAL(&tsl9InputMux);
+  haveTemplate = tsl9InputCanATemplateValid;
+  in.templateFresh = haveTemplate &&
+      (uint32_t)(now - tsl9InputCanATemplateMs) <=
+          tsl9InputTemplateMaxAgeMsPure(in.mode);
+  command = tsl9InputScheduler.service(in);
+  if (haveTemplate) stock = tsl9InputCanATemplate;
+  portEXIT_CRITICAL(&tsl9InputMux);
+  if (command.kind == TSL9_INPUT_COMMAND_NONE_PURE) return;
+  const bool ok = haveTemplate && in.templateFresh &&
+      tsl9InputSendCanA(stock, command);
+  Tsl9InputCommandPure cleanup = {};
+  const uint32_t randomValue = command.kind == TSL9_INPUT_COMMAND_STEP_PURE
+      ? esp_random() : 0u;
+  portENTER_CRITICAL(&tsl9InputMux);
+  if (ok) tsl9InputTxOk++; else tsl9InputTxFail++;
+  if (command.kind == TSL9_INPUT_COMMAND_CENTER_PURE) tsl9InputCleanupTx++;
+  cleanup = tsl9InputScheduler.onCommandResult(
+      command, ok, (uint32_t)millis(), randomValue);
+  portEXIT_CRITICAL(&tsl9InputMux);
+  if (cleanup.kind != TSL9_INPUT_COMMAND_NONE_PURE) {
+    const bool cleanupOk = haveTemplate && in.templateFresh &&
+        tsl9InputSendCanA(stock, cleanup);
+    portENTER_CRITICAL(&tsl9InputMux);
+    if (cleanupOk) tsl9InputTxOk++; else tsl9InputTxFail++;
+    tsl9InputCleanupTx++;
+    (void)tsl9InputScheduler.onCommandResult(
+        cleanup, cleanupOk, (uint32_t)millis(), 0u);
+    portEXIT_CRITICAL(&tsl9InputMux);
   }
-  portEXIT_CRITICAL(&apRightScrollMux);
+}
+
+static void tsl9InputServiceCanB() {
+  if (continuousApOwnsInputRoute(ContApRoute::ChassisB)) return;
+  if (activeProfileTsl9InputOnBodyCanA() ||
+      !activeProfileTsl9InputSupported()) return;
+  const uint32_t now = (uint32_t)millis();
+  Tsl9InputInputsPure in = tsl9InputInputsSnapshot(now, false);
+  Tsl9InputCommandPure command = {};
+  twai_message_t stock = {};
+  bool haveTemplate = false;
+  portENTER_CRITICAL(&tsl9InputMux);
+  haveTemplate = tsl9InputCanBTemplateValid;
+  in.templateFresh = haveTemplate &&
+      (uint32_t)(now - tsl9InputCanBTemplateMs) <=
+          tsl9InputTemplateMaxAgeMsPure(in.mode);
+  command = tsl9InputScheduler.service(in);
+  if (haveTemplate) stock = tsl9InputCanBTemplate;
+  portEXIT_CRITICAL(&tsl9InputMux);
+  if (command.kind == TSL9_INPUT_COMMAND_NONE_PURE) return;
+  const bool ok = haveTemplate && in.templateFresh &&
+      tsl9InputSendCanB(stock, command);
+  Tsl9InputCommandPure cleanup = {};
+  const uint32_t randomValue = command.kind == TSL9_INPUT_COMMAND_STEP_PURE
+      ? esp_random() : 0u;
+  portENTER_CRITICAL(&tsl9InputMux);
+  if (ok) tsl9InputTxOk++; else tsl9InputTxFail++;
+  if (command.kind == TSL9_INPUT_COMMAND_CENTER_PURE) tsl9InputCleanupTx++;
+  cleanup = tsl9InputScheduler.onCommandResult(
+      command, ok, (uint32_t)millis(), randomValue);
+  portEXIT_CRITICAL(&tsl9InputMux);
+  if (cleanup.kind != TSL9_INPUT_COMMAND_NONE_PURE) {
+    const bool cleanupOk = haveTemplate && in.templateFresh &&
+        tsl9InputSendCanB(stock, cleanup);
+    portENTER_CRITICAL(&tsl9InputMux);
+    if (cleanupOk) tsl9InputTxOk++; else tsl9InputTxFail++;
+    tsl9InputCleanupTx++;
+    (void)tsl9InputScheduler.onCommandResult(
+        cleanup, cleanupOk, (uint32_t)millis(), 0u);
+    portEXIT_CRITICAL(&tsl9InputMux);
+  }
+}
+
+static bool tsl9InputQuiesceForConfig() {
+  // Web/config code only requests quiesce. The route-owning CAN task remains
+  // the sole scheduler/TX executor, so an already-issued command keeps the
+  // scheduler active/cleanup-pending until that same task reports its result.
+  portENTER_CRITICAL(&tsl9InputMux);
+  (void)tsl9InputScheduler.requestConfigQuiesce(
+      TSL9_INPUT_FAILURE_MODE_CHANGED_PURE, (uint32_t)millis());
+  const bool complete = tsl9InputScheduler.configQuiesceComplete();
+  portEXIT_CRITICAL(&tsl9InputMux);
+  return complete;
 }
 
 static void handle102LaneChangeCancel(const uint8_t *data, uint8_t dlc) {
@@ -2142,6 +2794,7 @@ static void handle280(const uint8_t *data) {
     const int gs = gearState(gear);
     const bool aca = (data[6] & 0x04) != 0;
     int prevGs;
+    const bool countryBarrierLocked = countryOverrideAuthorizationBarrierLock();
     portENTER_CRITICAL(&stateMux);
     prevGs = gear118State;
     if (gs >= 0) {
@@ -2161,8 +2814,9 @@ static void handle280(const uint8_t *data) {
 
     acaValid = true;
     lastAcaMillis = now;
-    refreshSummonDerivedStateLocked(now);
+    refreshSummonDerivedStateLocked(now, countryBarrierLocked);
     portEXIT_CRITICAL(&stateMux);
+    countryOverrideAuthorizationBarrierUnlock(countryBarrierLocked);
     pedalMapClearSessionOnParkTransition(prevGs, gs);
 }
 
@@ -2172,9 +2826,12 @@ static void handle390(const uint8_t *data) {
     const uint32_t now = (uint32_t)millis();
     const uint8_t gear = readVehicleGear(data);
     const int gs = gearState(gear);
-    if (gs < 0) return;
+    if (gs < 0) {
+      return;
+    }
 
     int prevGs;
+    const bool countryBarrierLocked = countryOverrideAuthorizationBarrierLock();
     portENTER_CRITICAL(&stateMux);
     prevGs = gear186State;
     gear186State = (int8_t)gs;
@@ -2193,8 +2850,9 @@ static void handle390(const uint8_t *data) {
     sprSeen = compat.sprSeen;
     last280Millis = compat.last118Ms;
 
-    refreshSummonDerivedStateLocked(now);
+    refreshSummonDerivedStateLocked(now, countryBarrierLocked);
     portEXIT_CRITICAL(&stateMux);
+    countryOverrideAuthorizationBarrierUnlock(countryBarrierLocked);
     pedalMapClearSessionOnParkTransition(prevGs, gs);
 }
 
@@ -2211,19 +2869,23 @@ static void handle921(const uint8_t *data, uint8_t dlc) {
     const bool noa = dasStateNoaPure(true, dasState4);
     bool wasAp, wasNoa, wasScrollAp;
     const bool scrollAp = dasStateApActivePure(true, dasState4);
+    const bool countryBarrierLocked = countryOverrideAuthorizationBarrierLock();
     portENTER_CRITICAL(&stateMux);
     wasAp = gateAPActive;
     wasNoa = gateNOAActive;
     wasScrollAp = dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4);
+    r79ApGateObserveLocked(now);
     gateAPActive = ap;
     gateNOAActive = noa;
     dasAutopilotState4 = dasState4;
     dasAutopilotStateValid = true;
+    apDisplayObserveValidPure(apDisplayHold, dasState4);
     dasAutoLaneChangeState = alcState;
     dasAutoLaneChangeStateValid = alcValid;
     lastDASStatusMillis = now;
-    refreshSummonDerivedStateLocked(now);
+    refreshSummonDerivedStateLocked(now, countryBarrierLocked);
     portEXIT_CRITICAL(&stateMux);
+    countryOverrideAuthorizationBarrierUnlock(countryBarrierLocked);
 
     // Chassis and Party 0x399 share the bit42..45 Hands-On decoder. Sharing
     // one epoch prevents 3 -> 4 -> 5 from retriggering.
@@ -2235,7 +2897,8 @@ static void handle921(const uint8_t *data, uint8_t dlc) {
         blinkANoaStabilizationSeconds);
     portEXIT_CRITICAL(&blinkAMux);
 
-    if (wasScrollAp && !scrollAp) apRightScrollRuntimeReset(false);
+    if (wasScrollAp && !scrollAp)
+      tsl9InputRequestCancel(TSL9_INPUT_FAILURE_WARNING_CLEARED_PURE, false);
 
     // Keep NAG continuity diagnostics scoped to the current AP session.
     nagDiagApTransition(ap, wasAp, now);
@@ -2277,6 +2940,7 @@ static void handle1016(const uint8_t *data, uint8_t dlc) {
         uiDriverAssistLastRxMs = now;
     }
 
+    const bool countryBarrierLocked = countryOverrideAuthorizationBarrierLock();
     portENTER_CRITICAL(&stateMux);
     lastSprRaw = spr;
     sprValid = true;
@@ -2291,8 +2955,9 @@ static void handle1016(const uint8_t *data, uint8_t dlc) {
     sprSeen = compat.sprSeen;
     last280Millis = compat.last118Ms;
 
-    refreshSummonDerivedStateLocked(now);
+    refreshSummonDerivedStateLocked(now, countryBarrierLocked);
     portEXIT_CRITICAL(&stateMux);
+    countryOverrideAuthorizationBarrierUnlock(countryBarrierLocked);
 }
 
 static void handleRoadContext238(const uint8_t *data, uint8_t dlc) {
@@ -2341,11 +3006,12 @@ static bool tlsscHighwayGateBlocked(uint32_t now) {
 static bool ulcNoConfirmGateOpen();
 
 static void lab3f8ObserveCanB(const twai_message_t &src) {
-    if (src.identifier != DRIVER_ASSIST_ID || src.data_length_code < 1) return;
-    const uint32_t now = (uint32_t)millis();
+    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr)) return;
+    const uint32_t now = lab3f8FrameRxMs;
     portENTER_CRITICAL(&lab3f8Mux);
     if (lab3f8CanBLastMs) lab3f8CanBPeriodMs = (uint32_t)(now - lab3f8CanBLastMs);
     lab3f8CanBLastMs = now;
+    lab3f8CanBEpoch = lab3f8FrameRxEpoch;
     lab3f8CanBRx++;
     lab3f8CanBValid = true;
     lab3f8CanBDlc = src.data_length_code > 8 ? 8 : src.data_length_code;
@@ -2479,6 +3145,194 @@ static void uiAutoLaneChangeObserveAndInjectCanB(const twai_message_t &src) {
     portEXIT_CRITICAL(&autoLc293Mux);
 }
 
+static uint8_t countryOverrideModeSnapshot() {
+    uint8_t mode;
+    portENTER_CRITICAL(&countryOverrideMux);
+    mode = countryOverrideMode;
+    portEXIT_CRITICAL(&countryOverrideMux);
+    return mode;
+}
+
+static uint8_t countryOverrideMapModeSnapshot() {
+  portENTER_CRITICAL(&countryOverrideMux);
+  const uint8_t mode = countryOverrideMapMode;
+  portEXIT_CRITICAL(&countryOverrideMux);
+  return mode;
+}
+
+static bool countryOverrideGateOpen() {
+    const uint8_t mode = countryOverrideModeSnapshot();
+    const R79RuntimeStatus runtime = r79RuntimeStatusSnapshot((uint32_t)millis());
+    return countryOverrideGateOpenPure(
+        mode != COUNTRY_OVERRIDE_STOCK_PURE || countryOverrideMapModeSnapshot() != MAP_REGION_STOCK_PURE
+            ? COUNTRY_OVERRIDE_US_PURE : COUNTRY_OVERRIDE_STOCK_PURE,
+        countryOverrideRouteAllowedPure(activeVehicleProfile, activeVehicleTopology, 0u, 0x7FFu),
+        runtime.state == R79_TX_STATE_ACTIVE);
+}
+
+static void countryOverrideRecordResult(uint8_t bus, uint16_t id,
+                                        uint8_t page, const uint8_t *data,
+                                        bool ok, uint32_t now) {
+    portENTER_CRITICAL(&countryOverrideMux);
+    if (ok) countryOverrideTxOk++; else countryOverrideTxFail++;
+    countryOverrideLastValid = true;
+    countryOverrideLastResult = ok ? 1u : 2u;
+    countryOverrideLastBus = bus;
+    countryOverrideLastId = id;
+    countryOverrideLastPage = page;
+    countryOverrideLastMs = now;
+    memcpy(countryOverrideLastRaw, data, sizeof(countryOverrideLastRaw));
+    portEXIT_CRITICAL(&countryOverrideMux);
+}
+
+static void countryOverrideObserve238CanB(const twai_message_t &src, uint32_t txEpoch) {
+    if (src.extd || src.rtr || src.data_length_code != 8u) return;
+    if (!countryOverrideRouteAllowedPure(
+            activeVehicleProfile, activeVehicleTopology, 1u, 0x238u)) return;
+    // Snapshot cancellation before reading mode or constructing a payload.
+    const uint32_t guardGeneration = canTxCancellationGenerationSnapshot(
+        &countryOverrideCancelGeneration);
+    const uint8_t mode = countryOverrideModeSnapshot();
+    portENTER_CRITICAL(&countryOverrideMux);
+    countryOverrideRx238++;
+    portEXIT_CRITICAL(&countryOverrideMux);
+    twai_message_t out = src;
+    if (!countryOverrideApply238Pure(out.data, out.data_length_code, mode)) return;
+    if (!countryOverrideGateOpen()) {
+        portENTER_CRITICAL(&countryOverrideMux);
+        countryOverrideBlocked++;
+        portEXIT_CRITICAL(&countryOverrideMux);
+        return;
+    }
+
+    if (!twaiNonSummonAdmissionOpen()) {
+        portENTER_CRITICAL(&countryOverrideMux);
+        countryOverrideBlocked++;
+        portEXIT_CRITICAL(&countryOverrideMux);
+        countryOverrideRecordResult(2u, 0x238u, 0xFFu, out.data,
+                                    false, (uint32_t)millis());
+        return;
+    }
+
+    const uint32_t now = (uint32_t)millis();
+    const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
+        &out, txEpoch, CAN_TX_FRESH_VH, CAN_TX_TRACE_SOURCE_DEFAULT,
+        &countryOverrideCancelGeneration, guardGeneration);
+    researchCaptureObserveTxVh((uint16_t)out.identifier,
+                               out.data_length_code, out.data,
+                               err == ESP_OK);
+    countryOverrideRecordResult(2u, 0x238u, 0xFFu, out.data,
+                                err == ESP_OK, now);
+}
+
+static void countryOverrideObserve7ffCanA(const struct can_frame &src, uint32_t txEpoch) {
+    if ((src.can_id & 0xC0000000UL) != 0 || src.can_dlc != 8u) return;
+    if (!countryOverrideRouteAllowedPure(
+            activeVehicleProfile, activeVehicleTopology, 0u, 0x7FFu)) return;
+    // Snapshot cancellation before reading mode or constructing a payload.
+    const uint32_t guardGeneration = canTxCancellationGenerationSnapshot(
+        &countryOverrideCancelGeneration);
+    const uint8_t mode = countryOverrideModeSnapshot();
+    portENTER_CRITICAL(&countryOverrideMux);
+    countryOverrideRx7ffA++;
+    portEXIT_CRITICAL(&countryOverrideMux);
+    struct can_frame out = src;
+    if (!countryOverrideApply7ffPure(out.data, out.can_dlc, mode, countryOverrideMapModeSnapshot())) return;
+    if (!countryOverrideGateOpen()) {
+        portENTER_CRITICAL(&countryOverrideMux);
+        countryOverrideBlocked++;
+        portEXIT_CRITICAL(&countryOverrideMux);
+        return;
+    }
+
+    const uint32_t now = (uint32_t)millis();
+    MCP2515::ERROR mcpErr = MCP2515::ERROR_FAIL;
+    const bool attempted = canTxMcpSendTaggedGuarded(
+        &out, txEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
+        &countryOverrideCancelGeneration, guardGeneration, mcpErr, nullptr);
+    const bool ok = attempted && mcpErr == MCP2515::ERROR_OK;
+    if (attempted) {
+      if (ok) { mcpTxOk++; mcpTxFailConsecutive = 0; }
+      else { mcpTxFail++; if (mcpTxFailConsecutive < 255) mcpTxFailConsecutive++; }
+    }
+    countryOverrideRecordResult(1u, 0x7FFu, out.data[0], out.data,
+                                ok, now);
+}
+
+static void countryOverrideObserve7ffCanB(const twai_message_t &src, uint32_t txEpoch) {
+    if (src.extd || src.rtr || src.data_length_code != 8u) return;
+    if (!countryOverrideRouteAllowedPure(
+            activeVehicleProfile, activeVehicleTopology, 1u, 0x7FFu)) return;
+    // Snapshot cancellation before reading mode or constructing a payload.
+    const uint32_t guardGeneration = canTxCancellationGenerationSnapshot(
+        &countryOverrideCancelGeneration);
+    const uint8_t mode = countryOverrideModeSnapshot();
+    portENTER_CRITICAL(&countryOverrideMux);
+    countryOverrideRx7ffB++;
+    portEXIT_CRITICAL(&countryOverrideMux);
+    twai_message_t out = src;
+    if (!countryOverrideApply7ffPure(out.data, out.data_length_code, mode, countryOverrideMapModeSnapshot())) return;
+    if (!countryOverrideGateOpen()) {
+        portENTER_CRITICAL(&countryOverrideMux);
+        countryOverrideBlocked++;
+        portEXIT_CRITICAL(&countryOverrideMux);
+        return;
+    }
+
+    if (!twaiNonSummonAdmissionOpen()) {
+        portENTER_CRITICAL(&countryOverrideMux);
+        countryOverrideBlocked++;
+        portEXIT_CRITICAL(&countryOverrideMux);
+        countryOverrideRecordResult(2u, 0x7FFu, out.data[0], out.data,
+                                    false, (uint32_t)millis());
+        return;
+    }
+
+    const uint32_t now = (uint32_t)millis();
+    const esp_err_t err = canTxTwaiTransmitWithMaskTaggedGuarded(
+        &out, txEpoch, CAN_TX_FRESH_VH, CAN_TX_TRACE_SOURCE_DEFAULT,
+        &countryOverrideCancelGeneration, guardGeneration);
+    researchCaptureObserveTxVh((uint16_t)out.identifier,
+                               out.data_length_code, out.data,
+                               err == ESP_OK);
+    countryOverrideRecordResult(2u, 0x7FFu, out.data[0], out.data,
+                                err == ESP_OK, now);
+}
+
+static void countryOverrideObserve238CanA(const struct can_frame &src, uint32_t txEpoch) {
+    if ((src.can_id & 0xC0000000UL) != 0 || src.can_dlc != 8u) return;
+    if (!countryOverrideRouteAllowedPure(
+            activeVehicleProfile, activeVehicleTopology, 0u, 0x238u)) return;
+    // Snapshot cancellation before reading mode or constructing a payload.
+    const uint32_t guardGeneration = canTxCancellationGenerationSnapshot(
+        &countryOverrideCancelGeneration);
+    const uint8_t mode = countryOverrideModeSnapshot();
+    portENTER_CRITICAL(&countryOverrideMux);
+    countryOverrideRx238++;
+    portEXIT_CRITICAL(&countryOverrideMux);
+    struct can_frame out = src;
+    if (!countryOverrideApply238Pure(out.data, out.can_dlc, mode)) return;
+    if (!countryOverrideGateOpen()) {
+        portENTER_CRITICAL(&countryOverrideMux);
+        countryOverrideBlocked++;
+        portEXIT_CRITICAL(&countryOverrideMux);
+        return;
+    }
+
+    const uint32_t now = (uint32_t)millis();
+    MCP2515::ERROR mcpErr = MCP2515::ERROR_FAIL;
+    const bool attempted = canTxMcpSendTaggedGuarded(
+        &out, txEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
+        &countryOverrideCancelGeneration, guardGeneration, mcpErr, nullptr);
+    const bool ok = attempted && mcpErr == MCP2515::ERROR_OK;
+    if (attempted) {
+      if (ok) { mcpTxOk++; mcpTxFailConsecutive = 0; }
+      else { mcpTxFail++; if (mcpTxFailConsecutive < 255) mcpTxFailConsecutive++; }
+    }
+    countryOverrideRecordResult(1u, 0x238u, 0xFFu, out.data,
+                                ok, now);
+}
+
 static bool lab3f8ApPolicyGateOpen(bool selectionActive) {
     uint8_t state4;
     bool valid;
@@ -2515,9 +3369,214 @@ static bool lab3f8AnyOverrideSelected() {
            ulcOff != LAB3F8_STOCK || noConfirm || autoLc293;
 }
 
+static bool visionControlSupported() {
+  return vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology);
+}
+
+static bool visionControlBusSupported(uint8_t bus) {
+  return visionControlBusSupportedPure(activeVehicleProfile, activeVehicleTopology, bus);
+}
+
+static uint8_t visionControlBusSnapshot() {
+  portENTER_CRITICAL(&r79LabMux);
+  const uint8_t bus = visionControlBus;
+  portEXIT_CRITICAL(&r79LabMux);
+  return bus;
+}
+
+static bool visionControlRequestDisabled() {
+  portENTER_CRITICAL(&r79LabMux);
+  const bool disabled = visionControlRequestDisabledState;
+  portEXIT_CRITICAL(&r79LabMux);
+  return disabled;
+}
+
+static void visionControlCacheStock(uint8_t bus, const uint8_t *raw,
+                                    uint32_t epoch, uint32_t receivedMs) {
+  if (!visionControlBusSupported(bus)) return;
+  portENTER_CRITICAL(&r79LabMux);
+  VisionControlStockPure &stock = visionControlStock[bus];
+  stock.valid = true; memcpy(stock.raw, raw, 8u);
+  stock.lastMs = receivedMs; stock.epoch = epoch;
+  stock.profile = activeVehicleProfile; stock.topology = activeVehicleTopology; ++stock.rx;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+
+// Caller holds the shared TX barrier. No lookup of a different physical bus.
+static bool visionControlGateOpen(uint8_t bus, uint32_t now) {
+  if (bus > 1u || !visionControlBusSupported(bus)) return false;
+  bool selected; uint8_t configured; VisionControlStockPure stock;
+  portENTER_CRITICAL(&r79LabMux);
+  selected = visionControlRequestDisabledState; configured = visionControlBus;
+  stock = visionControlStock[bus];
+  portEXIT_CRITICAL(&r79LabMux);
+  bool apValid; uint8_t apState; uint32_t apMs;
+  portENTER_CRITICAL(&stateMux);
+  apValid = dasAutopilotStateValid; apState = dasAutopilotState4; apMs = lastDASStatusMillis;
+  portEXIT_CRITICAL(&stateMux);
+  const uint8_t mask = bus == 0u ? CAN_TX_FRESH_VH : CAN_TX_FRESH_PARTY;
+  const bool transport = !canTxAdministrativeHold && (bus == 0u ? twaiReady : mcpReady) &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, stock.epoch, mask);
+  const bool stockValid = stock.valid && stock.profile == activeVehicleProfile &&
+      stock.topology == activeVehicleTopology;
+  return configured == bus && visionControlGatePure(selected, true, true,
+      transport, apValid, apState, now, apMs, stockValid, stock.lastMs);
+}
+
+static bool visionControlApplyFinal(uint8_t *data, uint8_t bus) {
+  const uint32_t now = (uint32_t)millis();
+  return visionControlApplyPure(data, 8u, visionControlGateOpen(bus, now));
+}
+
+static void visionControlRecordTx(bool changed, uint8_t bus, bool ok) {
+  if (!changed) return;
+  portENTER_CRITICAL(&r79LabMux);
+  if (bus == visionControlBus) {
+    if (ok) ++visionControlTxOk; else ++visionControlTxFail;
+  }
+  portEXIT_CRITICAL(&r79LabMux);
+}
+
+static void visionControlCfgLoad() {
+  Preferences p; uint16_t selection = 0u;
+  if (p.begin("labv3fd", true)) { selection = p.getUShort("selection", 0u); p.end(); }
+  if ((selection & (uint16_t)~0x0101u) != 0u) selection = 0u;
+  uint8_t bus = (uint8_t)(selection >> 8);
+  if (activeVehicleProfile == VEHICLE_MODEL_YL) bus = VISION_CONTROL_CHASSIS_PURE;
+  portENTER_CRITICAL(&r79LabMux);
+  visionControlRequestDisabledState = (selection & 1u) != 0u;
+  visionControlBus = bus;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+
+static bool visionControlApplySettings(bool disabled, uint8_t bus) {
+  if (bus > 1u || !visionControlSupported()) return false;
+  if (activeVehicleProfile == VEHICLE_MODEL_YL) bus = VISION_CONTROL_CHASSIS_PURE;
+  if (!visionControlBusSupported(bus) || !canTxBarrierMutex) return false;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (!visionControlSupported()) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  if (activeVehicleProfile == VEHICLE_MODEL_YL) bus = VISION_CONTROL_CHASSIS_PURE;
+  if (!visionControlBusSupported(bus)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  Preferences p;
+  if (!p.begin("labv3fd", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  const uint16_t selection = (uint16_t)(disabled ? 1u : 0u) | ((uint16_t)bus << 8);
+  const bool saved = p.putUShort("selection", selection) == sizeof(uint16_t);
+  p.end();
+  if (saved) {
+    portENTER_CRITICAL(&r79LabMux);
+    visionControlRequestDisabledState = disabled; visionControlBus = bus;
+    ++visionControlGeneration;
+    portEXIT_CRITICAL(&r79LabMux);
+    mux1CancelPendingLocked();
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return saved;
+}
+
+static bool visionControlApplySelection(bool disabled) {
+  return visionControlApplySettings(disabled, visionControlBusSnapshot());
+}
+
+static bool visionControlApplyBus(uint8_t bus) {
+  return visionControlApplySettings(visionControlRequestDisabled(), bus);
+}
+
+static String getVisionControlStatsJson() {
+  const uint32_t now = (uint32_t)millis();
+  uint32_t epoch = 0u; uint8_t freshMask = 0u;
+  bool readyB = false, readyA = false, held = true;
+  if (canTxBarrierMutex && xSemaphoreTake(canTxBarrierMutex, 0) == pdTRUE) {
+    epoch = canTxBarrierState.epoch; freshMask = canTxBarrierState.freshMask;
+    readyB = twaiReady; readyA = mcpReady; held = canTxAdministrativeHold;
+    xSemaphoreGive(canTxBarrierMutex);
+  }
+  VisionControlStockPure stock = {}; bool disabled; uint8_t bus; uint32_t txOk, txFail;
+  portENTER_CRITICAL(&r79LabMux);
+  disabled = visionControlRequestDisabledState; bus = visionControlBus;
+  if (bus <= 1u) stock = visionControlStock[bus];
+  txOk = visionControlTxOk; txFail = visionControlTxFail;
+  portEXIT_CRITICAL(&r79LabMux);
+  bool apValid; uint8_t apState; uint32_t apMs;
+  portENTER_CRITICAL(&stateMux);
+  apValid = dasAutopilotStateValid; apState = dasAutopilotState4; apMs = lastDASStatusMillis;
+  portEXIT_CRITICAL(&stateMux);
+  const bool supported = visionControlSupported(), busSupported = visionControlBusSupported(bus);
+  const bool valid = stock.valid && stock.epoch == epoch && stock.profile == activeVehicleProfile &&
+      stock.topology == activeVehicleTopology;
+  const uint32_t age = valid ? (uint32_t)(now - stock.lastMs) : UINT32_MAX;
+  const bool fresh = valid && age <= VISION_CONTROL_FRESH_MS_PURE;
+  const bool apFresh = apValid && (uint32_t)(now - apMs) <= VISION_CONTROL_FRESH_MS_PURE;
+  const bool apActive = apValid && apState >= 3u && apState <= 6u;
+  const uint8_t mask = bus == 0u ? CAN_TX_FRESH_VH : CAN_TX_FRESH_PARTY;
+  const bool transport = epoch != 0u && !held && (bus == 0u ? readyB : readyA) &&
+      (freshMask & mask) == mask;
+  const bool gate = visionControlGatePure(disabled, true, busSupported,
+      transport, apValid, apState, now, apMs, valid, stock.lastMs);
+  const int32_t raw = valid ? (int32_t)((stock.raw[6] >> 1) & 1u) : -1;
+  const char *state = !supported || !busSupported ? "UNSUPPORTED" : !disabled ? "OFF" :
+      !fresh || !transport ? "WAIT_STOCK" : !apFresh || !apActive ? "WAIT_AP" : raw == 0 ? "STOCK_ZERO" : "READY";
+  String json; JsonWriterArduino jw(json);
+  jw.boolean("requestDisabled", disabled); jw.u32("bus", bus);
+  jw.boolean("supported", supported); jw.boolean("busSupported", busSupported);
+  jw.boolean("bodySupported", visionControlBusSupported(1u)); jw.boolean("labEnabled", true);
+  jw.boolean("busSelectorVisible", activeVehicleProfile != VEHICLE_MODEL_YL);
+  jw.boolean("apActive", apActive); jw.boolean("apFresh", apFresh);
+  jw.boolean("stockValid", valid); jw.i32("stockBit", raw);
+  jw.u32("rxAgeMs", age); jw.u32("rxCount", stock.rx); jw.boolean("gateOpen", gate);
+  jw.u32("txOk", txOk); jw.u32("txFail", txFail); jw.string("state", state);
+  jw.finish(); return json;
+}
+
+// Retired options cannot affect runtime, even if cleanup cannot open NVS.
+// Remove only their two keys; preserve other lab3f8 data and all namespaces.
+static void retiredLabSpeedSettingsCleanup() {
+    Preferences p;
+    if (!p.begin("lab3f8", false)) return;
+    if (p.isKey("visionDisabled")) (void)p.remove("visionDisabled");
+    if (p.isKey("adaptiveOff")) (void)p.remove("adaptiveOff");
+    p.end();
+}
+
+struct Lab3f8FinalContext {
+    twai_message_t stock;
+    UlcCompositeSelectionPure selected;
+    uint8_t confirmTiming;
+    uint32_t generation, receivedMs;
+    UlcCompositeResultPure result;
+    bool finalComposed = false;
+};
+
+// Called with canTxBarrierMutex held. Rebuild from the received stock frame,
+// Preserve source freshness, cancellation and the surviving field gates.
+static bool lab3f8FinalValidate(twai_message_t *out, void *opaque) {
+    Lab3f8FinalContext &context = *static_cast<Lab3f8FinalContext *>(opaque);
+    if (canTxCancellationGenerationSnapshot(&lab3f8Generation) != context.generation)
+      return false;
+    const uint32_t now = (uint32_t)millis();
+    if ((uint32_t)(now - context.receivedMs) > LAB3F8_FRESH_MS_PURE ||
+        !twaiNonSummonAdmissionOpen()) return false;
+    bool valid; uint8_t state;
+    portENTER_CRITICAL(&stateMux);
+    valid = dasAutopilotStateValid; state = dasAutopilotState4;
+    portEXIT_CRITICAL(&stateMux);
+    const bool ulcSelected = context.selected.blindSpotMode != LAB3F8_STOCK ||
+        context.selected.ulcOffHighwayMode != LAB3F8_STOCK;
+    UlcCompositeGatesPure gates = {
+        dasStateAutosteerPure(valid, state),
+        ulcPolicyApGateOpenPure(ulcSelected, valid, state),
+        ulcNoConfirmGateOpenWithTimingPure(activeProfileUlcNoConfirmSupported(),
+            context.selected.confirmFreeEnabled, context.confirmTiming, valid, state),
+        labMenuEnabled && summonHeartbeatOverrideSupported()};
+    *out = context.stock; out->flags = 0;
+    context.result = ulcCompose3f8Pure(out->data, out->data_length_code, context.selected, gates);
+    context.finalComposed = context.result.changed;
+    return context.result.changed;
+}
+
 static void injectDriverAssistControl(const twai_message_t &src) {
     lab3f8ObserveCanB(src);
-    if (src.data_length_code < 8) return;
+    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr)) return;
+    const uint32_t generation = canTxCancellationGenerationSnapshot(&lab3f8Generation);
 
     UlcCompositeSelectionPure selected = {};
     uint8_t confirmTiming;
@@ -2528,6 +3587,8 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     selected.blindSpotMode = lab3f8UlcBlindMode;
     selected.ulcOffHighwayMode = lab3f8UlcOffHighwayMode;
     selected.confirmFreeEnabled = ulcNoConfirmEnabled;
+    selected.summonHeartbeatOverrideEnabled = summonHeartbeatOverrideEnabled;
+    selected.summonHeartbeatValue = summonHeartbeatOverrideValue;
     confirmTiming = ulcNoConfirmTimingMode;
     portEXIT_CRITICAL(&lab3f8Mux);
 
@@ -2536,7 +3597,8 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     const bool offHighwaySelected =
         selected.ulcOffHighwayMode != ULC_COMPOSITE_STOCK_PURE;
     if (!selected.alcOffHighwayEnabled && !blindSelected &&
-        !offHighwaySelected && !selected.confirmFreeEnabled) return;
+        !offHighwaySelected && !selected.confirmFreeEnabled &&
+        !selected.summonHeartbeatOverrideEnabled) return;
 
     bool dasValid;
     uint8_t dasState;
@@ -2545,12 +3607,13 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     dasState = dasAutopilotState4;
     portEXIT_CRITICAL(&stateMux);
     const bool ulcSelected = blindSelected || offHighwaySelected;
-    const UlcCompositeGatesPure gates = {
+    UlcCompositeGatesPure gates = {
         dasStateAutosteerPure(dasValid, dasState),
         ulcPolicyApGateOpenPure(ulcSelected, dasValid, dasState),
         ulcNoConfirmGateOpenWithTimingPure(
             activeProfileUlcNoConfirmSupported(),
-            selected.confirmFreeEnabled, confirmTiming, dasValid, dasState)};
+            selected.confirmFreeEnabled, confirmTiming, dasValid, dasState),
+        labMenuEnabled && summonHeartbeatOverrideSupported()};
 
     if (selected.alcOffHighwayEnabled && !gates.alcAutosteerOpen) {
         portENTER_CRITICAL(&lab3f8Mux);
@@ -2569,12 +3632,16 @@ static void injectDriverAssistControl(const twai_message_t &src) {
         ulcNoConfirmGateBlockedB++;
         portEXIT_CRITICAL(&lab3f8Mux);
     }
+    if (selected.summonHeartbeatOverrideEnabled &&
+        !gates.summonHeartbeatOverrideOpen) {
+        portENTER_CRITICAL(&lab3f8Mux);
+        summonHeartbeatBlocked++;
+        portEXIT_CRITICAL(&lab3f8Mux);
+    }
 
     twai_message_t out = src;
     out.flags = 0;
-    const uint8_t stockBlindBefore =
-        (uint8_t)readBitsLE(out.data, 52, 2);
-    const UlcCompositeResultPure result =
+    UlcCompositeResultPure result =
         ulcCompose3f8Pure(out.data, out.data_length_code, selected, gates);
     if (!result.changed) return;
 
@@ -2586,24 +3653,21 @@ static void injectDriverAssistControl(const twai_message_t &src) {
           ulcNoConfirmTxFail++;
           ulcNoConfirmTxBFail++;
         }
+        if (result.summonHeartbeatApplied) summonHeartbeatTxFail++;
         portEXIT_CRITICAL(&lab3f8Mux);
         return;
     }
 
     const uint32_t now = (uint32_t)millis();
-    const uint32_t txEpoch = canTxEpochSnapshot();
-    const esp_err_t err = canTxTwaiTransmit(&out, txEpoch);
+    const uint32_t txEpoch = lab3f8FrameRxEpoch;
+    Lab3f8FinalContext context = {src, selected, confirmTiming, generation, lab3f8FrameRxMs, result};
+    const esp_err_t err = canTxTwaiTransmitValidated(
+        &out, txEpoch, CAN_TX_FRESH_BOTH, lab3f8FinalValidate, &context);
+    // Admission rejection counts initially prepared requests. Once final
+    // composition succeeds, transport results belong only to surviving fields.
+    if (context.finalComposed) result = context.result;
     researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code, out.data, err == ESP_OK);
-    const uint8_t actualTxBlind = (uint8_t)readBitsLE(out.data, 52, 2);
     portENTER_CRITICAL(&lab3f8Mux);
-    lab3f8LastTxValid = true;
-    lab3f8LastTxBlind = actualTxBlind;
-    lab3f8LastTxStockBlind = stockBlindBefore;
-    lab3f8LastTxSelectedBlind = selected.blindSpotMode;
-    lab3f8LastTxBlindChanged = result.blindSpotChanged;
-    lab3f8LastTxResult = (err == ESP_OK) ? 1 : 2;
-    lab3f8LastTxMs = now;
-    lab3f8LastTxBit56 = getBit(out.data, 56);
     if (err == ESP_OK) lab3f8TxOk++;
     else               lab3f8TxFail++;
     if (result.ulcOffHighwayChanged) {
@@ -2619,35 +3683,43 @@ static void injectDriverAssistControl(const twai_message_t &src) {
       if (err == ESP_OK) { ulcNoConfirmTxOk++; ulcNoConfirmTxBOk++; }
       else { ulcNoConfirmTxFail++; ulcNoConfirmTxBFail++; }
     }
+    if (result.summonHeartbeatApplied) {
+      if (err == ESP_OK) {
+        summonHeartbeatLastAppliedValid = true;
+        summonHeartbeatLastAppliedValue =
+            (uint8_t)((out.data[0] >> 2) & 0x03u);
+        summonHeartbeatLastAppliedMs = now;
+        summonHeartbeatAppliedCount++;
+      } else {
+        summonHeartbeatTxFail++;
+      }
+    }
     portEXIT_CRITICAL(&lab3f8Mux);
 }
 
-static void injectUlcSnooze3fdMux1(const twai_message_t &src) {
+static bool injectUlcSnooze3fdMux1(const twai_message_t &src) {
     const uint32_t now = (uint32_t)millis();
-    if (!ulcSnoozeRequestActive(now) || !autoBlinkerNOAGateOpen(now)) return;
+    if (!ulcSnoozeRequestActive(now) || !autoBlinkerNOAGateOpen(now)) return false;
 
     twai_message_t out = src;
     out.flags = 0;
     if (getBit(out.data, 36)) {
       ulcSnoozeFinishRequest();
-      return;
+      return false;
     }
     setBit(out.data, 36, true); // UI_ulcSnooze
-    // If the persisted DMS/NAG experiment is active, every T-2CAN-generated
-    // mux1 clone must preserve the bit43=0 overlay; otherwise this independent
-    // ULC-snooze TX could immediately reassert the stock bit43=1 value.
-    r79DmsNagLabApply(out.data);
+    // DMS is composed only inside final enqueue admission.
 
     if (!twaiNonSummonAdmissionOpen()) {
       portENTER_CRITICAL(&ulcSnoozeMux);
       ulcSnoozeTxFail++;
       portEXIT_CRITICAL(&ulcSnoozeMux);
       sumTxFail++;
-      return;
+      return false;
     }
 
     const uint32_t txEpoch = canTxEpochSnapshot();
-    const esp_err_t err = canTxTwaiTransmit(&out, txEpoch);
+    const esp_err_t err = mux1DisplayTransmit(&out, txEpoch, CAN_TX_FRESH_BOTH, false);
     if (err == ESP_OK) sumTxOk++;
     else               sumTxFail++;
 
@@ -2656,6 +3728,7 @@ static void injectUlcSnooze3fdMux1(const twai_message_t &src) {
     else               ulcSnoozeTxFail++;
     portEXIT_CRITICAL(&ulcSnoozeMux);
     if (err == ESP_OK) ulcSnoozeFinishRequest();
+    return true; // The ULC clone owns this stock frame even on enqueue failure.
 }
 
 // ── TLSSC Restore : 0x331 DAS_autopilotConfig (Standard 3/Y only) ──
@@ -2688,37 +3761,104 @@ static void doInjectTlsscRestore(const twai_message_t &src) {
 // ── TLSSC : 0x3FD mux0 bit38/39 ──
 // TLSSC has its own AP-active gate. It is independent of the confirmed Summon
 // session monitor and the v3.6 R79 default-on/manual-suspend policy.
-static uint8_t r79BlockReasonForRuntimeState(uint8_t state) {
-  switch (state) {
-    case R79_TX_STATE_SUSPENDED: return R79LAB_BLOCK_MANUAL;
-    case R79_TX_STATE_WAIT_TEMPLATE: return R79LAB_BLOCK_TEMPLATE;
-    case R79_TX_STATE_CAN_OFFLINE: return R79LAB_BLOCK_CAN_OFFLINE;
-    case R79_TX_STATE_ADMIN_HOLD: return R79LAB_BLOCK_ADMIN_HOLD;
-    default: return R79LAB_BLOCK_NONE;
-  }
+static bool r79FastReactiveGateOpen();
+
+static esp_err_t r79ApGateTransmitGuarded(
+    const twai_message_t *msg, uint16_t waitMs, uint32_t expectedGeneration) {
+  if (!msg) return ESP_ERR_INVALID_ARG;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
+    return ESP_ERR_INVALID_STATE;
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (r79ApGateGenerationSnapshot() == expectedGeneration &&
+      r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == expectedGeneration)
+    {
+      twai_message_t finalOut = *msg;
+      r79DmsApplyFinal(finalOut.data);
+
+      const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
+      if (r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == expectedGeneration)
+        err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+      visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
+
+      canBTraceRecordTx(&finalOut, err);
+    }
+  xSemaphoreGive(canTxBarrierMutex);
+  return err;
 }
 
-static void r79LabRecordSuppressedState(const R79RuntimeStatus &status, uint32_t now) {
-  portENTER_CRITICAL(&r79LabMux);
-  r79LabLastBlockReason = r79BlockReasonForRuntimeState(status.state);
-  r79LabLastBlockMs = now;
-  if (status.state == R79_TX_STATE_SUSPENDED) r79LabManualSuspendSkip++;
-  else if (status.state == R79_TX_STATE_WAIT_TEMPLATE) r79LabNoTemplateSkip++;
-  else if (status.state == R79_TX_STATE_CAN_OFFLINE) r79LabCanOfflineSkip++;
-  else if (status.state == R79_TX_STATE_ADMIN_HOLD) r79LabAdminHoldSkip++;
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
-static esp_err_t r79LabDirectTwaiTransmit(const twai_message_t *msg) {
+static esp_err_t r79LabDirectTwaiTransmit(
+    const twai_message_t *msg, uint16_t waitMs, uint32_t apGeneration) {
   if (!msg) return ESP_ERR_INVALID_ARG;
   if (canTxAdministrativeHold || !twaiReady) {
     canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
     return ESP_ERR_INVALID_STATE;
   }
-  const esp_err_t err = twai_transmit(
-      msg, pdMS_TO_TICKS(R79_FIXED_FAST_WAIT_MS_PURE));
-  canBTraceRecordTx(msg, err);
+  const esp_err_t err = r79ApGateTransmitGuarded(msg, waitMs, apGeneration);
   return err;
+}
+
+static esp_err_t r79LabDirectTwaiTransmitGuarded(
+    const twai_message_t *msg, uint16_t waitMs,
+    const volatile uint32_t *generation, uint32_t expectedGeneration,
+    uint32_t apGeneration) {
+  if (!msg || !generation) return ESP_ERR_INVALID_ARG;
+  if (canTxAdministrativeHold) {
+    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
+    return ESP_ERR_INVALID_STATE;
+  }
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
+    return ESP_ERR_INVALID_STATE;
+  }
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (!canTxAdministrativeHold && twaiReady &&
+      canTxCancellationGenerationSnapshot(generation) == expectedGeneration &&
+      r79ApGateGenerationSnapshot() == apGeneration &&
+      r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == apGeneration)
+    {
+      twai_message_t finalOut = *msg;
+      r79DmsApplyFinal(finalOut.data);
+
+      const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
+      if (r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == apGeneration &&
+          canTxCancellationGenerationSnapshot(generation) == expectedGeneration)
+        err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+      visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
+
+      canBTraceRecordTx(&finalOut, err);
+    }
+  xSemaphoreGive(canTxBarrierMutex);
+  return err;
+}
+
+static bool r79Mode1PostMux2GenerationCurrent(uint32_t expectedGeneration) {
+  return canTxCancellationGenerationSnapshot(
+      &r79Mode1PostMux2Generation) == expectedGeneration;
+}
+
+// Immediate timeout recovery shares the authorization barrier with enqueue.
+// A configuration cancellation cannot clear unrelated queued traffic.
+static bool r79ImmediateClearTransmitQueueGuarded(uint32_t expectedApGeneration) {
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
+    return false;
+  const bool allowed = !canTxAdministrativeHold && twaiReady &&
+      r79ApGateGenerationSnapshot() == expectedApGeneration &&
+      r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == expectedApGeneration;
+  const bool cleared = allowed && twai_clear_transmit_queue() == ESP_OK;
+  xSemaphoreGive(canTxBarrierMutex);
+  return cleared;
+}
+
+static bool r79Mode1PostMux2ClearTransmitQueueGuarded(
+    uint32_t expectedGeneration) {
+  if (canTxAdministrativeHold || !canTxBarrierMutex ||
+      xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return false;
+  const bool allowed = !canTxAdministrativeHold && twaiReady &&
+      r79FastReactiveGateOpen() &&
+      r79Mode1PostMux2GenerationCurrent(expectedGeneration);
+  const bool cleared = allowed && twai_clear_transmit_queue() == ESP_OK;
+  xSemaphoreGive(canTxBarrierMutex);
+  return cleared;
 }
 
 static void r79RetryCancel() {
@@ -2727,156 +3867,58 @@ static void r79RetryCancel() {
   r79RetryIndex = 0;
   r79RetryOriginKind = R79LAB_TX_NONE;
   r79RetryDueMs = 0;
+  r79RetryGeneration = 0u;
   portEXIT_CRITICAL(&r79LabMux);
 }
 
-static void r79RetrySchedule(uint8_t originKind, uint32_t now) {
+static void r79RetrySchedule(
+    uint8_t originKind, uint32_t now, uint32_t expectedGeneration = 0u) {
   const uint16_t delayMs = r79RetryDelayMsPure(0);
   if (!delayMs) return;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return;
+  const bool current = r79FastReactiveGateOpen() &&
+      (originKind == R79LAB_TX_IMMEDIATE
+          ? r79ApGateGenerationSnapshot() == expectedGeneration
+          : r79Mode1PostMux2GenerationCurrent(expectedGeneration));
+  if (!current) { xSemaphoreGive(canTxBarrierMutex); return; }
   portENTER_CRITICAL(&r79LabMux);
   r79RetryPending = true;
   r79RetryIndex = 0;
   r79RetryOriginKind = originKind;
   r79RetryDueMs = now + delayMs;
+  r79RetryGeneration = expectedGeneration;
   r79RetryScheduled++;
   portEXIT_CRITICAL(&r79LabMux);
+  xSemaphoreGive(canTxBarrierMutex);
 }
 
 // Minimal authorization gate for the d2 receive-synchronized fast path. This
 // deliberately preserves the existing v3.6 fail-open policy: unknown/stale
 // gear or DAS does not suppress R79. Only the already-established manual D/R
 // latch blocks TX, while AP or confirmed Summon wins exactly as before.
-static uint8_t r79FastReactiveBlockReason() {
-  if (canTxAdministrativeHold) return R79LAB_BLOCK_ADMIN_HOLD;
-  if (!twaiReady) return R79LAB_BLOCK_CAN_OFFLINE;
+static bool r79FastReactiveGateOpen() {
+  if (canTxAdministrativeHold || !twaiReady) return false;
 
   bool apActive = false;
   bool summonConfirmed = false;
+  bool allowManualDriving = false;
   R79ManualSuppressionPure manual = {};
   portENTER_CRITICAL(&stateMux);
   apActive = dasStateApActivePure(dasAutopilotStateValid, dasAutopilotState4);
   summonConfirmed = gateSummoning;
   manual = r79ManualSuppression;
+  allowManualDriving = r79ApGateConfig.allowManualDriving;
+  const bool apGateAllowed = r79ApGateDecisionLocked((uint32_t)millis()).allowed;
   portEXIT_CRITICAL(&stateMux);
 
-  const R79TxDecisionPure decision = r79TxDecisionPure(apActive, summonConfirmed, manual);
-  return decision.txEnabled ? R79LAB_BLOCK_NONE : R79LAB_BLOCK_MANUAL;
-}
-
-static void r79RecordTransportBlocked(uint8_t reason, uint32_t now, bool countFast) {
-  portENTER_CRITICAL(&r79LabMux);
-  if (countFast) r79FastEchoBlocked++;
-  r79LabLastBlockReason = reason;
-  r79LabLastBlockMs = now;
-  if (reason == R79LAB_BLOCK_MANUAL) r79LabManualSuspendSkip++;
-  else if (reason == R79LAB_BLOCK_CAN_OFFLINE) r79LabCanOfflineSkip++;
-  else if (reason == R79LAB_BLOCK_ADMIN_HOLD) r79LabAdminHoldSkip++;
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
-static void r79FastReactiveRecordBlocked(uint8_t reason, uint32_t now) {
-  r79RecordTransportBlocked(reason, now, true);
-}
-
-static void r79FastReactiveRecordLatency(uint32_t latencyUs) {
-  portENTER_CRITICAL(&r79LabMux);
-  r79FastEchoLatencyLastUs = latencyUs;
-  if (r79FastEchoLatencySamples == 0 || latencyUs < r79FastEchoLatencyMinUs)
-    r79FastEchoLatencyMinUs = latencyUs;
-  if (latencyUs > r79FastEchoLatencyMaxUs) r79FastEchoLatencyMaxUs = latencyUs;
-  r79FastEchoLatencyTotalUs += latencyUs;
-  r79FastEchoLatencySamples++;
-  if (latencyUs < 100U) r79FastEchoLt100Us++;
-  else if (latencyUs < 250U) r79FastEchoLt250Us++;
-  else if (latencyUs < 1000U) r79FastEchoLt1000Us++;
-  else r79FastEchoGe1000Us++;
-  portEXIT_CRITICAL(&r79LabMux);
+  const R79TxDecisionPure decision = r79TxDecisionPure(apActive, summonConfirmed, manual, allowManualDriving);
+  return decision.txEnabled && apGateAllowed;
 }
 
 static void r79FastReactiveRecordTxState(esp_err_t err, uint32_t now) {
+  if (err != ESP_OK) return;
   portENTER_CRITICAL(&r79LabMux);
-  if (err == ESP_OK) {
-    r79LabLastTxMs = now;
-    r79LabLastBlockReason = R79LAB_BLOCK_NONE;
-    r79LabLastBlockMs = 0;
-  } else {
-    if (canTxAdministrativeHold) {
-      r79LabLastBlockReason = R79LAB_BLOCK_ADMIN_HOLD;
-      r79LabAdminHoldSkip++;
-    } else if (!twaiReady) {
-      r79LabLastBlockReason = R79LAB_BLOCK_CAN_OFFLINE;
-      r79LabCanOfflineSkip++;
-    } else {
-      r79LabLastBlockReason = R79LAB_BLOCK_TX;
-    }
-    r79LabLastBlockMs = now;
-  }
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
-static void r79FastReactiveArmSuccessProbe(int64_t rxDequeueUs, int64_t requestUs,
-                                             uint32_t acceptedSerialBefore,
-                                             uint32_t acceptedSerial,
-                                             bool pipelineWasIdle) {
-  portENTER_CRITICAL(&r79LabMux);
-  if (r79FastSuccessPending) r79FastSuccessAmbiguous++;
-  // The probe is valid only when the application TX pipeline was observed idle
-  // and this Fast Echo was exactly the next accepted application enqueue. This
-  // closes the tiny cross-task race between the pre-enqueue idle snapshot and
-  // twai_transmit().
-  if (!pipelineWasIdle || acceptedSerial == 0 ||
-      acceptedSerial != (uint32_t)(acceptedSerialBefore + 1U)) {
-    r79FastSuccessAmbiguous++;
-    r79FastSuccessPending = false;
-    r79FastSuccessAcceptedSerial = 0;
-  } else {
-    r79FastSuccessPending = true;
-    r79FastSuccessAcceptedSerial = acceptedSerial;
-    r79FastSuccessRxDequeueUs = rxDequeueUs;
-    r79FastSuccessRequestUs = requestUs;
-  }
-  portEXIT_CRITICAL(&r79LabMux);
-}
-
-static void r79FastReactiveObserveTxSuccessAlert(int64_t observedUs,
-                                                 uint32_t acceptedSerialNow) {
-  bool pending = false;
-  uint32_t expectedSerial = 0;
-  int64_t rxUs = 0, reqUs = 0;
-  portENTER_CRITICAL(&r79LabMux);
-  pending = r79FastSuccessPending;
-  expectedSerial = r79FastSuccessAcceptedSerial;
-  rxUs = r79FastSuccessRxDequeueUs;
-  reqUs = r79FastSuccessRequestUs;
-  if (pending) {
-    r79FastSuccessPending = false;
-    r79FastSuccessAcceptedSerial = 0;
-  }
-  portEXIT_CRITICAL(&r79LabMux);
-  if (!pending) return;
-
-  if (expectedSerial == 0 || acceptedSerialNow != expectedSerial ||
-      observedUs < rxUs || observedUs < reqUs) {
-    portENTER_CRITICAL(&r79LabMux);
-    r79FastSuccessAmbiguous++;
-    portEXIT_CRITICAL(&r79LabMux);
-    return;
-  }
-
-  const uint64_t rxDelta64 = (uint64_t)(observedUs - rxUs);
-  const uint64_t reqDelta64 = (uint64_t)(observedUs - reqUs);
-  const uint32_t rxDelta = rxDelta64 > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (uint32_t)rxDelta64;
-  const uint32_t reqDelta = reqDelta64 > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (uint32_t)reqDelta64;
-  portENTER_CRITICAL(&r79LabMux);
-  r79FastSuccessLastRxUs = rxDelta;
-  if (r79FastSuccessSamples == 0 || rxDelta < r79FastSuccessMinRxUs) r79FastSuccessMinRxUs = rxDelta;
-  if (rxDelta > r79FastSuccessMaxRxUs) r79FastSuccessMaxRxUs = rxDelta;
-  r79FastSuccessTotalRxUs += rxDelta;
-  r79FastSuccessLastReqUs = reqDelta;
-  if (r79FastSuccessSamples == 0 || reqDelta < r79FastSuccessMinReqUs) r79FastSuccessMinReqUs = reqDelta;
-  if (reqDelta > r79FastSuccessMaxReqUs) r79FastSuccessMaxReqUs = reqDelta;
-  r79FastSuccessTotalReqUs += reqDelta;
-  r79FastSuccessSamples++;
+  r79LabLastTxMs = now;
   portEXIT_CRITICAL(&r79LabMux);
 }
 
@@ -2894,13 +3936,16 @@ static bool r79CopyLatestStock(uint8_t out[8]) {
 }
 
 static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
-                               uint8_t txKind, esp_err_t *errOut = nullptr) {
+                               uint8_t txKind, esp_err_t *errOut,
+                               uint16_t waitMs,
+                               const volatile uint32_t *generation,
+                               uint32_t expectedGeneration) {
+  const uint32_t apGeneration = r79ApGateGenerationSnapshot();
   if (errOut) *errOut = ESP_ERR_INVALID_ARG;
   if (!stock) return false;
 
   const R79RuntimeStatus status = r79RuntimeStatusSnapshot(now);
   if (status.state != R79_TX_STATE_ACTIVE) {
-    r79LabRecordSuppressedState(status, now);
     if (errOut) *errOut = ESP_ERR_INVALID_STATE;
     return false;
   }
@@ -2910,33 +3955,22 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
   out.data_length_code = 8;
   out.flags = 0;
   memcpy(out.data, stock, 8);
-  if (readMuxID(out.data) != 1 || !r79LabApplySelectedBits(out.data)) return false;
-
+  if (readMuxID(out.data) != 1) return false;
+  uint8_t bit18Policy;
   portENTER_CRITICAL(&r79LabMux);
-  r79LabAppliedFrames++;
+  bit18Policy = r79Bit18Policy;
   portEXIT_CRITICAL(&r79LabMux);
+  r79FixedApplyBitsPure(out.data, bit18Policy, r79Hw3Active());
 
-  const esp_err_t err = r79LabDirectTwaiTransmit(&out);
+  const esp_err_t err = generation
+      ? r79LabDirectTwaiTransmitGuarded(
+          &out, waitMs, generation, expectedGeneration, apGeneration)
+      : r79LabDirectTwaiTransmit(&out, waitMs, apGeneration);
   if (errOut) *errOut = err;
   r79LabRecordTxResult(err == ESP_OK, out, txKind);
 
   portENTER_CRITICAL(&r79LabMux);
-  if (err == ESP_OK) {
-    r79LabLastTxMs = now;
-    r79LabLastBlockReason = R79LAB_BLOCK_NONE;
-    r79LabLastBlockMs = 0;
-  } else {
-    if (canTxAdministrativeHold) {
-      r79LabLastBlockReason = R79LAB_BLOCK_ADMIN_HOLD;
-      r79LabAdminHoldSkip++;
-    } else if (!twaiReady) {
-      r79LabLastBlockReason = R79LAB_BLOCK_CAN_OFFLINE;
-      r79LabCanOfflineSkip++;
-    } else {
-      r79LabLastBlockReason = R79LAB_BLOCK_TX;
-    }
-    r79LabLastBlockMs = now;
-  }
+  if (err == ESP_OK) r79LabLastTxMs = now;
   portEXIT_CRITICAL(&r79LabMux);
   return err == ESP_OK;
 }
@@ -2946,10 +3980,18 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
 // the newest R79 template once immediately. If it still fails, schedule the
 // bounded +5/+15/+30 ms recovery sequence. Queue flush is never used in NORMAL
 // or PARK_STANDBY.
-static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now,
-                                 uint8_t txKind) {
+static bool r79LabTransmitShadow(const uint8_t *stock, uint8_t txKind,
+                                 uint32_t hardDeadlineMs,
+                                 uint32_t expectedGeneration) {
+  const uint32_t now = (uint32_t)millis();
+  if (!r79Mode1PostMux2GenerationCurrent(expectedGeneration)) return false;
+  if (r79FixedDeadlineExpiredPure(now, hardDeadlineMs)) return false;
+  const uint16_t waitMs = r79FixedDeadlineWaitBudgetPure(
+      now, hardDeadlineMs, R79_FIXED_FAST_WAIT_MS_PURE);
   esp_err_t err = ESP_ERR_INVALID_ARG;
-  if (r79LabTransmitOnce(stock, now, txKind, &err)) {
+  if (r79LabTransmitOnce(
+          stock, now, txKind, &err, waitMs,
+          &r79Mode1PostMux2Generation, expectedGeneration)) {
     r79RetryCancel();
     return true;
   }
@@ -2957,17 +3999,28 @@ static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now,
   uint8_t priority = summonPriorityStateSnapshot(now);
   if (!summonPriorityAllowsR79FlushPure(priority)) return false;
 
-  if (err == ESP_ERR_TIMEOUT && !canTxAdministrativeHold && twaiReady) {
+  uint32_t retryNow = (uint32_t)millis();
+  if (err == ESP_ERR_TIMEOUT &&
+      !r79FixedDeadlineExpiredPure(retryNow, hardDeadlineMs) &&
+      r79Mode1PostMux2GenerationCurrent(expectedGeneration) &&
+      !canTxAdministrativeHold && twaiReady) {
     portENTER_CRITICAL(&r79LabMux);
     r79EmergencyQueueFlushCount++;
     portEXIT_CRITICAL(&r79LabMux);
 
-    if (twai_clear_transmit_queue() == ESP_OK) {
+    if (r79Mode1PostMux2ClearTransmitQueueGuarded(expectedGeneration)) {
       uint8_t latest[8] = {};
       if (!r79CopyLatestStock(latest)) memcpy(latest, stock, 8);
       esp_err_t flushRetryErr = ESP_ERR_INVALID_ARG;
-      const bool flushRetryOk = r79LabTransmitOnce(
-          latest, (uint32_t)millis(), R79LAB_TX_RETRY, &flushRetryErr);
+      retryNow = (uint32_t)millis();
+      const bool flushRetryOk =
+          !r79FixedDeadlineExpiredPure(retryNow, hardDeadlineMs) &&
+          r79Mode1PostMux2GenerationCurrent(expectedGeneration) &&
+          r79LabTransmitOnce(
+              latest, retryNow, R79LAB_TX_RETRY, &flushRetryErr,
+              r79FixedDeadlineWaitBudgetPure(
+                  retryNow, hardDeadlineMs, R79_FIXED_FAST_WAIT_MS_PURE),
+              &r79Mode1PostMux2Generation, expectedGeneration);
       portENTER_CRITICAL(&r79LabMux);
       if (flushRetryOk) r79FlushTriggeredRetryOk++;
       else r79FlushTriggeredRetryFail++;
@@ -2980,11 +4033,15 @@ static bool r79LabTransmitShadow(const uint8_t *stock, uint32_t now,
     }
   }
 
-  const uint32_t retryNow = (uint32_t)millis();
+  retryNow = (uint32_t)millis();
   priority = summonPriorityStateSnapshot(retryNow);
   if (summonPriorityAllowsR79FlushPure(priority) &&
-      r79RuntimeStatusSnapshot(retryNow).state == R79_TX_STATE_ACTIVE) {
-    r79RetrySchedule(txKind, retryNow);
+      r79Mode1PostMux2GenerationCurrent(expectedGeneration) &&
+      r79RuntimeStatusSnapshot(retryNow).state == R79_TX_STATE_ACTIVE &&
+      r79FixedDeadlineWaitBudgetPure(
+          retryNow, hardDeadlineMs, r79RetryDelayMsPure(0)) ==
+          r79RetryDelayMsPure(0)) {
+    r79RetrySchedule(txKind, retryNow, expectedGeneration);
   }
   return false;
 }
@@ -2993,14 +4050,18 @@ static void r79LabRetryTick() {
   const uint32_t now = (uint32_t)millis();
   bool pending;
   uint8_t retryIndex, originKind;
-  uint32_t dueMs;
+  uint32_t dueMs, retryGeneration, hardDeadlineMs = 0u;
   portENTER_CRITICAL(&r79LabMux);
   pending = r79RetryPending;
   retryIndex = r79RetryIndex;
   originKind = r79RetryOriginKind;
   dueMs = r79RetryDueMs;
+  retryGeneration = r79RetryGeneration;
   portEXIT_CRITICAL(&r79LabMux);
   if (!pending || (int32_t)(now - dueMs) < 0) return;
+  if (originKind == R79LAB_TX_IMMEDIATE && r79ApGateGenerationSnapshot() != retryGeneration) {
+    r79RetryCancel(); return;
+  }
 
   const uint8_t priority = summonPriorityStateSnapshot(now);
   const R79RuntimeStatus runtime = r79RuntimeStatusSnapshot(now);
@@ -3011,15 +4072,21 @@ static void r79LabRetryTick() {
   }
 
   if (originKind == R79LAB_TX_PERIODIC) {
+    if (!r79Mode1PostMux2GenerationCurrent(retryGeneration)) {
+      r79RetryCancel();
+      return;
+    }
     bool safe = false;
     portENTER_CRITICAL(&r79LabMux);
     safe = r79FixedQuietRetrySafePure(r79FixedQuietState, now);
+    hardDeadlineMs = r79FixedQuietHardDeadlinePure(r79FixedQuietState);
     if (!safe) r79QuietGuardSkip++;
     if (!safe) {
       r79RetryPending = false;
       r79RetryIndex = 0;
       r79RetryOriginKind = R79LAB_TX_NONE;
       r79RetryDueMs = 0;
+      r79RetryGeneration = 0u;
     }
     portEXIT_CRITICAL(&r79LabMux);
     if (!safe) return;
@@ -3032,85 +4099,101 @@ static void r79LabRetryTick() {
   }
 
   esp_err_t err = ESP_ERR_INVALID_ARG;
+  const uint32_t attemptNow = (uint32_t)millis();
+  uint16_t waitMs = R79_FIXED_FAST_WAIT_MS_PURE;
+  if (originKind == R79LAB_TX_PERIODIC) {
+    if (r79FixedDeadlineExpiredPure(attemptNow, hardDeadlineMs)) {
+      portENTER_CRITICAL(&r79LabMux);
+      r79QuietGuardSkip++;
+      r79RetryPending = false;
+      r79RetryIndex = 0;
+      r79RetryOriginKind = R79LAB_TX_NONE;
+      r79RetryDueMs = 0;
+      r79RetryGeneration = 0u;
+      portEXIT_CRITICAL(&r79LabMux);
+      return;
+    }
+    waitMs = r79FixedDeadlineWaitBudgetPure(
+        attemptNow, hardDeadlineMs, R79_FIXED_FAST_WAIT_MS_PURE);
+  }
   portENTER_CRITICAL(&r79LabMux);
-  r79LastRetryMs = now;
-  r79LabLastAttemptMs = now;
+  r79LastRetryMs = attemptNow;
   portEXIT_CRITICAL(&r79LabMux);
-  const bool ok = r79LabTransmitOnce(stock, now, R79LAB_TX_RETRY, &err);
+  const bool ok = r79LabTransmitOnce(
+      stock, attemptNow, R79LAB_TX_RETRY, &err, waitMs,
+      originKind == R79LAB_TX_PERIODIC ? &r79Mode1PostMux2Generation : &r79ApGateGeneration,
+      retryGeneration);
 
   if (ok) {
     portENTER_CRITICAL(&r79LabMux);
     r79RetryTxOk++;
-    if (originKind == R79LAB_TX_PERIODIC) r79LabLastPeriodicTxMs = now;
     portEXIT_CRITICAL(&r79LabMux);
     r79RetryCancel();
     return;
   }
 
   const uint8_t nextIndex = (uint8_t)(retryIndex + 1U);
+  const uint16_t nextDelayMs = r79RetryDelayMsPure(nextIndex);
+  const uint32_t retryNow = (uint32_t)millis();
+  const bool deadlineAllowsRetry = originKind != R79LAB_TX_PERIODIC ||
+      r79FixedDeadlineWaitBudgetPure(
+          retryNow, hardDeadlineMs, nextDelayMs) == nextDelayMs;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return;
+  const bool generationCurrent = r79FastReactiveGateOpen() &&
+      (originKind == R79LAB_TX_PERIODIC
+          ? r79Mode1PostMux2GenerationCurrent(retryGeneration)
+          : r79ApGateGenerationSnapshot() == retryGeneration);
+  if (!generationCurrent) { xSemaphoreGive(canTxBarrierMutex); return; }
   portENTER_CRITICAL(&r79LabMux);
+  if (!r79RetryPending || r79RetryGeneration != retryGeneration) {
+    portEXIT_CRITICAL(&r79LabMux); xSemaphoreGive(canTxBarrierMutex); return;
+  }
   r79RetryTxFail++;
-  if (nextIndex >= 3U) {
+  if (nextIndex >= 3U || !deadlineAllowsRetry) {
     r79RetryExhausted++;
     r79RetryPending = false;
     r79RetryIndex = 0;
     r79RetryOriginKind = R79LAB_TX_NONE;
     r79RetryDueMs = 0;
+    r79RetryGeneration = 0u;
   } else {
-    const uint16_t delayMs = r79RetryDelayMsPure(nextIndex);
     r79RetryIndex = nextIndex;
-    r79RetryDueMs = now + delayMs;
+    r79RetryDueMs = retryNow + nextDelayMs;
     r79RetryScheduled++;
   }
   portEXIT_CRITICAL(&r79LabMux);
+  xSemaphoreGive(canTxBarrierMutex);
 }
 
-// v3.7 production transport. There is no transport, wait-mode or scheduler
-// selector in this path: accepted stock MUX1 is echoed with a bounded 2 ms
-// enqueue wait, and accepted stock MUX2 owns one quiet-window slot at +150 ms.
-static bool r79FixedFastEcho(const twai_message_t &src, int64_t rxDequeueUs) {
+// Mode 1 production transport. Accepted stock MUX1 uses the selected historical
+// initial enqueue wait (zero-wait Fast Echo or bounded 2 ms Wait). Recovery
+// remains bounded, and accepted stock MUX2 owns one configurable quiet slot.
+static bool r79FixedFastEcho(const twai_message_t &src) {
   if (src.data_length_code < 8 || readMuxID(src.data) != 1u) return false;
+  const uint32_t apGeneration = r79ApGateGenerationSnapshot();
   const uint32_t now = (uint32_t)millis();
-  const uint8_t blockReason = r79FastReactiveBlockReason();
-  if (blockReason != R79LAB_BLOCK_NONE) {
-    r79FastReactiveRecordBlocked(blockReason, now);
-    return false;
-  }
+  if (!r79FastReactiveGateOpen()) return false;
 
-  uint8_t bit18Policy;
+  uint8_t bit18Policy, waitMode;
   portENTER_CRITICAL(&r79LabMux);
   bit18Policy = r79Bit18Policy;
+  waitMode = r79Mode1TxWaitMode;
   portEXIT_CRITICAL(&r79LabMux);
+  const uint16_t waitMs = r79Mode1TxWaitMsPure(waitMode);
 
   twai_message_t out = {};
   out.identifier = 0x3FD;
   out.data_length_code = 8;
   out.flags = 0;
   memcpy(out.data, src.data, 8);
-  r79FixedApplyBitsPure(out.data, bit18Policy);
-  r79DmsNagLabApply(out.data);
+  r79FixedApplyBitsPure(out.data, bit18Policy, r79Hw3Active());
 
-  const bool pipelineWasIdle = canBTxPipelineIdleSnapshot();
-  const uint32_t acceptedSerialBefore = canBTxAcceptedSerialSnapshot();
-  const int64_t txRequestUs = esp_timer_get_time();
-  const uint32_t latencyUs = txRequestUs > rxDequeueUs
-      ? (uint32_t)(((uint64_t)(txRequestUs - rxDequeueUs) > 0xFFFFFFFFULL)
-          ? 0xFFFFFFFFULL : (uint64_t)(txRequestUs - rxDequeueUs))
-      : 0u;
-  const esp_err_t err = twai_transmit(&out, pdMS_TO_TICKS(R79_FIXED_FAST_WAIT_MS_PURE));
-  const uint32_t acceptedSerial = canBTraceRecordTx(&out, err);
-  if (err == ESP_OK) {
-    r79FastReactiveArmSuccessProbe(rxDequeueUs, txRequestUs,
-        acceptedSerialBefore, acceptedSerial, pipelineWasIdle);
-  }
+  const esp_err_t err = r79ApGateTransmitGuarded(&out, waitMs, apGeneration);
 
   portENTER_CRITICAL(&r79LabMux);
   r79FastEchoAttempts++;
-  r79LabAppliedFrames++;
-  r79LabLastAttemptMs = now;
   if (err == ESP_OK) r79FastEchoTxOk++; else r79FastEchoTxFail++;
   portEXIT_CRITICAL(&r79LabMux);
-  r79FastReactiveRecordLatency(latencyUs);
   r79LabRecordTxResult(err == ESP_OK, out, R79LAB_TX_IMMEDIATE);
   r79FastReactiveRecordTxState(err, now);
   if (err == ESP_OK) {
@@ -3122,16 +4205,13 @@ static bool r79FixedFastEcho(const twai_message_t &src, int64_t rxDequeueUs) {
   esp_err_t recoveryErr = err;
   if (err == ESP_ERR_TIMEOUT && summonPriorityAllowsR79FlushPure(priority) &&
       !canTxAdministrativeHold && twaiReady) {
-    portENTER_CRITICAL(&r79LabMux);
-    r79EmergencyQueueFlushCount++;
-    portEXIT_CRITICAL(&r79LabMux);
-    if (twai_clear_transmit_queue() == ESP_OK &&
-        r79FastReactiveBlockReason() == R79LAB_BLOCK_NONE) {
-      const esp_err_t retryErr = twai_transmit(
-          &out, pdMS_TO_TICKS(R79_FIXED_FAST_WAIT_MS_PURE));
-      canBTraceRecordTx(&out, retryErr);
+    if (r79ImmediateClearTransmitQueueGuarded(apGeneration)) {
       portENTER_CRITICAL(&r79LabMux);
-      r79LabAppliedFrames++;
+      r79EmergencyQueueFlushCount++;
+      portEXIT_CRITICAL(&r79LabMux);
+      const esp_err_t retryErr = r79ApGateTransmitGuarded(
+          &out, R79_FIXED_FAST_WAIT_MS_PURE, apGeneration);
+      portENTER_CRITICAL(&r79LabMux);
       if (retryErr == ESP_OK) r79FlushTriggeredRetryOk++;
       else r79FlushTriggeredRetryFail++;
       portEXIT_CRITICAL(&r79LabMux);
@@ -3149,24 +4229,27 @@ static bool r79FixedFastEcho(const twai_message_t &src, int64_t rxDequeueUs) {
   priority = summonPriorityStateSnapshot(retryNow);
   if (summonPriorityAllowsR79FlushPure(priority) &&
       recoveryErr != ESP_ERR_INVALID_STATE &&
-      r79FastReactiveBlockReason() == R79LAB_BLOCK_NONE) {
-    r79RetrySchedule(R79LAB_TX_IMMEDIATE, retryNow);
+      r79FastReactiveGateOpen()) {
+    r79RetrySchedule(R79LAB_TX_IMMEDIATE, retryNow, apGeneration);
   }
-  return false;
+  // R79 claimed this stock generation even when queue admission failed; its
+  // recovery/retry machinery remains the sole owner of follow-up work.
+  return true;
 }
 
 static void r79FixedObserveStock(uint8_t mux, uint32_t nowMs) {
   portENTER_CRITICAL(&r79LabMux);
   const R79FixedQuietObserveResultPure result =
-      r79FixedQuietObserveStockPure(r79FixedQuietState, mux, nowMs);
+      r79FixedQuietObserveStockPure(
+          r79FixedQuietState, mux, nowMs, r79Mode1ReinjectEnabled,
+          r79Mode1DelayMs);
   if (result.armed) r79QuietArmCount++;
-  if (result.cancelled) r79QuietCancelCount++;
   if (r79RetryPending && r79RetryOriginKind == R79LAB_TX_PERIODIC) {
     r79RetryPending = false;
     r79RetryIndex = 0;
     r79RetryOriginKind = R79LAB_TX_NONE;
     r79RetryDueMs = 0;
-    r79PeriodicRetryCancelledByStock++;
+    r79RetryGeneration = 0u;
   }
   portEXIT_CRITICAL(&r79LabMux);
 }
@@ -3177,55 +4260,323 @@ static void r79FixedTick() {
   const R79RuntimeStatus runtime = r79RuntimeStatusSnapshot(now);
   uint8_t stock[8] = {};
   bool haveStock = false;
+  uint32_t hardDeadlineMs = 0u;
+  uint32_t expectedGeneration = 0u;
   R79FixedQuietActionPure action;
 
   portENTER_CRITICAL(&r79LabMux);
   action = r79FixedQuietStepPure(
       r79FixedQuietState, now, runtime.state == R79_TX_STATE_ACTIVE);
-  if (action != R79_FIXED_QUIET_WAIT_PURE) {
-    r79QuietDueCount++;
-    r79PeriodicSlotDue++;
-  }
   if (action == R79_FIXED_QUIET_GUARD_SKIP_PURE) {
     r79QuietGuardSkip++;
-    r79PeriodicSlotGuard++;
-  } else if (action == R79_FIXED_QUIET_DISALLOWED_SKIP_PURE) {
-    r79QuietDisallowedSkip++;
   } else if (action == R79_FIXED_QUIET_FIRE_PURE) {
     haveStock = r79LabStockValid;
     if (haveStock) memcpy(stock, r79LabLastStockRaw, sizeof(stock));
-    r79LabLastAttemptMs = now;
-    r79LabLastPeriodicRequestMs = now;
+    hardDeadlineMs = r79FixedQuietHardDeadlinePure(r79FixedQuietState);
+    expectedGeneration = canTxCancellationGenerationSnapshot(
+        &r79Mode1PostMux2Generation);
     r79QuietFireCount++;
-    r79PeriodicSlotFire++;
   }
   portEXIT_CRITICAL(&r79LabMux);
 
   if (action != R79_FIXED_QUIET_FIRE_PURE) return;
-  if (!haveStock) {
-    r79LabRecordSuppressedState(runtime, now);
-    return;
+  if (!haveStock) return;
+  (void)r79LabTransmitShadow(
+      stock, R79LAB_TX_PERIODIC, hardDeadlineMs, expectedGeneration);
+}
+
+// Mode 2 mirrors the V14 MUX1 payload policy without vehicle-version
+// detection. It is deliberately a single zero-wait attempt: no queue flush,
+// retry schedule, bit18 override, or LAB bit43 overlay is allowed here.
+static bool r79Mode2FastEcho(const twai_message_t &src) {
+  if (src.data_length_code < 8 || readMuxID(src.data) != 1u) return false;
+  const uint32_t apGeneration = r79ApGateGenerationSnapshot();
+  const uint32_t now = (uint32_t)millis();
+  if (!r79FastReactiveGateOpen()) return false;
+
+  twai_message_t out = {};
+  out.identifier = 0x3FD;
+  out.data_length_code = 8;
+  out.flags = 0;
+  memcpy(out.data, src.data, 8);
+  (void)r79Mode2ApplyBitsPure(out.data, r79Hw3Active());
+
+  const esp_err_t err = r79ApGateTransmitGuarded(&out, 0u, apGeneration);
+  portENTER_CRITICAL(&r79LabMux);
+  r79FastEchoAttempts++;
+  if (err == ESP_OK) r79FastEchoTxOk++; else r79FastEchoTxFail++;
+  portEXIT_CRITICAL(&r79LabMux);
+  r79LabRecordTxResult(err == ESP_OK, out, R79LAB_TX_IMMEDIATE);
+  r79FastReactiveRecordTxState(err, now);
+  // A zero-wait Mode 2 attempt still owns the stock generation on failure.
+  return true;
+}
+
+static void r79Mode2ObserveStock(uint8_t mux, uint32_t nowMs) {
+  portENTER_CRITICAL(&r79LabMux);
+  const R79Mode2ObserveResultPure result = r79Mode2ObserveStockPure(
+      r79Mode2DelayedState, mux, nowMs, r79Mode2ReinjectEnabled,
+      r79Mode2DelayMs);
+  if (result.armed) r79QuietArmCount++;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+
+static bool r79DmsWorkPendingSnapshot() {
+  bool pending;
+  uint8_t mode;
+  portENTER_CRITICAL(&r79LabMux);
+  mode = r79ModeSanitizePure(r79TransportMode);
+  pending = r79RetryPending ||
+      (mode == R79_MODE_2_PURE
+          ? r79Mode2DelayedState.pending : r79FixedQuietState.pending);
+  portEXIT_CRITICAL(&r79LabMux);
+  return pending;
+}
+
+static bool r79DmsOnlyTransmit(const twai_message_t &src) {
+  if (src.data_length_code < 8u || readMuxID(src.data) != 1u ||
+      !r79DmsControlActive() || canTxAdministrativeHold || !twaiReady) return false;
+  twai_message_t out = src;
+  out.flags = 0;
+  if (!getBit(out.data, R79LAB_ENABLE_CABIN_CAMERA_BIT)) return false;
+  const esp_err_t err = mux1DisplayTransmit(&out, canTxEpochSnapshot(), CAN_TX_FRESH_VH, false,
+      (uint32_t)millis(), true);
+  portENTER_CRITICAL(&r79LabMux);
+  if (err == ESP_OK) r79DmsOnlyTxOk++; else r79DmsOnlyTxFail++;
+  portEXIT_CRITICAL(&r79LabMux);
+  return true;  // This stock clone was claimed even when enqueue failed.
+}
+
+static bool r79ProcessStockFrame(const twai_message_t &src, uint8_t mux,
+                                 uint32_t nowMs) {
+  uint8_t mode;
+  portENTER_CRITICAL(&r79LabMux);
+  mode = r79ModeSanitizePure(r79TransportMode);
+  portEXIT_CRITICAL(&r79LabMux);
+  bool r79Claimed = false;
+  if (mode == R79_MODE_2_PURE) {
+    if (mux == 1u) r79Claimed = r79Mode2FastEcho(src);
+    r79Mode2ObserveStock(mux, nowMs);
+  } else {
+    if (mux == 1u) r79Claimed = r79FixedFastEcho(src);
+    r79FixedObserveStock(mux, nowMs);
   }
-  if (r79LabTransmitShadow(stock, now, R79LAB_TX_PERIODIC)) {
-    portENTER_CRITICAL(&r79LabMux);
-    r79LabLastPeriodicTxMs = (uint32_t)millis();
-    portEXIT_CRITICAL(&r79LabMux);
+
+  if (mux == 1u) {
+    const bool r79WorkPending = r79DmsWorkPendingSnapshot();
+    const R79DmsStockDispositionPure disposition =
+        r79DmsStockDispositionPure(
+            true, r79DmsControlActive(), r79Claimed, r79WorkPending);
+    if (disposition == R79_DMS_STOCK_DMS_ONLY_PURE) {
+      r79Claimed = r79DmsOnlyTransmit(src);
+    } else if (disposition == R79_DMS_STOCK_NONE_PURE &&
+               r79DmsControlActive() && r79WorkPending) {
+      portENTER_CRITICAL(&r79LabMux);
+      r79DmsOnlyBlockedByR79++;
+      portEXIT_CRITICAL(&r79LabMux);
+    }
   }
+  return r79Claimed;
+}
+
+static void visionControlObserveBody(const struct can_frame &src, uint32_t txEpoch,
+                                 uint32_t receivedMs = (uint32_t)millis()) {
+  if ((src.can_id & ~0x7FFu) != 0u || src.can_id != 0x3FDu ||
+      src.can_dlc != 8u || readMuxID(src.data) != 1u ||
+      !visionControlBusSupported(VISION_CONTROL_BODY_PURE)) return;
+  const uint32_t displayGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
+  visionControlCacheStock(VISION_CONTROL_BODY_PURE, src.data, txEpoch, receivedMs);
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return;
+  struct can_frame out = src;
+  const bool generationValid = displayGeneration ==
+      __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
+  const McpTxResultReason ready = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH :
+      !mcpReady ? MCP_TX_MCP_NOT_READY : canTxBarrierState.epoch != txEpoch ? MCP_TX_EPOCH_MISMATCH :
+      !canTxBarrierAllowsMaskedPure(canTxBarrierState, txEpoch, CAN_TX_FRESH_PARTY) ? MCP_TX_FRESH_MASK : MCP_TX_OK;
+  if (generationValid && ready == MCP_TX_OK &&
+      (uint32_t)((uint32_t)millis() - receivedMs) <= VISION_CONTROL_FRESH_MS_PURE &&
+      visionControlBusSupported(VISION_CONTROL_BODY_PURE)) {
+    const bool visionChanged = visionControlApplyFinal(out.data, VISION_CONTROL_BODY_PURE);
+    if (!visionChanged) { xSemaphoreGive(canTxBarrierMutex); return; }
+    const MCP2515::ERROR result = Can_A.sendMessage(&out);
+    const bool ok = result == MCP2515::ERROR_OK;
+    visionControlRecordTx(visionChanged, VISION_CONTROL_BODY_PURE, ok);
+    canATraceRecordTx(&out, ok ? MCP_TX_OK : MCP_TX_SEND_ERROR, result, CAN_TX_TRACE_SOURCE_DEFAULT);
+
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+}
+
+static void visionControlObserveStock(const twai_message_t &src, uint32_t txEpoch,
+                                  bool stockClaimed,
+                                  uint32_t receivedMs = (uint32_t)millis()) {
+  if (src.extd || src.rtr || src.identifier != 0x3FDu || src.data_length_code != 8u || readMuxID(src.data) != 1u) return;
+  if (stockClaimed || r79DmsWorkPendingSnapshot()) return;
+  (void)mux1DisplayTransmit(&src, txEpoch, CAN_TX_FRESH_VH, true, receivedMs);
+}
+
+static void r79Mode2Tick() {
+  const uint32_t apGeneration = r79ApGateGenerationSnapshot();
+  const uint32_t now = (uint32_t)millis();
+  const R79RuntimeStatus runtime = r79RuntimeStatusSnapshot(now);
+  uint8_t stock[8] = {};
+  bool haveStock = false;
+  R79Mode2DelayedActionPure action;
+  portENTER_CRITICAL(&r79LabMux);
+  action = r79Mode2DelayedStepPure(
+      r79Mode2DelayedState, now, runtime.state == R79_TX_STATE_ACTIVE);
+  if (action == R79_MODE2_DELAY_FIRE_PURE) {
+    haveStock = r79LabStockValid;
+    if (haveStock) memcpy(stock, r79LabLastStockRaw, sizeof(stock));
+    r79QuietFireCount++;
+  } else if (action == R79_MODE2_DELAY_DISALLOWED_PURE) {
+    r79QuietGuardSkip++;
+  }
+  portEXIT_CRITICAL(&r79LabMux);
+  if (action != R79_MODE2_DELAY_FIRE_PURE || !haveStock) return;
+
+  twai_message_t out = {};
+  out.identifier = 0x3FD;
+  out.data_length_code = 8;
+  out.flags = 0;
+  memcpy(out.data, stock, 8);
+  if (readMuxID(out.data) != 1u) return;
+  (void)r79Mode2ApplyBitsPure(out.data, r79Hw3Active());
+  const esp_err_t err = r79ApGateTransmitGuarded(&out, 0u, apGeneration);
+  r79LabRecordTxResult(err == ESP_OK, out, R79LAB_TX_PERIODIC);
+  r79FastReactiveRecordTxState(err, now);
+}
+
+static void r79TransportTick() {
+  uint8_t mode;
+  portENTER_CRITICAL(&r79LabMux);
+  mode = r79ModeSanitizePure(r79TransportMode);
+  portEXIT_CRITICAL(&r79LabMux);
+  if (mode == R79_MODE_2_PURE) r79Mode2Tick();
+  else r79FixedTick();
+}
+
+// Each legacy settings group is committed as one versioned NVS value. The
+// older scalar keys remain available for first-load compatibility.
+static bool featureConfigNvsReadOk = true;
+static bool featureCfgReadOk = true;
+static bool summonCfgReadOk = true;
+static bool r79CfgReadOk = true;
+static bool ulcCfgReadOk = true;
+static bool autoLaneChangeCfgReadOk = true;
+
+struct FeatureCfgSnapshot {
+  bool lab, banned, door, restore, apDrive;
+  uint8_t regen;
+  bool rightScroll;
+  uint16_t rightInterval;
+  uint8_t rightPattern;
+  bool tsl9Periodic;
+  uint16_t tsl9Interval;
+};
+static FeatureCfgSnapshot featureCfgRuntimeSnapshot() {
+  FeatureCfgSnapshot out = {labMenuEnabled, bannedCar, doorOpenCancelEnabled,
+      tlsscRestoreEnabled, apDriveProfileEnabled, apDriveProfileRegenRaw,
+      false, 0u, 0u, false, 0u};
+  portENTER_CRITICAL(&nagRightScrollMux);
+  out.rightScroll = nagTorqueRightScrollEnabled;
+  out.rightInterval = nagTorqueRightScrollIntervalSeconds;
+  out.rightPattern = nagTorqueRightScrollPattern;
+  out.tsl9Periodic = nagTsl9RightPeriodicEnabled;
+  out.tsl9Interval = nagTsl9RightPeriodicIntervalSeconds;
+  portEXIT_CRITICAL(&nagRightScrollMux);
+  return out;
+}
+static void featureCfgRuntimeRestore(const FeatureCfgSnapshot &value) {
+  labMenuEnabled = value.lab; bannedCar = value.banned;
+  doorOpenCancelEnabled = value.door; tlsscRestoreEnabled = value.restore;
+  portENTER_CRITICAL(&stateMux);
+  apDriveProfileEnabled = value.apDrive; apDriveProfileRegenRaw = value.regen;
+  portEXIT_CRITICAL(&stateMux);
+  portENTER_CRITICAL(&nagRightScrollMux);
+  nagTorqueRightScrollEnabled = value.rightScroll;
+  nagTorqueRightScrollIntervalSeconds = value.rightInterval;
+  nagTorqueRightScrollPattern = value.rightPattern;
+  nagTsl9RightPeriodicEnabled = value.tsl9Periodic;
+  nagTsl9RightPeriodicIntervalSeconds = apRightScrollIntervalSanitizePure(value.tsl9Interval);
+  portEXIT_CRITICAL(&nagRightScrollMux);
+}
+struct SummonCfgSnapshot {
+  bool tlssc, highway, noa, blinker;
+  uint32_t delayMs;
+  uint8_t stabilize, pause;
+};
+static bool summonCfgPersistCandidate(const SummonCfgSnapshot &value);
+static SummonCfgSnapshot summonCfgRuntimeSnapshot() {
+  portENTER_CRITICAL(&stateMux);
+  SummonCfgSnapshot value = {tlsscEnabled, tlsscHighwayGateEnabled,
+      tlsscBlockInNoa, false, 0u, 0u, 0u};
+  portEXIT_CRITICAL(&stateMux);
+  portENTER_CRITICAL(&blinkAMux);
+  value.blinker = blinkAEnabled; value.delayMs = blinkADelayMs;
+  value.stabilize = blinkANoaStabilizationSeconds;
+  value.pause = blinkACancelPauseSeconds;
+  portEXIT_CRITICAL(&blinkAMux);
+  return value;
+}
+static void summonCfgRuntimeRestore(const SummonCfgSnapshot &value) {
+  portENTER_CRITICAL(&stateMux);
+  tlsscEnabled = value.tlssc; tlsscHighwayGateEnabled = value.highway;
+  tlsscBlockInNoa = value.noa;
+  portEXIT_CRITICAL(&stateMux);
+  portENTER_CRITICAL(&blinkAMux);
+  blinkAEnabled = value.blinker; blinkADelayMs = value.delayMs;
+  blinkANoaStabilizationSeconds = value.stabilize;
+  blinkACancelPauseSeconds = value.pause;
+  portEXIT_CRITICAL(&blinkAMux);
+}
+
+static NagScrollStoredSnapshot nagScrollRuntimeSnapshot() {
+  portENTER_CRITICAL(&nagRightScrollMux);
+  const NagScrollStoredSnapshot value = {nagTorqueRightScrollEnabled,
+      nagTorqueRightScrollIntervalSeconds, nagTorqueRightScrollPattern,
+      nagTsl9RightPeriodicEnabled, nagTsl9RightPeriodicIntervalSeconds};
+  portEXIT_CRITICAL(&nagRightScrollMux);
+  return value;
+}
+static void nagScrollRuntimeRestore(const NagScrollStoredSnapshot &value) {
+  portENTER_CRITICAL(&nagRightScrollMux);
+  nagTorqueRightScrollEnabled = value.torqueEnabled;
+  nagTorqueRightScrollIntervalSeconds = apRightScrollIntervalSanitizePure(value.torqueInterval);
+  nagTorqueRightScrollPattern = nagRightScrollPatternSanitize(value.torquePattern);
+  nagTsl9RightPeriodicEnabled = value.tsl9Enabled;
+  nagTsl9RightPeriodicIntervalSeconds = apRightScrollIntervalSanitizePure(value.tsl9Interval);
+  portEXIT_CRITICAL(&nagRightScrollMux);
+}
+
+static uint16_t featureNvsU16(const uint8_t *bytes) {
+  return (uint16_t)(bytes[0] | ((uint16_t)bytes[1] << 8u));
+}
+static uint32_t featureNvsU32(const uint8_t *bytes) {
+  return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8u) |
+      ((uint32_t)bytes[2] << 16u) | ((uint32_t)bytes[3] << 24u);
 }
 
 static bool setTlsscEnabled(bool enabled, bool persist) {
+  if (persist) {
+    SummonCfgSnapshot next = summonCfgRuntimeSnapshot(); next.tlssc = enabled;
+    if (!summonCfgPersistCandidate(next)) return false;
+  }
   portENTER_CRITICAL(&stateMux);
   const bool wasEnabled = tlsscEnabled;
   tlsscEnabled = enabled;
   if (!enabled && wasEnabled && tlsscInjectedActive) tlsscClearPending = true;
   if (enabled) tlsscClearPending = false;
   portEXIT_CRITICAL(&stateMux);
-  if (persist) summonCfgSave();
   return true;
 }
 
 static bool setAutoBlinkerEnabled(bool enabled, bool persist) {
   if (enabled && !activeProfileAdvancedEapSupported()) return false;
+  if (persist) {
+    SummonCfgSnapshot next = summonCfgRuntimeSnapshot(); next.blinker = enabled;
+    if (!summonCfgPersistCandidate(next)) return false;
+  }
   portENTER_CRITICAL(&blinkAMux);
   blinkAEnabled = enabled;
   if (!enabled) {
@@ -3245,14 +4596,16 @@ static bool setAutoBlinkerEnabled(bool enabled, bool persist) {
   }
   portEXIT_CRITICAL(&blinkAMux);
   if (enabled) evaluateAutoBlinker();
-  if (persist) summonCfgSave();
   return true;
 }
 
 static void toggleTlsscEnabledFromButton() {
   bool enabled;
   portENTER_CRITICAL(&stateMux); enabled = tlsscEnabled; portEXIT_CRITICAL(&stateMux);
-  setTlsscEnabled(!enabled, true);
+  if (!setTlsscEnabled(!enabled, true)) {
+    s3xyLogPush(S3XY_LOG_INFO, "TLSSC toggle failed: settings save failed");
+    return;
+  }
   s3xyLogPush(S3XY_LOG_INFO, enabled ? "TLSSC -> OFF" : "TLSSC -> ON");
 }
 
@@ -3290,6 +4643,21 @@ static bool requestTurnSignalPulseFromButton(uint8_t dir) {
                           eventToken, now);
 }
 
+// Keep ordinary TLSSC transport admission under the enqueue barrier.
+static esp_err_t tlsscTransmitGuarded(const twai_message_t *out,
+    uint32_t epoch) {
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return ESP_ERR_INVALID_STATE;
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  if (!canTxAdministrativeHold && twaiReady &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch, CAN_TX_FRESH_BOTH) &&
+      twaiNonSummonAdmissionOpen()) {
+    err = twai_transmit(out, 0);
+    canBTraceRecordTx(out, err);
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return err;
+}
+
 static void injectTLSSC(const twai_message_t &src) {
     const uint32_t now = (uint32_t)millis();
     const uint32_t txEpoch = canTxEpochSnapshot();
@@ -3310,10 +4678,12 @@ static void injectTLSSC(const twai_message_t &src) {
       portEXIT_CRITICAL(&roadContextMux);
     }
     const bool desiredActive = en && ap && !highwayBlocked && !(blockNoa && noa);
+    twai_message_t out = src;
+    out.flags = 0;
+    bool tlsscTx = false;
+    bool tlsscClearTx = false;
 
-    // Once this firmware has asserted TLSSC, every transition out of the
-    // active policy sends exactly one explicit OFF overlay before returning to
-    // pure STOCK. This covers user OFF, AP exit, highway gate and NOA block.
+    // MUX0 has a single stock-follow clone for TLSSC.
     if (!desiredActive) {
       if (injected && !clearPending) {
         portENTER_CRITICAL(&stateMux);
@@ -3321,18 +4691,35 @@ static void injectTLSSC(const twai_message_t &src) {
         clearPending = true;
         portEXIT_CRITICAL(&stateMux);
       }
-      if (!clearPending) return;
-
-      twai_message_t out = src;
-      out.flags = 0;
-      setBit(out.data, 38, false);
-      setBit(out.data, 39, false);
-      if (!twaiNonSummonAdmissionOpen()) {
-        sumTxFail++;
-        return;
+      if (clearPending) {
+        setBit(out.data, 38, false);
+        setBit(out.data, 39, false);
+        tlsscTx = true;
+        tlsscClearTx = true;
       }
-      const esp_err_t err = canTxTwaiTransmit(&out, txEpoch);
-      portENTER_CRITICAL(&stateMux);
+    } else {
+      if (clearPending) {
+        portENTER_CRITICAL(&stateMux);
+        tlsscClearPending = false;
+        portEXIT_CRITICAL(&stateMux);
+      }
+      if (!getBit(out.data, 38) || !getBit(out.data, 39)) {
+        setBit(out.data, 38, true);
+        setBit(out.data, 39, true);
+        tlsscTx = true;
+      }
+    }
+
+    if (!tlsscTx) return;
+
+    // TLSSC is lower priority than Summon and must never block CAN B RX.
+    if (!twaiNonSummonAdmissionOpen()) {
+      sumTxFail++;
+      return;
+    }
+    const esp_err_t err = tlsscTransmitGuarded(&out, txEpoch);
+    portENTER_CRITICAL(&stateMux);
+    if (tlsscClearTx) {
       if (err == ESP_OK) {
         tlsscInjectedActive = false;
         tlsscClearPending = false;
@@ -3341,44 +4728,11 @@ static void injectTLSSC(const twai_message_t &src) {
         tlsscClearPending = true;
         tlsscClearTxFail++;
       }
-      portEXIT_CRITICAL(&stateMux);
-      if (err == ESP_OK) sumTxOk++;
-      else               sumTxFail++;
-      return;
-    }
-
-    // Policy is active again before a pending clear was transmitted: cancel
-    // the stale clear and keep/assert the ON overlay.
-    if (clearPending) {
-      portENTER_CRITICAL(&stateMux);
-      tlsscClearPending = false;
-      portEXIT_CRITICAL(&stateMux);
-    }
-
-    twai_message_t out = src;
-    out.flags = 0;
-    // If both bits are already ON in stock, do not create new ownership. If we
-    // previously asserted TLSSC, however, preserve that ownership until the
-    // requested one-shot OFF transition is delivered.
-    if (getBit(out.data, 38) && getBit(out.data, 39)) return;
-
-    setBit(out.data, 38, true);   // UI_fsdStopsControlEnabled = 1
-    setBit(out.data, 39, true);   // UI_fsdContinueOnGreenWithCIPV = 1
-
-    // TLSSC is lower priority than Summon and must never block CAN B RX.
-    if (!twaiNonSummonAdmissionOpen()) {
-      sumTxFail++;
-      return;
-    }
-    const esp_err_t err = canTxTwaiTransmit(&out, txEpoch);
-    if (err == ESP_OK) {
-      sumTxOk++;
-      portENTER_CRITICAL(&stateMux);
+    } else if (err == ESP_OK) {
       tlsscInjectedActive = true;
-      portEXIT_CRITICAL(&stateMux);
-    } else {
-      sumTxFail++;
     }
+    portEXIT_CRITICAL(&stateMux);
+    if (err == ESP_OK) sumTxOk++; else sumTxFail++;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3394,17 +4748,19 @@ static uint16_t nvsSchemaVersion = 0;
 static uint16_t nvsSchemaBootVersion = 0;
 
 static void nvsSchemaRead() {
-  Preferences p;
+  CheckedPreferences p;
   uint16_t version = 0;
-  if (p.begin("t2meta", true)) {
-    version = p.getUShort("schema", 0);
-    p.end();
+  featureConfigNvsReadOk = p.begin("t2meta", true);
+  if (featureConfigNvsReadOk) {
+    version = p.getUShort("schema", 0u);
+    featureConfigNvsReadOk = p.ok(); p.end();
   }
   nvsSchemaVersion = version;
   nvsSchemaBootVersion = version;
 }
 
 static void nvsSchemaFinalize() {
+  if (!featureConfigNvsReadOk) return;
   if (nvsSchemaBootVersion >= 1) return;
 
   bool ok = true;
@@ -3481,124 +4837,233 @@ static void nvsSchemaFinalize() {
   T2CAN_SERIAL_PRINTLN("NVS schema marker write failed; will retry next boot");
 }
 
+static bool driverMonitoringControlApply(bool enabled) {
+    if (!canTxBarrierMutex ||
+        xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+    Preferences p;
+    bool saved = false;
+    if (p.begin("features", false)) {
+      saved = p.putBool("dmsDisable", enabled) > 0u;
+      p.end();
+      if (saved) {
+        portENTER_CRITICAL(&driverMonitoringControlMux);
+        driverMonitoringDisableEnabled = enabled;
+        portEXIT_CRITICAL(&driverMonitoringControlMux);
+      }
+    }
+    xSemaphoreGive(canTxBarrierMutex);
+    return saved;
+}
+
+static bool isaSuppressionControlApply(bool enabled) {
+    if (!canTxBarrierMutex ||
+        xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+    Preferences p;
+    bool saved = false;
+    if (p.begin("features", false)) {
+      saved = p.putBool("isaSuppress", enabled) > 0u;
+      p.end();
+      if (saved) {
+        portENTER_CRITICAL(&isaSuppressionControlMux);
+        if (isaSuppressionEnabled != enabled) {
+          isaSuppressionEnabled = enabled;
+          __atomic_add_fetch(
+              &isaSuppressionGeneration, 1u, __ATOMIC_ACQ_REL);
+        }
+        portEXIT_CRITICAL(&isaSuppressionControlMux);
+      }
+    }
+    xSemaphoreGive(canTxBarrierMutex);
+    return saved;
+}
+
 static void featureCfgLoad() {
-    prefs.begin("features", false);
-    labMenuEnabled = prefs.getBool("lab", false);
-    const bool persistedDmsNagBit43 = prefs.getBool("dmsNag43", false);
-    portENTER_CRITICAL(&r79LabMux);
-    r79DmsNagBit43Enabled = persistedDmsNagBit43;
-    portEXIT_CRITICAL(&r79LabMux);
-    bannedCar = prefs.getBool("banned", false);
-    doorOpenCancelEnabled = prefs.getBool("doorCancel", false);
-    tlsscRestoreEnabled = prefs.getBool("tlRestore", false);
-    const bool persistedApDriveProfile = prefs.getBool("apDrive", false);
-    const uint8_t persistedApRegen = prefs.getUChar("apRegen", AP_DRIVE_REGEN_REDUCED_RAW);
-    const bool persistedRightScroll = prefs.getBool("rsEnabled", false);
-    const uint16_t persistedRightScrollInterval = prefs.getUShort("rsInterval", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
-    const uint8_t persistedRightScrollWarning = prefs.getUChar("rsWarnS", AP_RIGHT_SCROLL_DEFAULT_WARNING_REPEAT_S_PURE);
+    CheckedPreferences prefs;
+    const bool featuresOpened = prefs.begin("features", true);
+    uint8_t bytes[14] = {}; bool found = false;
+    if (!featuresOpened || !nvsCheckedReadBlob("features", "cfg3282", bytes, sizeof(bytes), found) ||
+        (found && bytes[0] != 1u)) { featureCfgReadOk = false; return; }
+    const bool storedLab = found ? bytes[1] != 0u : prefs.getBool("lab", false);
+    const bool hasDriverMonitoringControl =
+        featuresOpened && prefs.isKey("dmsDisable");
+    const bool persistedDriverMonitoringControl =
+        featuresOpened && prefs.getBool("dmsDisable", false);
+    const bool legacyFeatureDriverMonitoringControl =
+        featuresOpened && prefs.getBool("dmsNag43", false);
+    const bool hasIsaSuppressionControl =
+        featuresOpened && prefs.isKey("isaSuppress");
+    const bool persistedIsaSuppressionControl =
+        featuresOpened && prefs.getBool("isaSuppress", false);
+    const uint8_t persistedBlinkerTx = prefs.getUChar("blinkTx", 0xFFu);
+    const bool storedBanned = found ? bytes[2] != 0u : prefs.getBool("banned", false);
+    const bool storedDoor = found ? bytes[3] != 0u : prefs.getBool("doorCancel", false);
+    const bool storedRestore = found ? bytes[4] != 0u : prefs.getBool("tlRestore", false);
+    const bool persistedApDriveProfile = found ? bytes[5] != 0u : prefs.getBool("apDrive", false);
+    const uint8_t persistedApRegen = found ? bytes[6] : prefs.getUChar("apRegen", AP_DRIVE_REGEN_REDUCED_RAW);
+    const bool persistedRightScroll = found ? bytes[7] != 0u : prefs.getBool("rsEnabled", false);
+    const uint16_t persistedRightScrollInterval = found ? featureNvsU16(bytes + 8u) : prefs.getUShort(
+        "rsInterval", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
+    const uint8_t persistedRightScrollPattern = found ? bytes[10] : prefs.getUChar(
+        "rsPattern", NAG_RIGHT_SCROLL_PATTERN_DEFAULT);
+    const bool persistedTsl9Periodic = found ? bytes[11] != 0u : prefs.getBool("tsl9RsEn", false);
+    const uint16_t persistedTsl9Interval = found ? featureNvsU16(bytes + 12u) : prefs.getUShort(
+        "tsl9RsInt", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
+    featureCfgReadOk = prefs.ok();
+    prefs.end();
+    if (!featureCfgReadOk) return;
+    labMenuEnabled = storedLab; bannedCar = storedBanned;
+    doorOpenCancelEnabled = storedDoor; tlsscRestoreEnabled = storedRestore;
+    portENTER_CRITICAL(&blinkAMux);
+    blinkerTxMode = blinkerTxStoredModePure(
+        persistedBlinkerTx, activeProfileIsYl());
+    portEXIT_CRITICAL(&blinkAMux);
     apDriveProfileEnabled = activeProfileApDriveProfileSupported() && persistedApDriveProfile;
     apDriveProfileRegenRaw = apDriveRegenRawSelectablePure(persistedApRegen) ? persistedApRegen : AP_DRIVE_REGEN_REDUCED_RAW;
-    if (!activeProfileApDriveProfileSupported() && persistedApDriveProfile) prefs.putBool("apDrive", false);
-    if (!apDriveRegenRawSelectablePure(persistedApRegen)) prefs.putUChar("apRegen", AP_DRIVE_REGEN_REDUCED_RAW);
-    apRightScrollEnabled = activeProfileApRightScrollSupported() && persistedRightScroll;
-    apRightScrollIntervalSeconds = apRightScrollIntervalSanitizePure(persistedRightScrollInterval);
-    apRightScrollVisualRepeatSeconds = apRightScrollWarningRepeatSanitizePure(persistedRightScrollWarning);
-    if (!activeProfileApRightScrollSupported() && persistedRightScroll) prefs.putBool("rsEnabled", false);
-    if (!apRightScrollIntervalValidPure(persistedRightScrollInterval))
-      prefs.putUShort("rsInterval", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
-    if (!apRightScrollWarningRepeatValidPure(persistedRightScrollWarning))
-      prefs.putUChar("rsWarnS", AP_RIGHT_SCROLL_DEFAULT_WARNING_REPEAT_S_PURE);
+    portENTER_CRITICAL(&nagRightScrollMux);
+    nagTorqueRightScrollEnabled = persistedRightScroll;
+    nagTorqueRightScrollIntervalSeconds =
+        apRightScrollIntervalSanitizePure(persistedRightScrollInterval);
+    nagTorqueRightScrollPattern =
+        nagRightScrollPatternSanitize(persistedRightScrollPattern);
+    nagTsl9RightPeriodicEnabled = persistedTsl9Periodic;
+    nagTsl9RightPeriodicIntervalSeconds =
+        apRightScrollIntervalSanitizePure(persistedTsl9Interval);
+    portEXIT_CRITICAL(&nagRightScrollMux);
     if (!activeProfileBodyControlsSupported() && !activeProfileIsYl() && doorOpenCancelEnabled) {
       // Door-open cancel consumes Body CAN on Standard 3/Y. A topology change
       // to Party+Chassis must not retain an enabled-but-unreachable feature.
       doorOpenCancelEnabled = false;
-      prefs.putBool("doorCancel", false);
     }
     if (!activeProfileBannedCarSupported()) {
       // Model Y L does not expose Banned Car in v3.2 hotfix. Fail closed if an older
       // profile/settings combination left either flag persisted. Avoid writing
       // unchanged false values on every YL boot.
-      const bool persistedBanned = bannedCar;
-      const bool persistedRestore = tlsscRestoreEnabled;
       bannedCar = false;
       tlsscRestoreEnabled = false;
-      if (persistedBanned) prefs.putBool("banned", false);
-      if (persistedRestore) prefs.putBool("tlRestore", false);
     } else if (!bannedCar && tlsscRestoreEnabled) {
       // Persisted-state invariant: Restore may never remain ON while Banned Car is OFF.
       tlsscRestoreEnabled = false;
-      prefs.putBool("tlRestore", false);
     }
     if (!activeProfileTlsscRestoreSupported() && tlsscRestoreEnabled) {
       tlsscRestoreEnabled = false;
-      prefs.putBool("tlRestore", false);
     }
-    prefs.end();
+
+    if (hasDriverMonitoringControl) {
+      portENTER_CRITICAL(&driverMonitoringControlMux);
+      driverMonitoringDisableEnabled = persistedDriverMonitoringControl;
+      portEXIT_CRITICAL(&driverMonitoringControlMux);
+    } else {
+      bool migrated = legacyFeatureDriverMonitoringControl;
+      CheckedPreferences oldNag;
+      // Missing legacy data uses the established default; read errors do not
+      // publish or persist a default over the previous setting.
+      if (oldNag.begin("nag", true)) {
+        migrated = oldNag.getBool("dms43", migrated);
+        const bool readOk = oldNag.ok();
+        oldNag.end();
+        if (!readOk) { featureCfgReadOk = false; return; }
+        // Publish only after the standalone key is durable. A failed migration
+        // remains safely OFF and retries on the next boot.
+        (void)driverMonitoringControlApply(migrated);
+      }
+    }
+    if (hasIsaSuppressionControl) {
+      portENTER_CRITICAL(&isaSuppressionControlMux);
+      isaSuppressionEnabled = persistedIsaSuppressionControl;
+      portEXIT_CRITICAL(&isaSuppressionControlMux);
+    } else {
+      CheckedPreferences oldNag;
+      if (!oldNag.begin("nag", true)) return;
+      const bool migrated = oldNag.getBool("tsl9isa", false);
+      const bool readOk = oldNag.ok();
+      oldNag.end();
+      if (!readOk) { featureCfgReadOk = false; return; }
+      // Publish only after the standalone key is durable. Failed migration
+      // remains safely OFF and retries on the next boot.
+      (void)isaSuppressionControlApply(migrated);
+    }
 }
 
-static void featureCfgSave() {
-    prefs.begin("features", false);
-    prefs.putBool("lab", labMenuEnabled);
-    bool dmsNagBit43Enabled;
-    portENTER_CRITICAL(&r79LabMux);
-    dmsNagBit43Enabled = r79DmsNagBit43Enabled;
-    portEXIT_CRITICAL(&r79LabMux);
-    prefs.putBool("dmsNag43", dmsNagBit43Enabled);
-    prefs.putBool("banned", activeProfileBannedCarSupported() ? bannedCar : false);
-    prefs.putBool("doorCancel", (activeProfileBodyControlsSupported() || activeProfileIsYl()) ? doorOpenCancelEnabled : false);
-    prefs.putBool("tlRestore", (activeProfileBannedCarSupported() && bannedCar && activeProfileTlsscRestoreSupported()) ? tlsscRestoreEnabled : false);
-    prefs.putBool("apDrive", activeProfileApDriveProfileSupported() ? apDriveProfileEnabled : false);
-    prefs.putUChar("apRegen", apDriveRegenRawSelectablePure(apDriveProfileRegenRaw) ? apDriveProfileRegenRaw : AP_DRIVE_REGEN_REDUCED_RAW);
-    prefs.putBool("rsEnabled", activeProfileApRightScrollSupported() ? apRightScrollEnabled : false);
-    prefs.putUShort("rsInterval", apRightScrollIntervalSanitizePure(apRightScrollIntervalSeconds));
-    prefs.putUChar("rsWarnS", apRightScrollWarningRepeatSanitizePure(apRightScrollVisualRepeatSeconds));
-    prefs.end();
+static bool blinkerTxModePersist(uint8_t requested) {
+    if (!blinkerTxModeValidPure(requested)) return false;
+    Preferences p;
+    if (!p.begin("features", false)) return false;
+    const bool ok = p.putUChar("blinkTx", requested) > 0;
+    p.end();
+    return ok;
+}
+
+static bool featureCfgPersistCandidate(const FeatureCfgSnapshot &v) {
+  if (!featureConfigNvsReadOk || !featureCfgReadOk) return false;
+  const uint16_t interval = apRightScrollIntervalSanitizePure(v.rightInterval);
+  const uint16_t tsl9Interval = apRightScrollIntervalSanitizePure(v.tsl9Interval);
+  const uint8_t bytes[14] = {1u, (uint8_t)v.lab,
+      (uint8_t)(activeProfileBannedCarSupported() && v.banned),
+      (uint8_t)((activeProfileBodyControlsSupported() || activeProfileIsYl()) && v.door),
+      (uint8_t)(activeProfileBannedCarSupported() && v.banned &&
+                activeProfileTlsscRestoreSupported() && v.restore),
+      (uint8_t)(activeProfileApDriveProfileSupported() && v.apDrive),
+      apDriveRegenRawSelectablePure(v.regen) ? v.regen : AP_DRIVE_REGEN_REDUCED_RAW,
+      (uint8_t)v.rightScroll, (uint8_t)interval, (uint8_t)(interval >> 8u),
+      nagRightScrollPatternSanitize(v.rightPattern), (uint8_t)v.tsl9Periodic,
+      (uint8_t)tsl9Interval, (uint8_t)(tsl9Interval >> 8u)};
+  return nvsCheckedWriteBlob("features", "cfg3282", bytes, sizeof(bytes));
+}
+
+static bool featureCfgPersistLab(bool enabled) {
+  FeatureCfgSnapshot candidate = featureCfgRuntimeSnapshot();
+  candidate.lab = enabled;
+  return featureCfgPersistCandidate(candidate);
+}
+
+static bool featureCfgSave() {
+  return featureCfgPersistCandidate(featureCfgRuntimeSnapshot());
 }
 
 static void summonCfgLoad() {
-    prefs.begin("summon", false);
-    tlsscEnabled  = prefs.getBool("tlssc", false);
-    tlsscHighwayGateEnabled = prefs.getBool("tlHwy", false);
-    tlsscBlockInNoa = prefs.getBool("tlNoa", false);
-    blinkAEnabled = prefs.getBool("blkA", false);
-    tlsscInjectedActive = false;
-    tlsscClearPending = false;
-
-    // Pre-schema builds used blkDly17 as a one-time migration marker. Preserve
-    // that behavior exactly once when upgrading directly from those versions.
-    if (nvsSchemaVersion < 1) {
-      const bool delayMigratedRev17 = prefs.getBool("blkDly17", false);
-      if (!delayMigratedRev17) {
-        blinkADelayMs = BLINKA_AUTO_DELAY_DEFAULT_MS;
-        prefs.putUInt("blkADly", blinkADelayMs);
-      } else {
-        blinkADelayMs = prefs.getUInt("blkADly", BLINKA_AUTO_DELAY_DEFAULT_MS);
-      }
-    } else {
-      blinkADelayMs = prefs.getUInt("blkADly", BLINKA_AUTO_DELAY_DEFAULT_MS);
-    }
-    blinkADelayMs = constrain((uint32_t)blinkADelayMs, (uint32_t)0, (uint32_t)30000);
-    blinkANoaStabilizationSeconds =
-        autoBlinkerNoaStabilizationSecondsSanitizePure(
-            prefs.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE));
-    blinkACancelPauseSeconds = autoBlinkerCancelPauseSecondsSanitizePure(
-        prefs.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE));
-    prefs.end();
+    CheckedPreferences prefs;
+    uint8_t bytes[11] = {}; bool found = false;
+    if (!prefs.begin("summon", true) ||
+        !nvsCheckedReadBlob("summon", "cfg3282", bytes, sizeof(bytes), found) ||
+        (found && bytes[0] != 1u)) { summonCfgReadOk = false; return; }
+    const bool enabled = found ? bytes[1] != 0u : prefs.getBool("tlssc", false);
+    const bool highway = found ? bytes[2] != 0u : prefs.getBool("tlHwy", false);
+    const bool noa = found ? bytes[3] != 0u : prefs.getBool("tlNoa", false);
+    const bool blinker = found ? bytes[4] != 0u : prefs.getBool("blkA", false);
+    uint32_t delayMs = found ? featureNvsU32(bytes + 5u) :
+        prefs.getUInt("blkADly", BLINKA_AUTO_DELAY_DEFAULT_MS);
+    if (!found && nvsSchemaVersion < 1u && !prefs.getBool("blkDly17", false))
+      delayMs = BLINKA_AUTO_DELAY_DEFAULT_MS;
+    const uint8_t stabilize = found ? bytes[9] :
+        prefs.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE);
+    const uint8_t pause = found ? bytes[10] :
+        prefs.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE);
+    summonCfgReadOk = prefs.ok(); prefs.end();
+    if (!summonCfgReadOk) return;
+    tlsscEnabled = enabled; tlsscHighwayGateEnabled = highway;
+    tlsscBlockInNoa = noa; blinkAEnabled = blinker;
+    tlsscInjectedActive = false; tlsscClearPending = false;
+    blinkADelayMs = constrain(delayMs, (uint32_t)0, (uint32_t)30000);
+    blinkANoaStabilizationSeconds = autoBlinkerNoaStabilizationSecondsSanitizePure(stabilize);
+    blinkACancelPauseSeconds = autoBlinkerCancelPauseSecondsSanitizePure(pause);
 }
 
-static void summonCfgSave() {
-    prefs.begin("summon", false);
-    prefs.putBool("tlssc", tlsscEnabled);
-    prefs.putBool("tlHwy", tlsscHighwayGateEnabled);
-    prefs.putBool("tlNoa", tlsscBlockInNoa);
-    prefs.putBool("blkA", blinkAEnabled);
-    prefs.putUInt("blkADly", blinkADelayMs);
-    prefs.putUChar("noaStabS", autoBlinkerNoaStabilizationSecondsSanitizePure(
-        blinkANoaStabilizationSeconds));
-    prefs.putUChar("cancelPauseS", autoBlinkerCancelPauseSecondsSanitizePure(
-        blinkACancelPauseSeconds));
-    prefs.end();
+static bool summonCfgPersistCandidate(const SummonCfgSnapshot &value) {
+  if (!featureConfigNvsReadOk || !summonCfgReadOk) return false;
+  const uint8_t bytes[11] = {1u, (uint8_t)value.tlssc,
+      (uint8_t)value.highway, (uint8_t)value.noa,
+      (uint8_t)value.blinker, (uint8_t)value.delayMs,
+      (uint8_t)(value.delayMs >> 8u), (uint8_t)(value.delayMs >> 16u),
+      (uint8_t)(value.delayMs >> 24u),
+      autoBlinkerNoaStabilizationSecondsSanitizePure(value.stabilize),
+      autoBlinkerCancelPauseSecondsSanitizePure(value.pause)};
+  return nvsCheckedWriteBlob("summon", "cfg3282", bytes, sizeof(bytes));
 }
+static bool summonCfgSave() {
+  return summonCfgPersistCandidate(summonCfgRuntimeSnapshot());
+}
+
+
 
 static bool featureConfigWriteSchema3Values(
     const FeatureConfigV37Pure &config) {
@@ -3613,21 +5078,17 @@ static bool featureConfigWriteSchema3Values(
        p.putUChar("cancelPauseS", autoBlinkerCancelPauseSecondsSanitizePure(
            config.cancelPauseSeconds)) > 0;
   p.end();
-  if (!ok || !p.begin("features", false)) return false;
-  ok = p.putUChar("rsWarnS", apRightScrollWarningRepeatSanitizePure(
-      config.rightScrollWarningSeconds)) > 0;
-  p.end();
   return ok;
 }
 
 static bool featureConfigSchema3ReadBackMatches(
     const FeatureConfigV37Pure &expected) {
-  Preferences p;
+  CheckedPreferences p;
   if (!p.begin("r79", true)) return false;
   const bool r79Ok = p.getUChar("bit18", 0xFFu) ==
       r79Bit18PolicySanitizePure(expected.r79Bit18Mode);
-  p.end();
-  if (!r79Ok || !p.begin("summon", true)) return false;
+  const bool r79ReadOk = p.ok(); p.end();
+  if (!r79ReadOk || !r79Ok || !p.begin("summon", true)) return false;
   const bool summonOk =
       p.getUChar("noaStabS", 0u) ==
           autoBlinkerNoaStabilizationSecondsSanitizePure(
@@ -3635,13 +5096,8 @@ static bool featureConfigSchema3ReadBackMatches(
       p.getUChar("cancelPauseS", 0u) ==
           autoBlinkerCancelPauseSecondsSanitizePure(
               expected.cancelPauseSeconds);
-  p.end();
-  if (!summonOk || !p.begin("features", true)) return false;
-  const bool featuresOk = p.getUChar("rsWarnS", 0u) ==
-      apRightScrollWarningRepeatSanitizePure(
-          expected.rightScrollWarningSeconds);
-  p.end();
-  return featuresOk;
+  const bool summonReadOk = p.ok(); p.end();
+  return summonReadOk && summonOk;
 }
 
 static void featureConfigCleanupRetiredR79Keys() {
@@ -3666,6 +5122,7 @@ static void featureConfigCleanupRetiredR79Keys() {
 }
 
 static bool featureConfigMigrateToSchema3() {
+  if (!featureConfigNvsReadOk) return false;
   if (nvsSchemaVersion >= NVS_SCHEMA_CURRENT) {
     // A reset immediately after the durable marker may have interrupted only
     // cleanup. It is safe and intentional to retry cleanup on every such boot.
@@ -3673,27 +5130,24 @@ static bool featureConfigMigrateToSchema3() {
     return true;
   }
 
+  CheckedPreferences source;
   Preferences p;
   uint8_t legacyR79Bit18 = R79_BIT18_DEFAULT_PURE;
-  if (!p.begin("r79lab", false)) return false;
-  legacyR79Bit18 = p.getUChar("smart18", R79_BIT18_DEFAULT_PURE);
-  p.end();
+  if (!source.begin("r79lab", true)) { featureConfigNvsReadOk = false; return false; }
+  legacyR79Bit18 = source.getUChar("smart18", R79_BIT18_DEFAULT_PURE);
+  const bool r79labReadOk = source.ok(); source.end();
+  if (!r79labReadOk) { featureConfigNvsReadOk = false; return false; }
 
   FeatureConfigV37Pure config =
       featureConfigV37FromLegacyPure(legacyR79Bit18);
-  if (!p.begin("summon", false)) return false;
+  if (!source.begin("summon", true)) { featureConfigNvsReadOk = false; return false; }
   config.noaStabilizationSeconds =
       autoBlinkerNoaStabilizationSecondsSanitizePure(
-          p.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE));
+          source.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE));
   config.cancelPauseSeconds = autoBlinkerCancelPauseSecondsSanitizePure(
-      p.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE));
-  p.end();
-  if (!p.begin("features", false)) return false;
-  config.rightScrollWarningSeconds =
-      apRightScrollWarningRepeatSanitizePure(
-          p.getUChar("rsWarnS", AP_RIGHT_SCROLL_DEFAULT_WARNING_REPEAT_S_PURE));
-  p.end();
-
+      source.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE));
+  const bool summonReadOk = source.ok(); source.end();
+  if (!summonReadOk) { featureConfigNvsReadOk = false; return false; }
   if (!featureConfigWriteSchema3Values(config) ||
       !featureConfigSchema3ReadBackMatches(config)) {
     T2CAN_SERIAL_PRINTLN("NVS schema 3 value verification failed; will retry");
@@ -3735,7 +5189,7 @@ static bool featureConfigWriteSchema2Values(
 
 static bool featureConfigSchema2ReadBackMatches(
     const FeatureConfigMigrationPure &expected) {
-  Preferences p;
+  CheckedPreferences p;
   if (!p.begin("ulc", true)) return false;
   const bool ulcOk =
       p.getBool("alcOff", false) == expected.ulc.alcOffHighwayEnabled &&
@@ -3743,33 +5197,36 @@ static bool featureConfigSchema2ReadBackMatches(
       p.getUChar("ulcOff", 0) == expected.ulc.ulcOffHighwayMode &&
       p.getBool("confirm", false) == expected.ulc.confirmFreeEnabled &&
       p.getUChar("timing", 0) == expected.ulc.confirmFreeTiming;
-  p.end();
-  if (!ulcOk || !p.begin("alc293lab", true)) return false;
+  const bool ulcReadOk = p.ok(); p.end();
+  if (!ulcReadOk || !ulcOk || !p.begin("alc293lab", true)) return false;
   const bool alcOk =
       p.getBool("enabled", false) == expected.autoLaneChange.enabled &&
       p.getUChar("bus", 0) == expected.autoLaneChange.bus;
-  p.end();
-  return alcOk;
+  const bool alcReadOk = p.ok(); p.end();
+  return alcReadOk && alcOk;
 }
 
 static bool featureConfigMigrateToSchema2() {
+  if (!featureConfigNvsReadOk) return false;
   if (nvsSchemaVersion >= NVS_SCHEMA_ULC) return true;
 
   LegacyLab3f8ConfigPure legacy = {};
+  CheckedPreferences source;
   Preferences p;
-  // Opening read-write also creates the legacy namespace on a fresh install,
-  // allowing an all-default migration instead of treating absence as failure.
-  if (!p.begin("lab3f8", false)) return false;
-  legacy.alcMode = p.getUChar("alc", LAB3F8_ALC_STOCK);
-  legacy.blindMode = p.getUChar("ulcbs", LAB3F8_STOCK);
-  legacy.ulcOffHighwayMode = p.getUChar("ulcoff", LAB3F8_STOCK);
-  legacy.confirmFreeEnabled = p.getBool("ulcNoConf", false);
-  legacy.confirmFreeTiming = p.getUChar(
+  // Checked read-only access distinguishes an absent legacy namespace from
+  // an unavailable backend before any migration writes are attempted.
+  if (!source.begin("lab3f8", true)) { featureConfigNvsReadOk = false; return false; }
+  legacy.alcMode = source.getUChar("alc", LAB3F8_ALC_STOCK);
+  legacy.blindMode = source.getUChar("ulcbs", LAB3F8_STOCK);
+  legacy.ulcOffHighwayMode = source.getUChar("ulcoff", LAB3F8_STOCK);
+  legacy.confirmFreeEnabled = source.getBool("ulcNoConf", false);
+  legacy.confirmFreeTiming = source.getUChar(
       "ulcTiming", ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE);
-  legacy.autoLaneChange293Enabled = p.getBool("autoLc293", false);
-  legacy.autoLaneChange293Bus = p.getUChar(
+  legacy.autoLaneChange293Enabled = source.getBool("autoLc293", false);
+  legacy.autoLaneChange293Bus = source.getUChar(
       "autoLcBus", UI_AUTO_LC_BUS_BOTH_PURE);
-  p.end();
+  const bool lab3f8ReadOk = source.ok(); source.end();
+  if (!lab3f8ReadOk) { featureConfigNvsReadOk = false; return false; }
 
   const FeatureConfigMigrationPure migrated = migrateLegacyLab3f8Pure(legacy);
   if (!featureConfigWriteSchema2Values(migrated) ||
@@ -3818,43 +5275,47 @@ static FeatureConfigMigrationPure featureConfigRuntimeSnapshot() {
   return config;
 }
 
+static bool ulcCfgPersistCandidate(const FeatureConfigMigrationPure &config) {
+  if (!featureConfigNvsReadOk || !ulcCfgReadOk) return false;
+  const uint8_t bytes[6] = {1u, (uint8_t)config.ulc.alcOffHighwayEnabled,
+      config.ulc.blindSpotMode, config.ulc.ulcOffHighwayMode,
+      (uint8_t)config.ulc.confirmFreeEnabled, config.ulc.confirmFreeTiming};
+  return nvsCheckedWriteBlob("ulc", "cfg3282", bytes, sizeof(bytes));
+}
+
 static bool ulcCfgSave() {
-  const FeatureConfigMigrationPure config = featureConfigRuntimeSnapshot();
-  Preferences p;
-  if (!p.begin("ulc", false)) return false;
-  const bool ok =
-      p.putBool("alcOff", config.ulc.alcOffHighwayEnabled) > 0 &&
-      p.putUChar("blind", config.ulc.blindSpotMode) > 0 &&
-      p.putUChar("ulcOff", config.ulc.ulcOffHighwayMode) > 0 &&
-      p.putBool("confirm", config.ulc.confirmFreeEnabled) > 0 &&
-      p.putUChar("timing", config.ulc.confirmFreeTiming) > 0;
-  p.end();
-  return ok;
+  return ulcCfgPersistCandidate(featureConfigRuntimeSnapshot());
+}
+
+static bool autoLaneChangeLabCfgPersistCandidate(const FeatureConfigMigrationPure &config) {
+  if (!featureConfigNvsReadOk || !autoLaneChangeCfgReadOk) return false;
+  const uint8_t bytes[3] = {1u, (uint8_t)config.autoLaneChange.enabled,
+      config.autoLaneChange.bus};
+  return nvsCheckedWriteBlob("alc293lab", "cfg3282", bytes, sizeof(bytes));
 }
 
 static bool autoLaneChangeLabCfgSave() {
-  const FeatureConfigMigrationPure config = featureConfigRuntimeSnapshot();
-  Preferences p;
-  if (!p.begin("alc293lab", false)) return false;
-  const bool ok = p.putBool("enabled", config.autoLaneChange.enabled) > 0 &&
-                  p.putUChar("bus", config.autoLaneChange.bus) > 0;
-  p.end();
-  return ok;
+  return autoLaneChangeLabCfgPersistCandidate(featureConfigRuntimeSnapshot());
 }
 
 static bool ulcCfgLoadAndMigrate() {
   const bool migrated = featureConfigMigrateToSchema2();
-  Preferences p;
+  CheckedPreferences p;
+  uint8_t bytes[6] = {}; bool found = false;
+  if (!migrated || !nvsCheckedReadBlob("ulc", "cfg3282", bytes, sizeof(bytes), found) ||
+      (found && bytes[0] != 1u)) { ulcCfgReadOk = false; return false; }
   bool alcOff = false, confirm = false;
   uint8_t blind = LAB3F8_STOCK, ulcOff = LAB3F8_STOCK;
   uint8_t timing = ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE;
-  if (migrated && p.begin("ulc", true)) {
-    alcOff = p.getBool("alcOff", false);
-    blind = p.getUChar("blind", LAB3F8_STOCK);
-    ulcOff = p.getUChar("ulcOff", LAB3F8_STOCK);
-    confirm = p.getBool("confirm", false);
-    timing = p.getUChar("timing", ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE);
-    p.end();
+  if (!p.begin("ulc", true)) { ulcCfgReadOk = false; return false; }
+  {
+    alcOff = found ? bytes[1] != 0u : p.getBool("alcOff", false);
+    blind = found ? bytes[2] : p.getUChar("blind", LAB3F8_STOCK);
+    ulcOff = found ? bytes[3] : p.getUChar("ulcOff", LAB3F8_STOCK);
+    confirm = found ? bytes[4] != 0u : p.getBool("confirm", false);
+    timing = found ? bytes[5] : p.getUChar("timing", ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE);
+    ulcCfgReadOk = p.ok(); p.end();
+    if (!ulcCfgReadOk) return false;
   }
   if (blind != LAB3F8_STOCK && blind > 2) blind = LAB3F8_STOCK;
   if (ulcOff != LAB3F8_STOCK && ulcOff > 1) ulcOff = LAB3F8_STOCK;
@@ -3872,13 +5333,18 @@ static bool ulcCfgLoadAndMigrate() {
 
 static bool autoLaneChangeLabCfgLoadAndMigrate() {
   const bool migrated = featureConfigMigrateToSchema2();
-  Preferences p;
+  CheckedPreferences p;
+  uint8_t bytes[3] = {}; bool found = false;
+  if (!migrated || !nvsCheckedReadBlob("alc293lab", "cfg3282", bytes, sizeof(bytes), found) ||
+      (found && bytes[0] != 1u)) { autoLaneChangeCfgReadOk = false; return false; }
   bool enabled = false;
   uint8_t bus = UI_AUTO_LC_BUS_BOTH_PURE;
-  if (migrated && p.begin("alc293lab", true)) {
-    enabled = p.getBool("enabled", false);
-    bus = p.getUChar("bus", UI_AUTO_LC_BUS_BOTH_PURE);
-    p.end();
+  if (!p.begin("alc293lab", true)) { autoLaneChangeCfgReadOk = false; return false; }
+  {
+    enabled = found ? bytes[1] != 0u : p.getBool("enabled", false);
+    bus = found ? bytes[2] : p.getUChar("bus", UI_AUTO_LC_BUS_BOTH_PURE);
+    autoLaneChangeCfgReadOk = p.ok(); p.end();
+    if (!autoLaneChangeCfgReadOk) return false;
   }
   if (!uiAutoLaneChangeBusTargetValidPure(bus))
     bus = UI_AUTO_LC_BUS_BOTH_PURE;
@@ -3889,26 +5355,188 @@ static bool autoLaneChangeLabCfgLoadAndMigrate() {
   return migrated;
 }
 
+static void countryOverrideCfgLoad() {
+  Preferences p;
+  uint8_t mode = COUNTRY_OVERRIDE_STOCK_PURE, map = MAP_REGION_STOCK_PURE;
+  if (p.begin("countrylab", true)) {
+    if (p.isKey("selection")) {
+      const uint16_t packed = p.getUShort("selection", 0u);
+      mode = (uint8_t)packed;
+      map = (uint8_t)(packed >> 8);
+      if (!countryOverrideModeValidPure(mode) || !mapRegionModeValidPure(map)) {
+        mode = COUNTRY_OVERRIDE_STOCK_PURE; map = MAP_REGION_STOCK_PURE;
+      }
+    } else {
+      mode = p.getUChar("mode", COUNTRY_OVERRIDE_STOCK_PURE);
+      if (!countryOverrideModeValidPure(mode)) mode = COUNTRY_OVERRIDE_STOCK_PURE;
+      map = mapRegionFromLegacyCountryPure(mode);
+    }
+    p.end();
+  }
+  portENTER_CRITICAL(&countryOverrideMux);
+  countryOverrideMode = mode;
+  countryOverrideMapMode = map;
+  portEXIT_CRITICAL(&countryOverrideMux);
+}
 
 static void r79CfgLoad() {
-  prefs.begin("r79", false);
-  const uint8_t stored = prefs.getUChar("bit18", R79_BIT18_DEFAULT_PURE);
-  prefs.end();
+  CheckedPreferences prefs;
+  uint8_t bytes[10] = {}; bool found = false;
+  if (!prefs.begin("r79", true) ||
+      !nvsCheckedReadBlob("r79", "cfg3282", bytes, sizeof(bytes), found) ||
+      (found && bytes[0] != 1u)) { r79CfgReadOk = false; return; }
+  const uint32_t apPacked = prefs.getUInt("apctl", 2u << 8);
+  const bool storedHw3 = prefs.getBool("hw3", false);
+  const uint8_t stored = found ? bytes[1] : prefs.getUChar("bit18", R79_BIT18_DEFAULT_PURE);
+  const uint8_t storedMode = found ? bytes[2] : prefs.getUChar("mode", R79_MODE_DEFAULT_PURE);
+  const uint8_t storedMode1Wait = found ? bytes[3] : prefs.getUChar(
+      "m1wait", R79_MODE1_WAIT_DEFAULT_PURE);
+  const bool storedMode1Reinject = found ? bytes[4] != 0u : prefs.getBool("m1re", true);
+  const uint16_t storedMode1Delay = found ? featureNvsU16(bytes + 5u) : prefs.getUShort(
+      "m1delay", R79_FIXED_QUIET_DELAY_MS_PURE);
+  const bool storedMode2Reinject = found ? bytes[7] != 0u : prefs.getBool("m2re", false);
+  const uint16_t storedMode2Delay = found ? featureNvsU16(bytes + 8u) : prefs.getUShort(
+      "m2delay", R79_MODE2_DELAY_DEFAULT_MS_PURE);
+  r79CfgReadOk = prefs.ok(); prefs.end();
+  if (!r79CfgReadOk) return;
+  R79ApGateConfigPure apConfig = {
+      (apPacked & 1u) != 0u, (uint8_t)((apPacked >> 1) & 1u),
+      (uint8_t)((apPacked >> 8) & 0xFFu), (apPacked & 4u) != 0u};
+  if ((apPacked & ~0xFF07u) || apConfig.delaySeconds < 2u || apConfig.delaySeconds > 10u)
+    apConfig = {false, R79_AP_GATE_BLOCK_PURE, 2u};
+  portENTER_CRITICAL(&stateMux);
+  r79ApGateConfig = apConfig;
+  r79ApGateSession = {};
+  portEXIT_CRITICAL(&stateMux);
   portENTER_CRITICAL(&r79LabMux);
   r79Bit18Policy = r79Bit18PolicySanitizePure(stored);
+  r79Hw3Enabled = storedHw3;
+  r79TransportMode = r79ModeSanitizePure(storedMode);
+  r79Mode1TxWaitMode = r79Mode1WaitModeSanitizePure(storedMode1Wait);
+  r79Mode1ReinjectEnabled = storedMode1Reinject;
+  r79Mode1DelayMs = r79FixedQuietDelaySanitizePure(storedMode1Delay);
+  r79Mode2ReinjectEnabled = storedMode2Reinject;
+  r79Mode2DelayMs = r79Mode2DelaySanitizePure(storedMode2Delay);
   r79FixedQuietState = {};
+  r79Mode2DelayedState = {};
+  r79RetryPending = false;
+  r79RetryIndex = 0;
+  r79RetryOriginKind = R79LAB_TX_NONE;
+  r79RetryDueMs = 0;
+  r79RetryGeneration = 0u;
   portEXIT_CRITICAL(&r79LabMux);
 }
 
-static void r79CfgSave() {
-  uint8_t bit18Policy;
+// Save one scalar first; a failed NVS write leaves live behavior untouched.
+// Web handlers are serialized. Publish under the same barrier as final R79 TX.
+static bool r79ApControlApply(const R79ApGateConfigPure &next) {
+  if (next.mode > 1u || next.delaySeconds < 2u || next.delaySeconds > 10u ||
+      !canTxBarrierMutex) return false;
+  portENTER_CRITICAL(&stateMux);
+  const bool unchanged = r79ApGateConfig.enabled == next.enabled &&
+      r79ApGateConfig.mode == next.mode && r79ApGateConfig.delaySeconds == next.delaySeconds &&
+      r79ApGateConfig.allowManualDriving == next.allowManualDriving;
+  portEXIT_CRITICAL(&stateMux);
+  if (unchanged) return true;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  Preferences p;
+  if (!p.begin("r79", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  const uint32_t packed = (next.enabled ? 1u : 0u) | ((uint32_t)next.mode << 1) |
+      ((next.allowManualDriving ? 1u : 0u) << 2) | ((uint32_t)next.delaySeconds << 8);
+  const bool saved = p.putUInt("apctl", packed) == sizeof(uint32_t);
+  p.end();
+  if (!saved) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  portENTER_CRITICAL(&stateMux);
+  r79ApGateConfig = next;
+  r79ApGateSession = {};
+  __atomic_add_fetch(&r79ApGateGeneration, 1u, __ATOMIC_ACQ_REL);
+  updateR79ManualSuppressionLocked((uint32_t)millis(), true);
+  portEXIT_CRITICAL(&stateMux);
+  // Old periodic/retry descriptors never cross a configuration boundary.
   portENTER_CRITICAL(&r79LabMux);
-  bit18Policy = r79Bit18Policy;
+  r79FixedQuietState = {};
+  r79Mode2DelayedState = {};
+  r79RetryPending = false;
+  r79RetryIndex = 0u;
+  r79RetryOriginKind = R79LAB_TX_NONE;
+  r79RetryDueMs = 0u;
+  r79RetryGeneration = 0u;
   portEXIT_CRITICAL(&r79LabMux);
-  prefs.begin("r79", false);
-  prefs.putUChar("bit18", r79Bit18PolicySanitizePure(bit18Policy));
-  prefs.end();
+  __atomic_add_fetch(&r79Mode1PostMux2Generation, 1u, __ATOMIC_ACQ_REL);
+  xSemaphoreGive(canTxBarrierMutex);
+  return true;
 }
+
+// Persist before publishing. Generation checks reject frames prepared under the
+// old bit47 policy; the AP session itself is independent and stays unchanged.
+static bool r79Hw3Apply(bool enabled) {
+  if ((enabled && !activeProfileR79Hw3Supported()) || !canTxBarrierMutex)
+    return false;
+  portENTER_CRITICAL(&r79LabMux);
+  const bool unchanged = r79Hw3Enabled == enabled;
+  portEXIT_CRITICAL(&r79LabMux);
+  if (unchanged) return true;
+  Preferences p;
+  if (!p.begin("r79", false)) return false;
+  const bool saved = p.putBool("hw3", enabled) == sizeof(uint8_t);
+  p.end();
+  if (!saved) return false;
+  if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  portENTER_CRITICAL(&r79LabMux);
+  r79Hw3Enabled = enabled;
+  __atomic_add_fetch(&r79ApGateGeneration, 1u, __ATOMIC_ACQ_REL);
+  __atomic_add_fetch(&r79Mode1PostMux2Generation, 1u, __ATOMIC_ACQ_REL);
+  r79FixedQuietState = {};
+  r79Mode2DelayedState = {};
+  r79RetryPending = false;
+  r79RetryIndex = 0u;
+  r79RetryOriginKind = R79LAB_TX_NONE;
+  r79RetryDueMs = 0u;
+  r79RetryGeneration = 0u;
+  portEXIT_CRITICAL(&r79LabMux);
+  xSemaphoreGive(canTxBarrierMutex);
+  return true;
+}
+
+struct R79CfgSnapshot {
+  uint8_t bit18, mode, wait;
+  bool reinject1;
+  uint16_t delay1;
+  bool reinject2;
+  uint16_t delay2;
+};
+static R79CfgSnapshot r79CfgRuntimeSnapshot() {
+  portENTER_CRITICAL(&r79LabMux);
+  const R79CfgSnapshot value = {r79Bit18Policy, r79TransportMode,
+      r79Mode1TxWaitMode, r79Mode1ReinjectEnabled, r79Mode1DelayMs,
+      r79Mode2ReinjectEnabled, r79Mode2DelayMs};
+  portEXIT_CRITICAL(&r79LabMux);
+  return value;
+}
+static void r79CfgRuntimeRestore(const R79CfgSnapshot &value) {
+  portENTER_CRITICAL(&r79LabMux);
+  r79Bit18Policy = value.bit18; r79TransportMode = value.mode;
+  r79Mode1TxWaitMode = value.wait; r79Mode1ReinjectEnabled = value.reinject1;
+  r79Mode1DelayMs = value.delay1; r79Mode2ReinjectEnabled = value.reinject2;
+  r79Mode2DelayMs = value.delay2;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+
+static bool r79CfgPersistCandidate(const R79CfgSnapshot &value) {
+  if (!featureConfigNvsReadOk || !r79CfgReadOk) return false;
+  const uint16_t d1 = r79FixedQuietDelaySanitizePure(value.delay1);
+  const uint16_t d2 = r79Mode2DelaySanitizePure(value.delay2);
+  const uint8_t bytes[10] = {1u, r79Bit18PolicySanitizePure(value.bit18),
+      r79ModeSanitizePure(value.mode),
+      r79Mode1WaitModeSanitizePure(value.wait),
+      (uint8_t)value.reinject1, (uint8_t)d1, (uint8_t)(d1 >> 8u),
+      (uint8_t)value.reinject2, (uint8_t)d2, (uint8_t)(d2 >> 8u)};
+  return nvsCheckedWriteBlob("r79", "cfg3282", bytes, sizeof(bytes));
+}
+static bool r79CfgSave() {
+  return r79CfgPersistCandidate(r79CfgRuntimeSnapshot());
+}
+
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -3921,3 +5549,7 @@ static volatile bool     otaError      = false;
 static volatile uint32_t otaBytes      = 0;
 static volatile uint32_t otaTotal      = 0;
 static char              otaErrMsg[64] = "";
+static const char       *otaStage = "idle";
+static uint8_t           otaUpdateError = 0;
+static uint32_t          otaAttempt = 0;
+static bool              otaUploadEnded = false;

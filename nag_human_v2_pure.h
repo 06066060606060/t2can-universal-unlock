@@ -176,25 +176,6 @@ static inline NagHumanV2ConfigPure nagHumanV2DefaultConfigPure() {
   return c;
 }
 
-static inline bool nagHumanV2ConfigValidPure(const NagHumanV2ConfigPure &c) {
-  return c.holdNormalMinRaw <= c.holdNormalMaxRaw &&
-         c.holdNormalMaxRaw <= c.holdExcursionMaxRaw &&
-         c.holdExcursionMinRaw <= c.holdExcursionMaxRaw &&
-         c.holdExcursionPct <= 100u &&
-         c.holdDwellMinMs <= c.holdDwellMaxMs &&
-         c.quickTransitionPct <= 100u &&
-         c.smoothTransitionMinMs <= c.smoothTransitionMaxMs &&
-         c.quickTransitionMinMs <= c.quickTransitionMaxMs &&
-         c.hoPulseMinMs <= c.hoPulseMaxMs &&
-         c.naturalTapIntervalMinMs >= 3000u &&
-         c.naturalTapIntervalMaxMs <= 6000u &&
-         c.naturalTapIntervalMinMs <= c.naturalTapIntervalMaxMs &&
-         c.naturalTapMinRaw == 180u && c.naturalTapMaxRaw == 220u &&
-         c.tapAttackMinMs <= c.tapAttackMaxMs &&
-         c.tapPeakMinMs <= c.tapPeakMaxMs &&
-         c.tapReleaseMinMs <= c.tapReleaseMaxMs;
-}
-
 static inline uint32_t nagHumanV2SanitizeSeedPure(uint32_t seed) {
   return seed == 0u ? 0x6D2B79F5u : seed;
 }

@@ -1,12 +1,12 @@
 #pragma once
 #include <stdint.h>
 
-enum NagModeHVariantPure : uint8_t {
-  H_VARIANT_REV1 = 0,
-  H_VARIANT_REV4 = 1,
-  H_VARIANT_REV2 = 2,
-  H_VARIANT_REV3 = 3
-};
+// Persisted value 1 is retained for existing Mode H tuning.
+enum NagModeHVariantPure : uint8_t { H_VARIANT_REV4 = 1 };
+
+static inline uint8_t nagModeHDefaultVariantPure() {
+  return H_VARIANT_REV4;
+}
 
 
 enum NagModeHStopBehaviorPure : uint8_t {
@@ -30,27 +30,8 @@ static inline bool nagModeHUseStopCarrierPure(uint8_t behavior, bool confirmedSt
   return behavior == H_STOP_STOCK_CARRIER && confirmedStopped;
 }
 
-static inline bool nagModeHVariantValidPure(uint8_t v) {
-  return v == H_VARIANT_REV1 || v == H_VARIANT_REV4 ||
-         v == H_VARIANT_REV2 || v == H_VARIANT_REV3;
-}
+static inline bool nagModeHVariantValidPure(uint8_t v) { return v == H_VARIANT_REV4; }
 
-static inline const char* nagModeHVariantCodePure(uint8_t v) {
-  switch (v) {
-    case H_VARIANT_REV1: return "R1";
-    case H_VARIANT_REV4: return "R4";
-    case H_VARIANT_REV2: return "R2";
-    case H_VARIANT_REV3: return "R3";
-    default: return "R3";
-  }
-}
+static inline const char* nagModeHVariantCodePure(uint8_t) { return "H"; }
 
-static inline const char* nagModeHVariantLabelPure(uint8_t v) {
-  switch (v) {
-    case H_VARIANT_REV1: return "Rev.1";
-    case H_VARIANT_REV4: return "Rev.4";
-    case H_VARIANT_REV2: return "Rev.2";
-    case H_VARIANT_REV3: return "Rev.3";
-    default: return "Rev.3";
-  }
-}
+static inline const char* nagModeHVariantLabelPure(uint8_t) { return "Mode H"; }

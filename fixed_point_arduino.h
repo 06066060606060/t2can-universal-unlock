@@ -10,7 +10,3 @@ static inline String fixedPointString(int32_t scaled, uint8_t decimals) {
 static inline String centiString(int32_t centi) {
   return fixedPointString(centi, 2u);
 }
-
-static inline String deciString(int32_t deci) {
-  return fixedPointString(deci, 1u);
-}
