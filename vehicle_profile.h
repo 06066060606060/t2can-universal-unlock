@@ -271,6 +271,7 @@ static inline const char *turnSignalVariantName(uint8_t turn) {
 }
 
 #ifdef ARDUINO
+#include "nvs_checked.h"
 static constexpr const char *VEHICLE_PROFILE_NAMESPACE = "v3profile";
 static constexpr const char *VEHICLE_PROFILE_KEY = "profile";
 static constexpr const char *VEHICLE_TOPOLOGY_KEY = "topology";
@@ -398,15 +399,17 @@ static bool vehicleProfileWriteBootstrapMarker(bool migrationNotice) {
 }
 
 static bool vehicleProfileLoadFromNvs() {
-  Preferences p;
+  CheckedPreferences p;
   if (!p.begin(VEHICLE_PROFILE_NAMESPACE, true)) return false;
   const uint8_t id = p.getUChar(VEHICLE_PROFILE_KEY, VEHICLE_PROFILE_NONE);
   const uint8_t topologyStored = p.getUChar(VEHICLE_TOPOLOGY_KEY, VEHICLE_TOPOLOGY_NONE);
   const uint8_t turnStored = p.getUChar(VEHICLE_TURN_KEY, TURN_SIGNAL_UNSET);
   const bool initialized = p.getBool(VEHICLE_UNIVERSAL_INIT_KEY, false);
   const bool notice = p.getBool(VEHICLE_MIGRATION_NOTICE_KEY, false);
+  const bool readOk = p.ok();
   p.end();
 
+  if (!readOk) return false;
   vehicleProfileMigrationNotice = notice;
   if (!initialized || !vehicleProfileValid(id)) return false;
 

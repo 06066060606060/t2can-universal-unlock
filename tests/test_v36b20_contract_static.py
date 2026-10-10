@@ -12,7 +12,7 @@ v3 = (root/'nag_human_v3_pure.h').read_text(errors='ignore')
 v4 = (root/'nag_human_v4_pure.h').read_text(errors='ignore')
 variants = (root/'nag_mode_h_variant_pure.h').read_text(errors='ignore')
 
-assert '#define FW_VERSION "v3.28.0"' in ino
+assert '#define FW_VERSION "v3.28.3"' in ino
 assert '#include "nag_human_v4_pure.h"' in ino
 assert '#include "nag_mode_h_variant_pure.h"' in ino
 
@@ -20,7 +20,7 @@ assert '#include "nag_mode_h_variant_pure.h"' in ino
 assert 'H_VARIANT_REV4 = 1' in variants
 for token in ['H_VARIANT_REV1', 'H_VARIANT_REV2', 'H_VARIANT_REV3']:
     assert token not in variants + core + api, token
-assert 'prefs.putUChar("hv"' in core
+assert 'stored.variant = nagModeHVariantValidPure(variant)' in core
 retired_handler=api.split('static void httpNagSetHumanVariant()',1)[1].split('static void httpNagUpdate()',1)[0]
 assert 'server.send(410' in retired_handler and 'Mode H profiles retired' in retired_handler
 assert 'nagHumanVariant =' not in retired_handler

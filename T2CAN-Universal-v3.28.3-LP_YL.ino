@@ -1,4 +1,4 @@
-// T2CAN Universal v3.28.0 - Model 3/Y / Model YL firmware
+// T2CAN Universal v3.28.3 - Model 3/Y / Model YL firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -77,7 +77,7 @@
 #include "fixed_point_arduino.h"
 #include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.28.0"
+#define FW_VERSION "v3.28.3"
 
 #include "continuous_ap_fsm_pure.h"
 #include "t2can_core_state.h"
@@ -142,17 +142,24 @@ void setup() {
       }
       vehicleProfileSetupMode = true;
     } else {
-      Preferences profileProbe;
+      CheckedPreferences profileProbe;
       bool universalInitialized = false;
       uint8_t storedProfile = VEHICLE_PROFILE_NONE;
-      if (profileProbe.begin(VEHICLE_PROFILE_NAMESPACE, true)) {
+      const bool profileProbeOpened =
+          profileProbe.begin(VEHICLE_PROFILE_NAMESPACE, true);
+      if (profileProbeOpened) {
         universalInitialized = profileProbe.getBool(VEHICLE_UNIVERSAL_INIT_KEY, false);
         storedProfile = profileProbe.getUChar(VEHICLE_PROFILE_KEY, VEHICLE_PROFILE_NONE);
         vehicleProfileMigrationNotice = profileProbe.getBool(VEHICLE_MIGRATION_NOTICE_KEY, false);
-        profileProbe.end();
       }
+      const bool profileProbeReadOk = profileProbeOpened && profileProbe.ok();
+      profileProbe.end();
 
-      if (!vehicleProfileValid(storedProfile)) {
+      if (!profileProbeReadOk) {
+        vehicleProfileNvsError = true;
+        vehicleProfileSetupMode = true;
+        T2CAN_SERIAL_PRINTLN("Vehicle profile read failed -> SAFE SETUP MODE, preserving NVS");
+      } else if (!vehicleProfileValid(storedProfile)) {
         if (!universalInitialized) {
           T2CAN_SERIAL_PRINTLN("Universal first boot: erasing previous NVS configuration...");
           if (nvs_flash_erase() == ESP_OK && nvs_flash_init() == ESP_OK &&

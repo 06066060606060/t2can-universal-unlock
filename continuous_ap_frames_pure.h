@@ -17,6 +17,11 @@ static inline bool continuousApScrollIdlePure(const ContApStockFrame &f) {
       &&((d[1]>>6)&3)==1&&((d[0]>>3)&3)==1&&((d[0]>>5)&3)==1
       &&(d[2]&63)==0&&(d[3]&63)==0&&(d[5]&6)==0;
 }
+static inline bool continuousApScrollFieldsValidPure(const uint8_t *d) {
+  const uint8_t fields[]={uint8_t((d[1]>>4)&3),uint8_t(d[1]&3),uint8_t((d[1]>>2)&3),uint8_t((d[1]>>6)&3),uint8_t((d[0]>>3)&3),uint8_t((d[0]>>5)&3)};
+  for(uint8_t value:fields)if(value!=1&&value!=2)return false;
+  return (d[6]&0x10)!=0;
+}
 static inline bool continuousApDecodeFramePure(const ContApStockFrame &f,ContApDecodedInputs &o) {
   o={}; const uint8_t *d=f.data; const bool b=f.route==ContApRoute::ChassisB;
   if(b&&f.id==0x399) o.signal=ContApSignal::Ap;
@@ -38,11 +43,11 @@ static inline bool continuousApDecodeFramePure(const ContApStockFrame &f,ContApD
   if(f.dlc!=8)return true;
   o.valid=true;
   switch(o.signal){
-    case ContApSignal::Ap:o.value=d[0]&15;break;
+    case ContApSignal::Ap:o.value=d[0]&15;o.valid=o.value<=6||o.value==8||o.value==9||o.value==14;break;
     case ContApSignal::Turn:o.left=d[0]&3;o.right=(d[0]>>2)&3;o.value=d[0];o.valid=o.left<3&&o.right<3;break;
     case ContApSignal::Gear:o.value=(d[2]>>5)&7;o.valid=o.value>=1&&o.value<=4;break;
     case ContApSignal::Torque:{uint16_t raw=((uint16_t)(d[2]&15)<<8)|d[3];o.value=(int32_t)raw-2050;o.valid=raw<4094&&(d[0]&4)==0;break;}
-    case ContApSignal::Scroll:o.value=(d[1]>>4)&3;o.valid=(o.value==1||o.value==2)&&(d[6]&0x10);o.idle=o.valid&&continuousApScrollIdlePure(f);break;
+    case ContApSignal::Scroll:o.value=(d[1]>>4)&3;o.valid=continuousApScrollFieldsValidPure(d);o.idle=o.valid&&continuousApScrollIdlePure(f);break;
     default:o.valid=false;break;
   }
   return true;

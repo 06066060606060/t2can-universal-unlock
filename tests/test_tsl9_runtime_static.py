@@ -12,12 +12,12 @@ assert 'uint8_t  method;' in core
 assert 'uint8_t  tsl9Sequence;' in core
 assert 'uint8_t  tsl9DowngradeWindow;' in core
 assert 'nagMethodSanitizePure' in core
-assert 'prefs.getUChar("method"' in core
-assert 'prefs.putUChar("method"' in core
-assert 'prefs.getUChar("tsl9seq"' in core
-assert 'prefs.putUChar("tsl9seq"' in core
-assert 'prefs.getUChar("tsl9win"' in core
-assert 'prefs.putUChar("tsl9win"' in core
+assert 'reader.getUChar("method"' in core
+assert 'stored.config = config;' in core
+assert 'reader.getUChar("tsl9seq"' in core
+assert 'stored.config = config;' in core
+assert 'reader.getUChar("tsl9win"' in core
+assert 'stored.config = config;' in core
 
 # YL 0x399 and Legacy Body 0x39B use their profile-selected MCP2515 path.
 assert 'static bool nagProcessTsl9Mcp(' in core

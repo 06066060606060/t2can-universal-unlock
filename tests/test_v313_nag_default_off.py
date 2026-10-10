@@ -25,23 +25,25 @@ class NagDefaultOff(unittest.TestCase):
     def test_new_namespace_and_missing_schema_use_common_defaults(self):
         load = body('nagCfgLoad')
         prefix = load[:load.index('const uint8_t nagCfgVersion')]
-        self.assertIn('if (!prefs.begin("nag", true))', prefix)
-        self.assertIn('if (!prefs.isKey("v"))', prefix)
-        self.assertEqual(prefix.count('nagCfgDefaultsModeH(nagCfg);'), 2)
+        self.assertIn('if (!reader.begin("nag", true))', prefix)
+        self.assertIn('if (!reader.isKey("v"))', prefix)
+        self.assertIn('nagCfgLoadSafeDefaults();', prefix)
+        self.assertIn('nagCfgDefaultsModeH(nagCfg);', prefix)
         self.assertIn('nagCfgSetCommonDefaults(c);', body('nagCfgDefaultsModeH'))
 
     def test_missing_enabled_key_defaults_off(self):
         load = body('nagCfgLoad')
-        self.assertRegex(load, r'nagCfg\.enabled\s*=\s*prefs\.getBool\("en",\s*false\);')
+        self.assertRegex(load, r'nagCfg\.enabled\s*=\s*reader\.getBool\("en",\s*false\);')
 
     def test_existing_saved_true_and_false_are_read_without_override(self):
         load = body('nagCfgLoad')
         assignments = re.findall(r'nagCfg\.enabled\s*=\s*([^;]+);', load)
-        self.assertEqual(assignments, ["savedEnabled", 'prefs.getBool("en", false)'])
-        self.assertIn('const bool savedEnabled = prefs.getBool("en", false);', load)
+        self.assertEqual(assignments, ["savedEnabled", 'reader.getBool("en", false)'])
+        self.assertIn('const bool savedEnabled = reader.getBool("en", false);', load)
 
     def test_save_keeps_enabled_snapshot(self):
-        self.assertRegex(SOURCE, r'prefs\.putBool\("en",\s*snapshot\.enabled\);')
+        self.assertIn('stored.config = config;', SOURCE)
+        self.assertIn('nvsCheckedWriteBlob("nag", "snapshot", &stored, sizeof(stored))', SOURCE)
 
 
 if __name__ == '__main__':

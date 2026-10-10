@@ -94,6 +94,7 @@ for name in ("canTxCancellationGenerationSnapshot", "canTxTwaiTransmitWithMaskTa
     code += function(core, name)
 code += logic[logic.index("static portMUX_TYPE countryOverrideMux"):
               logic.index("static bool countryOverrideSetModeWithBarrier")]
+code += "bool featureCfgPersistLab(bool){return true;}\nstatic bool countryOverrideSetLabEnabledWithBarrier(bool,bool persist=false);\n"
 for name in ("countryOverrideSetModeWithBarrier", "countryOverrideSetLabEnabledWithBarrier",
              "countryOverrideModeSnapshot", "countryOverrideMapModeSnapshot", "countryOverrideGateOpen", "countryOverrideRecordResult",
              "countryOverrideObserve238CanA", "countryOverrideObserve238CanB",

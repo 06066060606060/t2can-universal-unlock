@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run([str(executable)], check=True)
 
 load = LOGIC[LOGIC.index("static void featureCfgLoad()") : LOGIC.index("static bool blinkerTxModePersist")]
-save = LOGIC[LOGIC.index("static void featureCfgSave()") : LOGIC.index("static void summonCfgLoad()")]
+save = LOGIC[LOGIC.index("static bool featureCfgSave()") : LOGIC.index("static void summonCfgLoad()")]
 assert 'isKey("isaSuppress")' in load
 assert 'getBool("isaSuppress", false)' in load
 assert 'getBool("tsl9isa", false)' in load

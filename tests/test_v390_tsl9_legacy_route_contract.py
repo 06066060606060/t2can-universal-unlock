@@ -15,7 +15,7 @@ class Tsl9LegacyRouteContract(unittest.TestCase):
     def test_route_is_saved_and_reported(self):
         self.assertIn("uint8_t  tsl9LegacyRoute;", self.core)
         self.assertIn('getUChar("tsl9rt"', self.core)
-        self.assertIn('putUChar("tsl9rt"', self.core)
+        self.assertIn('stored.config = config;', self.core)
         self.assertIn('"tsl9LegacyRoute"', self.api)
         self.assertIn('hasArg("tsl9LegacyRoute")', self.api)
 

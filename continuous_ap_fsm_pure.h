@@ -6,7 +6,7 @@ static inline bool continuousApFreshPure(const ContApObservation &s,const ContAp
 class ContinuousApFsmPure {
   ContApStatus st_;
   uint32_t epoch_=0,generation_=0,episodeMs_=0,signalOffMs_=0,lastTxMs_=0,resultMs_=0;
-  uint32_t highTorqueMs_=0,cleanupMs_=0,releaseMs_=0,token_=0,blockedApRx_=0,activeRxMs_=0;
+  uint32_t cleanupMs_=0,releaseMs_=0,token_=0,blockedApRx_=0,activeRxMs_=0;
   uint8_t profile_=0,topology_=0,phase_=0,cleanupTries_=0;
   bool initialized_=false,armed_=false,lastActive_=false,highTorque_=false,counted_=false;
   bool issued_=false,planValid_=false,releaseAccepted_=false;
@@ -20,12 +20,18 @@ class ContinuousApFsmPure {
     if(!continuousApFreshPure(i.ap,i,1000)||!continuousApFreshPure(i.turn,i,350)||!continuousApFreshPure(i.brake,i,250)||!continuousApFreshPure(i.gear,i,1000)||!continuousApFreshPure(i.torque,i,250))return ContApReason::Stale;
     if(i.brake.value!=1)return ContApReason::Brake;
     if(i.gear.value!=4)return ContApReason::Gear;
-    if(!physicalIdle(i,config_.method))return ContApReason::DriverInput;
+    if(!continuousApFreshPure(i.control,i,config_.method==ContApMethod::StalkDouble?500:250))return ContApReason::InputUnavailable;
+    if(i.control.value>=2)return ContApReason::DriverInput;
+    // Waiting through a normal adjustment is allowed before pressing. Once a
+    // press is accepted, interruption must use the bounded release cleanup.
+    if(st_.releaseOwed&&i.control.value!=0)return ContApReason::DriverInput;
+    if(i.ambiguous)return ContApReason::InputUnavailable;
     if(!i.transportAllowed)return ContApReason::Transport;
     return ContApReason::None;
   }
   void stop(ContApReason reason,uint32_t now){
     armed_=lastActive_=false;planValid_=false;st_.reason=reason;
+    if(reason!=ContApReason::None&&reason!=ContApReason::Complete&&reason!=ContApReason::Disabled)st_.lastCancelReason=reason;
     if(st_.releaseOwed){if(st_.state!=ContApState::CleanupPending){cleanupMs_=now;cleanupTries_=0;}st_.state=ContApState::CleanupPending;}
     else st_.state=ContApState::Idle;
   }
@@ -36,17 +42,18 @@ class ContinuousApFsmPure {
 public:
   ContApStatus status() const{return st_;}
   bool hasArmedActive() const{return armed_;}
+  bool hasPendingPress() const{return issued_&&issuedCommand_.kind==ContApCommandKind::Press;}
   ContApMethod inputMethod() const{return st_.releaseOwed?pressEvidence_.method:config_.method;}
   ContApRoute ownedRoute() const{return st_.releaseOwed?pressEvidence_.route:(st_.state!=ContApState::Idle?continuousApGestureRoutePure(profile_,topology_,config_.method):ContApRoute::None);}
   void reset(uint32_t epoch){
     const uint32_t ok=st_.txOk,fail=st_.txFail,cleanup=st_.cleanupSends;
     const bool unconfirmed=st_.releaseOwed;
-    *this=ContinuousApFsmPure();epoch_=epoch;st_.txOk=ok;st_.txFail=fail;st_.cleanupSends=cleanup;st_.cleanupUnconfirmed=unconfirmed;
+    *this=ContinuousApFsmPure();st_.lastCancelReason=ContApReason::Changed;epoch_=epoch;st_.txOk=ok;st_.txFail=fail;st_.cleanupSends=cleanup;st_.cleanupUnconfirmed=unconfirmed;
   }
-  void cancel(uint32_t gen,uint32_t epoch,uint32_t now){
+  void cancel(uint32_t gen,uint32_t epoch,uint32_t now,ContApReason reason=ContApReason::Changed){
     generation_=gen;
     if(epoch!=epoch_){reset(epoch);generation_=gen;return;}
-    stop(ContApReason::Changed,now);
+    stop(reason,now);
   }
   bool allowsCommand(const ContApCommand &c,const ContApInputs &i) const {
     if(!issued_||!planValid_||c.kind==ContApCommandKind::None||c.token!=issuedCommand_.token||c.generation!=generation_||c.generation!=i.generation||c.epoch!=epoch_||c.epoch!=i.epoch||!i.transportAllowed||!i.ownershipAllowed)return false;
@@ -79,24 +86,37 @@ public:
     if(!i.config.enabled||route==ContApRoute::None){stop(!i.config.enabled?ContApReason::Disabled:ContApReason::Unsupported,i.nowMs);return {};}
     const bool apFresh=continuousApFreshPure(i.ap,i,1000),isActive=apFresh&&active(i.ap.value);
     if(st_.state==ContApState::Idle){
+      const ContApReason unsafe=safety(i);
       if(!apFresh||(armed_&&(uint32_t)(i.nowMs-activeRxMs_)>1000)){armed_=lastActive_=false;}
-      if(isActive&&i.ap.rxMs!=blockedApRx_&&physicalIdle(i,i.config.method)){armed_=true;lastActive_=true;activeRxMs_=i.ap.rxMs;st_.cleanupUnconfirmed=false;st_.reason=ContApReason::None;}
-      else if(apFresh&&i.ap.value==2&&armed_&&lastActive_){
+      if(isActive){
+        // A fresh, indicated AP-active observation establishes lane-change intent.
+        // General wheel rotation/tilt may continue; cancellation clicks may not.
+        if(unsafe==ContApReason::None&&!i.ambiguous&&i.ap.rxMs!=blockedApRx_&&singleTurn(i.turn.value)){
+          armed_=lastActive_=true;activeRxMs_=i.ap.rxMs;st_.cleanupUnconfirmed=false;
+          st_.reason=ContApReason::WaitingApRelease;
+        } else {
+          armed_=lastActive_=false;
+          st_.reason=unsafe!=ContApReason::None?unsafe:i.ambiguous?ContApReason::DriverInput:ContApReason::WaitingSignal;
+        }
+      } else if(apFresh&&(i.ap.value==1||i.ap.value==2)&&armed_&&lastActive_){
         armed_=lastActive_=false;
-        if(safety(i)!=ContApReason::None||!singleTurn(i.turn.value))return {};
+        if(unsafe!=ContApReason::None||(!singleTurn(i.turn.value)&&!offTurn(i.turn.value))){
+          stop(unsafe!=ContApReason::None?unsafe:ContApReason::DriverInput,i.nowMs);return {};
+        }
         st_.state=ContApState::WaitSignalOff;st_.reason=ContApReason::WaitingSignal;st_.attempts=0;episodeMs_=i.nowMs;counted_=false;highTorque_=false;
-      } else if(apFresh&&!isActive){armed_=lastActive_=false;}
+        if(offTurn(i.turn.value)){signalOffMs_=i.nowMs;st_.state=ContApState::WaitDelayAndReady;st_.reason=ContApReason::WaitingReady;}
+      } else {
+        if(apFresh&&!isActive)armed_=lastActive_=false;
+        st_.reason=unsafe!=ContApReason::None?unsafe:ContApReason::WaitingActive;
+      }
       return {};
     }
     if(isActive){stop(ContApReason::Complete,i.nowMs);blockedApRx_=i.ap.rxMs;return service(i);}
     const ContApReason unsafe=safety(i);
     if(unsafe!=ContApReason::None){stop(unsafe,i.nowMs);blockedApRx_=i.ap.rxMs;return service(i);}
-    if(i.ap.value!=2){stop(ContApReason::ApState,i.nowMs);blockedApRx_=i.ap.rxMs;return service(i);}
+    if(i.ap.value!=2&&!(i.ap.value==1&&st_.attempts==0)){stop(ContApReason::ApState,i.nowMs);blockedApRx_=i.ap.rxMs;return service(i);}
     if((uint32_t)(i.nowMs-episodeMs_)>=10000){stop(ContApReason::Deadline,i.nowMs);blockedApRx_=i.ap.rxMs;return service(i);}
-    if(i.torque.value>=250||i.torque.value<=-250){
-      if(!highTorque_){highTorque_=true;highTorqueMs_=i.nowMs;}
-      if((uint32_t)(i.nowMs-highTorqueMs_)>=5000){stop(ContApReason::Torque,i.nowMs);blockedApRx_=i.ap.rxMs;return service(i);}
-    } else highTorque_=false;
+    highTorque_=i.torque.value>=250||i.torque.value<=-250;
     if(st_.state==ContApState::WaitSignalOff){
       if((uint32_t)(i.nowMs-episodeMs_)>=6000){stop(ContApReason::Deadline,i.nowMs);blockedApRx_=i.ap.rxMs;return {};}
       if(offTurn(i.turn.value)){signalOffMs_=i.nowMs;st_.state=ContApState::WaitDelayAndReady;st_.reason=ContApReason::WaitingReady;}
@@ -105,7 +125,11 @@ public:
     }
     if(!offTurn(i.turn.value)){stop(ContApReason::DriverInput,i.nowMs);blockedApRx_=i.ap.rxMs;return service(i);}
     if(issued_)return {};
-    if(st_.state==ContApState::WaitDelayAndReady){if((uint32_t)(i.nowMs-signalOffMs_)<1000||highTorque_||!i.ownershipAllowed)return {};phase_=0;st_.state=ContApState::SendGesture;}
+    if(st_.state==ContApState::WaitDelayAndReady){
+      st_.reason=highTorque_?ContApReason::Torque:!physicalIdle(i,config_.method)?ContApReason::WaitingInput:ContApReason::WaitingReady;
+      if((uint32_t)(i.nowMs-signalOffMs_)<1000||i.ap.value!=2||highTorque_||!i.ownershipAllowed||!physicalIdle(i,config_.method))return {};
+      phase_=0;st_.state=ContApState::SendGesture;st_.reason=ContApReason::None;
+    }
     if(st_.state==ContApState::WaitResult){
       if((uint32_t)(i.nowMs-resultMs_)<700)return {};
       st_.state=ContApState::RetryWait;lastTxMs_=i.nowMs;
@@ -119,6 +143,7 @@ public:
     const bool press=(phase_&1)==0;
     const uint32_t gap=config_.method==ContApMethod::StalkDouble?40:(press?150:250);
     if(phase_&&(uint32_t)(i.nowMs-lastTxMs_)<gap)return {};
+    if(!physicalIdle(i,config_.method)){st_.reason=ContApReason::WaitingInput;return {};}
     if(press&&(highTorque_||st_.releaseOwed))return {};
     if(!counted_){++st_.attempts;counted_=true;}
     return prepare(press?ContApCommandKind::Press:ContApCommandKind::Release,config_.method,route,i.nowMs);

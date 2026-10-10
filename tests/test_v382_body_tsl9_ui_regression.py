@@ -9,7 +9,7 @@ PURE = (ROOT / "tsl9_hands_on_0x399_pure.h").read_text(encoding="utf-8")
 assert "nagMethodResolveForCapabilitiesPure" in PURE
 assert "static bool nagCfgApplyActiveProfilePolicy" in CORE
 assert "profileMethodMigrated = nagCfgApplyActiveProfilePolicy(nagCfg, true)" in CORE
-assert 'prefs.putBool("en", nagCfg.enabled);' in CORE
+assert 'stored.config = config;' in CORE
 assert "nagCfgApplyActiveProfilePolicy(nc, false);" in API
 assert "nagCfgApplyActiveProfilePolicy(nc, true);" in API
 

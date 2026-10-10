@@ -6,13 +6,13 @@ web = (ROOT/'web_api.h').read_text()
 dash = (ROOT/'dashboard_source.html').read_text()
 variant = (ROOT/'nag_mode_h_variant_pure.h').read_text()
 
-assert '#define FW_VERSION "v3.28.0"' in ino
+assert '#define FW_VERSION "v3.28.3"' in ino
 assert 'H_STOP_HARD_PAUSE' in variant and 'H_STOP_STOCK_CARRIER' in variant
 assert 'c.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();' in core
 assert 'const uint8_t storedStopDefault = nagCfgVersion < 18u' in core
-assert 'prefs.getUChar("hsb", storedStopDefault)' in core
-assert 'prefs.putUChar("hsb"' in core
-assert 'prefs.putUChar("v",     20u);' in core
+assert 'reader.getUChar("hsb", storedStopDefault)' in core
+assert 'stored.config = config;' in core
+assert 'stored.config = config;' in core
 assert 'nagModeHUseStopCarrierPure(modeHStopBehavior, confirmedStopped)' in core
 assert 'humanDecision.raw = tRaw;' in core
 assert 'humanDecision.hoOverrideValid = false;' in core

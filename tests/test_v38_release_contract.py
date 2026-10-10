@@ -11,18 +11,20 @@ CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 VALIDATION = (ROOT / "VALIDATION.md").read_text(encoding="utf-8")
 
 
-assert INO.startswith("// T2CAN Universal v3.28.0")
-assert '#define FW_VERSION "v3.28.0"' in INO
-assert CHANGELOG.startswith("# T2CAN Universal v3.28.0\n")
-assert VALIDATION.startswith("# T2CAN Universal v3.28.0 — Validation\n")
+assert INO.startswith("// T2CAN Universal v3.28.3")
+assert '#define FW_VERSION "v3.28.3"' in INO
+assert CHANGELOG.startswith("# T2CAN Universal v3.28.3\n")
+assert VALIDATION.startswith("# T2CAN Universal v3.28.3 — Validation\n")
 
 # Fresh NVS, invalid values, and explicit NAG reset all converge on Mode H Rev.4.
 assert "nagModeHDefaultVariantPure" in VARIANT
 assert "return H_VARIANT_REV4;" in VARIANT
 assert "static volatile uint8_t nagHumanVariant = nagModeHDefaultVariantPure();" in CORE
 assert CORE.count("nagCfgDefaultsModeH(nagCfg);") >= 2
-assert 'prefs.getUChar("mode", MODE_H)' in CORE
-assert 'prefs.getUChar("hv", nagModeHDefaultVariantPure())' in CORE
+assert 'reader.getUChar("mode", MODE_H)' in CORE
+assert "CheckedPreferences reader;" in CORE
+assert "if (!reader.ok()) {" in CORE
+assert 'reader.getUChar("hv", nagModeHDefaultVariantPure())' in CORE
 
 # Approved production dashboard refinements.
 assert '<div class="logo">TESLA UNLOCK</div>' in DASH
@@ -38,4 +40,4 @@ assert 'body.t2-2027 .quickMini .toggle{margin-top:15px}' in DASH
 assert "+'\\n'+fmtMs(age)" in DASH
 assert "white-space:pre-line" in DASH
 
-print("PASS v3.28.0 release identity, Rev.4 defaults, and dashboard contract")
+print("PASS v3.28.3 release identity, Rev.4 defaults, and dashboard contract")

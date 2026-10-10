@@ -7,7 +7,7 @@ cr = (ROOT / 'can_runtime.h').read_text()
 web = (ROOT / 'web_api.h').read_text()
 dash = (ROOT / 'dashboard_source.html').read_text()
 
-assert '#define FW_VERSION "v3.28.0"' in ino
+assert '#define FW_VERSION "v3.28.3"' in ino
 assert '#include <esp_timer.h>' not in ino
 
 assert 'esp_timer_get_time()' not in cr + vl
@@ -38,7 +38,7 @@ assert 'r79ManualSuppression' in gate and 'r79TxDecisionPure' in gate
 assert 'r79FreshGearRawLocked' not in gate and 'gearValid' not in gate
 
 assert 'static volatile uint8_t r79Bit18Policy = R79_BIT18_DEFAULT_PURE;' in vl
-cfg = vl[vl.index('static void r79CfgLoad'):vl.index('static void r79CfgSave')]
+cfg = vl[vl.index('static void r79CfgLoad'):vl.index('static bool r79CfgSave')]
 assert 'prefs.getUChar("bit18", R79_BIT18_DEFAULT_PURE)' in cfg
 assert 'r79Bit18PolicySanitizePure(stored)' in cfg
 

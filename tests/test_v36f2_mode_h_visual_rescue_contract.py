@@ -60,8 +60,8 @@ assert "visualWarningEpoch, visualWarningEnterMs, visualWarningActive" in CORE
 # NVS defaults/migration/save must cover both new settings.
 for key in ["h4vres", "h4vdly"]:
     assert f'getBool("{key}"' in CORE or f'getUShort("{key}"' in CORE
-    assert f'putBool("{key}"' in CORE or f'putUShort("{key}"' in CORE
+    assert "stored.human = human;" in CORE
 
-assert 'prefs.putUChar("v", 20u)' in CORE
+assert 'stored.config = config;' in CORE
 
 print("PASS v3.6f3 Mode H Visual Warning Rescue integration contract")

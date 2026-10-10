@@ -35,6 +35,11 @@ void tsl9InputHardResetAfterQuiesce(bool){}
 void nagExactEchoReset(){}
 void nagHumanRuntimeReset(bool){}
 '''
+code+=r'''
+struct FeatureCfgSnapshot{bool torque,tsl9;uint16_t torqueInterval,tsl9Interval;uint8_t pattern;};
+FeatureCfgSnapshot featureCfgRuntimeSnapshot(){return {nagTorqueRightScrollEnabled,nagTsl9RightPeriodicEnabled,nagTorqueRightScrollIntervalSeconds,nagTsl9RightPeriodicIntervalSeconds,nagTorqueRightScrollPattern};}
+void featureCfgRuntimeRestore(const FeatureCfgSnapshot&s){nagTorqueRightScrollEnabled=s.torque;nagTsl9RightPeriodicEnabled=s.tsl9;nagTorqueRightScrollIntervalSeconds=s.torqueInterval;nagTsl9RightPeriodicIntervalSeconds=s.tsl9Interval;nagTorqueRightScrollPattern=s.pattern;}
+'''
 extract=ns['extract'];api=(ROOT/'web_api.h').read_text();core=(ROOT/'can_core.h').read_text()
 if 'static bool nagIgnoreApStatePersist' in core:code+=extract(core,'nagIgnoreApStatePersist')
 for f in ('httpBoolArg','httpDecimalU16InRange','httpNagUpdate'):code+=extract(api,f)
@@ -62,7 +67,7 @@ int main(){
 }
 '''
 with tempfile.TemporaryDirectory(prefix='nag-api-host-') as d:
- src=Path(d)/'test.cpp';exe=Path(d)/'test';src.write_text(code)
- subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-const-variable','-I',str(ROOT),str(src),'-o',str(exe)],check=True)
+ (Path(d)/'nvs.h').write_text('#pragma once\n');src=Path(d)/'test.cpp';exe=Path(d)/'test';src.write_text(code)
+ subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-const-variable','-I',d,'-I',str(ROOT),str(src),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
 print('PASS real NAG update API: parsing, NVS failure, method changes, cleanup rejection')

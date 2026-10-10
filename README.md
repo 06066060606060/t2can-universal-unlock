@@ -8,17 +8,22 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.28
+# T2CAN Universal Unlock v3.28.3
 
 **Major Universal Release**  
 **Release date:** 9 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
-**v3.28** 
+
+**v3.28.3** 
 - Continuous AP  
 - Independent ISA chime Suppression 
+- Increased OTA receive idle timeout from 5 to 30 seconds.
+- Added detailed upload errors and improved retry handling.
+- Prevented duplicate uploads and false success messages.
 
+The new timeout applies after installing and booting this version.
 
 **v3.26.3 Highlights** 
 Dashboard Improvements  

@@ -1351,24 +1351,122 @@ static inline bool nagModePersistedIdSupported(uint8_t mode) {
   return mode == MODE_A || mode == MODE_B || mode == MODE_C || mode == MODE_H;
 }
 
+// Versioned, single-key NVS commit. Legacy scalar keys remain readable.
+struct NagScrollStoredSnapshot {
+  bool torqueEnabled;
+  uint16_t torqueInterval;
+  uint8_t torquePattern;
+  bool tsl9Enabled;
+  uint16_t tsl9Interval;
+};
+static NagScrollStoredSnapshot nagScrollRuntimeSnapshot();
+static void nagScrollRuntimeRestore(const NagScrollStoredSnapshot&);
+
+struct NagStoredSnapshot {
+  uint32_t version;
+  NagConfig config;
+  NagHumanV4ConfigPure human;
+  uint8_t variant;
+  NagScrollStoredSnapshot scroll;
+};
+static bool nagNvsReadError = false;
+
+static void nagCfgLoadSafeDefaults() {
+  nagCfgDefaultsModeH(nagCfg);
+  nagCfgApplyActiveProfilePolicy(nagCfg, true);
+  nagHumanRuntimeLoadDefaults();
+  if (nagNvsReadError) {
+    NagScrollStoredSnapshot scroll = nagScrollRuntimeSnapshot();
+    scroll.torqueEnabled = false; scroll.tsl9Enabled = false;
+    nagScrollRuntimeRestore(scroll);
+  }
+  nagRxSelectorsRefreshFromConfig();
+}
+
+static bool nagCfgPersistSnapshot(const NagConfig& config,
+                          const NagHumanV4ConfigPure& human,
+                          uint8_t variant, const NagScrollStoredSnapshot& scroll) {
+  if (nagNvsReadError) return false;
+  NagStoredSnapshot stored = {};
+  stored.version = 1u;
+  stored.config = config;
+  nagCfgClampAll(stored.config);
+  nagCfgApplyActiveProfilePolicy(stored.config, false);
+  stored.human = human;
+  stored.scroll = scroll;
+  stored.variant = nagModeHVariantValidPure(variant)
+      ? variant : nagModeHDefaultVariantPure();
+  return nvsCheckedWriteBlob("nag", "snapshot", &stored, sizeof(stored));
+}
+
+static bool nagCfgPersist(const NagConfig& config,
+                          const NagHumanV4ConfigPure& human, uint8_t variant) {
+  return nagCfgPersistSnapshot(config, human, variant, nagScrollRuntimeSnapshot());
+}
+
+static bool nagCfgSaveCandidateWithScroll(const NagConfig& config,
+                                          const NagScrollStoredSnapshot& scroll) {
+  NagHumanV4ConfigPure human;
+  uint8_t variant;
+  portENTER_CRITICAL(&nagHumanMux);
+  human = nagHumanV4Config;
+  variant = nagHumanVariant;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return nagCfgPersistSnapshot(config, human, variant, scroll);
+}
+
+static bool nagCfgSaveCandidate(const NagConfig& config) {
+  return nagCfgSaveCandidateWithScroll(config, nagScrollRuntimeSnapshot());
+}
+
 static void nagCfgLoad() {
-#if T2CAN_SERIAL_DIAGNOSTICS
-  T2CAN_SERIAL_PRINTLN("NVS: Loading nag config...");
-#endif
-  if (!prefs.begin("nag", true)) {
-#if T2CAN_SERIAL_DIAGNOSTICS
-    T2CAN_SERIAL_PRINTLN("NVS: No existing nag config, using defaults");
-#endif
-    nagCfgDefaultsModeH(nagCfg);
+  nagNvsReadError = false;
+  NagStoredSnapshot stored = {};
+  bool found = false;
+  if (!nvsCheckedReadBlob("nag", "snapshot", &stored, sizeof(stored), found)) {
+    nagNvsReadError = true;
+    nagCfgLoadSafeDefaults();
+    return;
+  }
+  if (found) {
+    if (stored.version != 1u || !nagModePersistedIdSupported(stored.config.mode) ||
+        !nagHumanV4ConfigValidPure(stored.human)) {
+      nagNvsReadError = true;
+      nagCfgLoadSafeDefaults();
+      return;
+    }
+    nagScrollRuntimeRestore(stored.scroll);
+    nagCfg = stored.config;
+    nagCfgClampAll(nagCfg);
     nagCfgApplyActiveProfilePolicy(nagCfg, true);
-    nagHumanRuntimeLoadDefaults();
+    portENTER_CRITICAL(&nagHumanMux);
+    nagHumanVariant = nagModeHVariantValidPure(stored.variant)
+        ? stored.variant : nagModeHDefaultVariantPure();
+    nagHumanV4Config = stored.human;
+    nagHumanV4State = NagHumanV4StatePure{};
+    nagHumanV4Initialized = false;
+    portEXIT_CRITICAL(&nagHumanMux);
     nagRxSelectorsRefreshFromConfig();
     return;
   }
-  if (!prefs.isKey("v")) {
-    const bool savedEnabled = prefs.getBool("en", false);
-    const bool savedIgnoreApState = prefs.getBool("iap", false);
-    prefs.end();
+  CheckedPreferences reader;
+  if (!reader.begin("nag", true)) {
+#if T2CAN_SERIAL_DIAGNOSTICS
+    T2CAN_SERIAL_PRINTLN("NVS: No existing nag config, using defaults");
+#endif
+    nagNvsReadError = !reader.ok();
+    nagCfgLoadSafeDefaults();
+    return;
+  }
+  if (!reader.isKey("v")) {
+    const bool savedEnabled = reader.getBool("en", false);
+    const bool savedIgnoreApState = reader.getBool("iap", false);
+    reader.end();
+    if (!reader.ok()) {
+      nagNvsReadError = true;
+      nagCfgLoadSafeDefaults();
+      return;
+    }
     nagCfgDefaultsModeH(nagCfg);
     nagCfg.enabled = savedEnabled;
     nagCfg.ignoreApState = savedIgnoreApState;
@@ -1377,62 +1475,67 @@ static void nagCfgLoad() {
     nagRxSelectorsRefreshFromConfig();
     return;
   }
-  const uint8_t nagCfgVersion = prefs.getUChar("v", 0u);
+  const uint8_t nagCfgVersion = reader.getUChar("v", 0u);
   nagCfgSetCommonDefaults(nagCfg);
-  nagCfg.enabled        = prefs.getBool("en", false);
-  nagCfg.ignoreApState  = prefs.getBool("iap", false);
+  nagCfg.enabled        = reader.getBool("en", false);
+  nagCfg.ignoreApState  = reader.getBool("iap", false);
   nagCfg.method         = nagMethodSanitizePure(
-      prefs.getUChar("method", NAG_METHOD_DEFAULT_PURE));
+      reader.getUChar("method", NAG_METHOD_DEFAULT_PURE));
   nagCfg.tsl9Sequence   = tsl9SequenceSanitizePure(
-      prefs.getUChar("tsl9seq", TSL9_SEQUENCE_DEFAULT_PURE));
+      reader.getUChar("tsl9seq", TSL9_SEQUENCE_DEFAULT_PURE));
   nagCfg.tsl9DowngradeWindow = tsl9DowngradeWindowSanitizePure(
-      prefs.getUChar("tsl9win", TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE));
+      reader.getUChar("tsl9win", TSL9_DOWNGRADE_WINDOW_DEFAULT_PURE));
   nagCfg.tsl9InputMode = tsl9InputModeSanitizePure(
-      prefs.getUChar("tsl9in", TSL9_INPUT_MODE_DEFAULT_PURE));
+      reader.getUChar("tsl9in", TSL9_INPUT_MODE_DEFAULT_PURE));
   nagCfg.tsl9LegacyRoute = tsl9LegacyRouteSanitizePure(
-      prefs.getUChar("tsl9rt", TSL9_LEGACY_ROUTE_DEFAULT_PURE));
-  nagCfg.pauseAtZeroSpeed = prefs.getBool("p0", false);
+      reader.getUChar("tsl9rt", TSL9_LEGACY_ROUTE_DEFAULT_PURE));
+  nagCfg.pauseAtZeroSpeed = reader.getBool("p0", false);
   const uint8_t storedStopDefault = nagCfgVersion < 18u
       ? H_STOP_STOCK_CARRIER : nagModeHDefaultStopBehaviorPure();
-  nagCfg.modeHStopBehavior = prefs.getUChar("hsb", storedStopDefault);
+  nagCfg.modeHStopBehavior = reader.getUChar("hsb", storedStopDefault);
   if (!nagModeHStopBehaviorValidPure(nagCfg.modeHStopBehavior))
     nagCfg.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
-  nagCfg.mode           = prefs.getUChar("mode", MODE_H);
+  nagCfg.mode           = reader.getUChar("mode", MODE_H);
   if (!nagModePersistedIdSupported(nagCfg.mode)) nagCfg.mode = MODE_H;
-  nagCfg.targetId       = prefs.getUShort("id", 0x370);
-  nagCfg.torqueCount    = prefs.getUChar("tc", 1);
-  size_t n = prefs.getBytes("tb2", nagCfg.torqueB2, NAG_MAX_TORQUE_ENTRIES);
+  nagCfg.targetId       = reader.getUShort("id", 0x370);
+  nagCfg.torqueCount    = reader.getUChar("tc", 1);
+  size_t n = reader.getBytes("tb2", nagCfg.torqueB2, NAG_MAX_TORQUE_ENTRIES);
   if (n == 0) { nagCfg.torqueB2[0] = 0x08; }
-  n = prefs.getBytes("tb3", nagCfg.torqueB3, NAG_MAX_TORQUE_ENTRIES);
+  n = reader.getBytes("tb3", nagCfg.torqueB3, NAG_MAX_TORQUE_ENTRIES);
   if (n == 0) { nagCfg.torqueB3[0] = 0xB6; }
-  nagCfg.hoRatePct      = prefs.getUChar("ho", 100);
-  nagCfg.burstMs        = prefs.getUShort("bms", 1000);
-  nagCfg.pauseMs        = prefs.getUShort("pms", 1500);
-  nagCfg.apStateId      = prefs.getUShort("apid", 0x399);
-  nagCfg.steeringId     = prefs.getUShort("stid", 0x129);
+  nagCfg.hoRatePct      = reader.getUChar("ho", 100);
+  nagCfg.burstMs        = reader.getUShort("bms", 1000);
+  nagCfg.pauseMs        = reader.getUShort("pms", 1500);
+  nagCfg.apStateId      = reader.getUShort("apid", 0x399);
+  nagCfg.steeringId     = reader.getUShort("stid", 0x129);
 
   const NagHumanV4ConfigPure rev4Defaults = nagHumanV4DefaultConfigPure();
-  uint8_t humanVariant = prefs.getUChar("hv", nagModeHDefaultVariantPure());
+  uint8_t humanVariant = reader.getUChar("hv", nagModeHDefaultVariantPure());
   if (!nagModeHVariantValidPure(humanVariant)) humanVariant = nagModeHDefaultVariantPure();
 
   // Rev.4 has owned the h4* namespace since schema v15. Legacy Rev.1 Plus h1*
   // keys are deliberately never reinterpreted as Rev.4 tuning.
   NagHumanV4ConfigPure rev4Cfg = rev4Defaults;
-  rev4Cfg.base.peakMinRaw = prefs.getUShort("h4pmin", rev4Defaults.base.peakMinRaw);
-  rev4Cfg.base.peakMaxRaw = prefs.getUShort("h4pmax", rev4Defaults.base.peakMaxRaw);
-  rev4Cfg.base.waitMinMs = prefs.getUShort("h4wmin", rev4Defaults.base.waitMinMs);
-  rev4Cfg.base.waitMaxMs = prefs.getUShort("h4wmax", rev4Defaults.base.waitMaxMs);
-  rev4Cfg.base.refractoryMinMs = prefs.getUShort("h4rmin", rev4Defaults.base.refractoryMinMs);
-  rev4Cfg.base.refractoryMaxMs = prefs.getUShort("h4rmax", rev4Defaults.base.refractoryMaxMs);
+  rev4Cfg.base.peakMinRaw = reader.getUShort("h4pmin", rev4Defaults.base.peakMinRaw);
+  rev4Cfg.base.peakMaxRaw = reader.getUShort("h4pmax", rev4Defaults.base.peakMaxRaw);
+  rev4Cfg.base.waitMinMs = reader.getUShort("h4wmin", rev4Defaults.base.waitMinMs);
+  rev4Cfg.base.waitMaxMs = reader.getUShort("h4wmax", rev4Defaults.base.waitMaxMs);
+  rev4Cfg.base.refractoryMinMs = reader.getUShort("h4rmin", rev4Defaults.base.refractoryMinMs);
+  rev4Cfg.base.refractoryMaxMs = reader.getUShort("h4rmax", rev4Defaults.base.refractoryMaxMs);
   rev4Cfg.base.hoOverridePct = 0u;
-  rev4Cfg.carrierMinRaw = prefs.getUShort("h4cmin", rev4Defaults.carrierMinRaw);
-  rev4Cfg.carrierMaxRaw = prefs.getUShort("h4cmax", rev4Defaults.carrierMaxRaw);
-  rev4Cfg.hoPolicy = prefs.getUChar("h4hop", rev4Defaults.hoPolicy);
-  rev4Cfg.ho1ThresholdRaw = prefs.getUShort("h4ho1", rev4Defaults.ho1ThresholdRaw);
-  rev4Cfg.ho2ThresholdRaw = prefs.getUShort("h4ho2", rev4Defaults.ho2ThresholdRaw);
-  rev4Cfg.visualRescueEnabled = prefs.getBool("h4vres", rev4Defaults.visualRescueEnabled);
-  rev4Cfg.visualRescueDelayMs = prefs.getUShort("h4vdly", rev4Defaults.visualRescueDelayMs);
-  prefs.end();
+  rev4Cfg.carrierMinRaw = reader.getUShort("h4cmin", rev4Defaults.carrierMinRaw);
+  rev4Cfg.carrierMaxRaw = reader.getUShort("h4cmax", rev4Defaults.carrierMaxRaw);
+  rev4Cfg.hoPolicy = reader.getUChar("h4hop", rev4Defaults.hoPolicy);
+  rev4Cfg.ho1ThresholdRaw = reader.getUShort("h4ho1", rev4Defaults.ho1ThresholdRaw);
+  rev4Cfg.ho2ThresholdRaw = reader.getUShort("h4ho2", rev4Defaults.ho2ThresholdRaw);
+  rev4Cfg.visualRescueEnabled = reader.getBool("h4vres", rev4Defaults.visualRescueEnabled);
+  rev4Cfg.visualRescueDelayMs = reader.getUShort("h4vdly", rev4Defaults.visualRescueDelayMs);
+  reader.end();
+  if (!reader.ok()) {
+    nagNvsReadError = true;
+    nagCfgLoadSafeDefaults();
+    return;
+  }
 
   // Schema v17 promotes only the exact v16 Rev.4 defaults. Custom Rev.4
   // tuning survives unchanged while all profiles gain the new HO defaults.
@@ -1457,35 +1560,10 @@ static void nagCfgLoad() {
   // tuning and an independently selected stop behavior survive unchanged.
   // Profile id 1 is intentionally retained, so an OTA installation previously
   // selecting Rev.1 Plus moves to Rev.4 without creating a fifth profile id.
-  if ((nagCfgVersion < 20u || migratedRev4V17 || migratedRev4V18 ||
-       profileMethodMigrated) && prefs.begin("nag", false)) {
-    prefs.putBool("en", nagCfg.enabled);
-    prefs.putBool("iap", nagCfg.ignoreApState);
-    prefs.putUChar("method", nagMethodSanitizePure(nagCfg.method));
-    prefs.putUChar("tsl9seq", tsl9SequenceSanitizePure(nagCfg.tsl9Sequence));
-    prefs.putUChar("tsl9win", tsl9DowngradeWindowSanitizePure(
-        nagCfg.tsl9DowngradeWindow));
-    prefs.putUChar("tsl9in", tsl9InputModeSanitizePure(nagCfg.tsl9InputMode));
-    prefs.putUChar("tsl9rt", tsl9LegacyRouteSanitizePure(
-        nagCfg.tsl9LegacyRoute));
-    prefs.putUChar("hv", humanVariant);
-    prefs.putUChar("hsb", nagCfg.modeHStopBehavior);
-
-    prefs.putUShort("h4pmin", rev4Cfg.base.peakMinRaw);
-    prefs.putUShort("h4pmax", rev4Cfg.base.peakMaxRaw);
-    prefs.putUShort("h4wmin", rev4Cfg.base.waitMinMs);
-    prefs.putUShort("h4wmax", rev4Cfg.base.waitMaxMs);
-    prefs.putUShort("h4rmin", rev4Cfg.base.refractoryMinMs);
-    prefs.putUShort("h4rmax", rev4Cfg.base.refractoryMaxMs);
-    prefs.putUShort("h4cmin", rev4Cfg.carrierMinRaw);
-    prefs.putUShort("h4cmax", rev4Cfg.carrierMaxRaw);
-    prefs.putUChar("h4hop", rev4Cfg.hoPolicy);
-    prefs.putUShort("h4ho1", rev4Cfg.ho1ThresholdRaw);
-    prefs.putUShort("h4ho2", rev4Cfg.ho2ThresholdRaw);
-    prefs.putBool("h4vres", rev4Cfg.visualRescueEnabled);
-    prefs.putUShort("h4vdly", rev4Cfg.visualRescueDelayMs);
-    prefs.putUChar("v", 20u);
-    prefs.end();
+  if (nagCfgVersion < 20u || migratedRev4V17 || migratedRev4V18 ||
+      profileMethodMigrated) {
+    // One durable snapshot; a failed migration leaves the legacy keys intact.
+    (void)nagCfgSave();
   }
 
   nagRxSelectorsRefreshFromConfig();
@@ -1497,70 +1575,20 @@ static void nagCfgLoad() {
 // Persist the torque-only opt-in before publishing it to the running configuration.
 // Existing configuration writes retain their established format.
 static bool nagIgnoreApStatePersist(bool value) {
-  if (!prefs.begin("nag", false)) return false;
-  const bool saved = prefs.putBool("iap", value) == 1u &&
-      prefs.getBool("iap", !value) == value;
-  prefs.end();
-  return saved;
+  NagConfig candidate;
+  portENTER_CRITICAL(&nagCfgMux);
+  candidate = nagCfg;
+  portEXIT_CRITICAL(&nagCfgMux);
+  candidate.ignoreApState = value;
+  return nagCfgSaveCandidate(candidate);
 }
 
-static void nagCfgSave() {
+static bool nagCfgSave() {
   NagConfig snapshot;
-  NagHumanV4ConfigPure rev4Snapshot;
-  uint8_t variantSnapshot;
   portENTER_CRITICAL(&nagCfgMux);
   snapshot = nagCfg;
   portEXIT_CRITICAL(&nagCfgMux);
-  portENTER_CRITICAL(&nagHumanMux);
-  rev4Snapshot = nagHumanV4Config;
-  variantSnapshot = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : nagModeHDefaultVariantPure();
-  portEXIT_CRITICAL(&nagHumanMux);
-  nagCfgClampAll(snapshot);
-  nagCfgApplyActiveProfilePolicy(snapshot, false);
-  if (!prefs.begin("nag", false)) {
-#if T2CAN_SERIAL_DIAGNOSTICS
-    T2CAN_SERIAL_PRINTLN("NVS: Nag save failed - could not open");
-#endif
-    return;
-  }
-  prefs.putBool("en",     snapshot.enabled);
-  prefs.putBool("iap",    snapshot.ignoreApState);
-  prefs.putUChar("method", nagMethodSanitizePure(snapshot.method));
-  prefs.putUChar("tsl9seq", tsl9SequenceSanitizePure(snapshot.tsl9Sequence));
-  prefs.putUChar("tsl9win", tsl9DowngradeWindowSanitizePure(
-      snapshot.tsl9DowngradeWindow));
-  prefs.putUChar("tsl9in", tsl9InputModeSanitizePure(snapshot.tsl9InputMode));
-  prefs.putUChar("tsl9rt", tsl9LegacyRouteSanitizePure(
-      snapshot.tsl9LegacyRoute));
-  prefs.putBool("p0",     snapshot.pauseAtZeroSpeed);
-  prefs.putUChar("hsb",   snapshot.modeHStopBehavior);
-  prefs.putUChar("mode",  snapshot.mode);
-  prefs.putUShort("id",   snapshot.targetId);
-  prefs.putUChar("tc",    snapshot.torqueCount);
-  prefs.putBytes("tb2",   snapshot.torqueB2, NAG_MAX_TORQUE_ENTRIES);
-  prefs.putBytes("tb3",   snapshot.torqueB3, NAG_MAX_TORQUE_ENTRIES);
-  prefs.putUChar("ho",    snapshot.hoRatePct);
-  prefs.putUShort("bms",  snapshot.burstMs);
-  prefs.putUShort("pms",  snapshot.pauseMs);
-  prefs.putUShort("apid", snapshot.apStateId);
-  prefs.putUShort("stid", snapshot.steeringId);
-  prefs.putUChar("hv", variantSnapshot);
-
-  prefs.putUShort("h4pmin", rev4Snapshot.base.peakMinRaw);
-  prefs.putUShort("h4pmax", rev4Snapshot.base.peakMaxRaw);
-  prefs.putUShort("h4wmin", rev4Snapshot.base.waitMinMs);
-  prefs.putUShort("h4wmax", rev4Snapshot.base.waitMaxMs);
-  prefs.putUShort("h4rmin", rev4Snapshot.base.refractoryMinMs);
-  prefs.putUShort("h4rmax", rev4Snapshot.base.refractoryMaxMs);
-  prefs.putUShort("h4cmin", rev4Snapshot.carrierMinRaw);
-  prefs.putUShort("h4cmax", rev4Snapshot.carrierMaxRaw);
-  prefs.putUChar("h4hop", rev4Snapshot.hoPolicy);
-  prefs.putUShort("h4ho1", rev4Snapshot.ho1ThresholdRaw);
-  prefs.putUShort("h4ho2", rev4Snapshot.ho2ThresholdRaw);
-  prefs.putBool("h4vres", rev4Snapshot.visualRescueEnabled);
-  prefs.putUShort("h4vdly", rev4Snapshot.visualRescueDelayMs);
-  prefs.putUChar("v",     20u);
-  prefs.end();
+  return nagCfgSaveCandidate(snapshot);
 }
 
 // ── Nag decide injection (raw data version) ──

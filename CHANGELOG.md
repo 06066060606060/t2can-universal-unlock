@@ -1,3 +1,27 @@
+# T2CAN Universal v3.28.3
+
+## OTA receive and diagnostics hotfix — 2026-10-10
+- Extends only the active OTA payload client idle timeout to 30 seconds.
+- Retains failure stage, Update error and received payload bytes after disconnect; a read-only status endpoint supports reconnect diagnosis.
+- Rejects malformed browser success responses and shows detailed OTA failures; prevents overlapping upload clicks.
+- Preserves maintenance fail-closed behavior, CAN/NVS policies and completed v3.28.2.
+
+# T2CAN Universal v3.28.2
+
+## NVS persistence hotfix — 2026-10-10
+- Fixed silent NVS save failures and preserved stored settings on read errors.
+- Prevented unintended NVS erasure and incorrect profile restoration.
+
+# T2CAN Universal v3.28.1
+
+## Continuous AP lane-change waiting and live RX diagnostics — 2026-10-10
+- Records indicated AP-active lane-change intent and tolerates temporary UNAVAILABLE before the first re-engagement attempt. Requires AVAILABLE, signal off for 1 s, low steering torque and fresh valid vehicle state before sending.
+- Waits through ordinary scroll rotation/tilt before gesture transmission and steering torque within the existing 10 s episode limit; removes the separate 5 s torque timeout. Keeps 6 s signal-off wait, three attempts, bounded cleanup for interruptions during a pending/accepted press, click/stalk/brake cancellation, AP fault/abort, gear, transport, freshness and final TX admission protections.
+- Separates current waiting/blocking reason from the retained last cancellation cause. Physical cancellation no longer appears as a settings change.
+- Adds live Signal readiness plus collapsible RX details for AP, turn, brake, gear, torque and the selected input. Green Available means fresh valid RX only, not AP readiness or accepted engagement. Failed dashboard reads remove the green claim.
+- Preserves existing dashboard cards, type, spacing and theme tokens. Completed v3.28.0 is unchanged.
+- Host/browser and target build evidence is recorded in VALIDATION.md. Real vehicle signal applicability and AP input acceptance remain unverified.
+
 # T2CAN Universal v3.28.0
 
 ## Continuous AP — 2026-10-10

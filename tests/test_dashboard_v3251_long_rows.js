@@ -59,7 +59,10 @@ async function check(html,label){
               const rects=[...range.getClientRects()].filter(x=>x.width>0&&x.height>0);
               const lines=new Set(rects.map(x=>Math.round(x.top*2)/2));
               const name=item.id||a.textContent;
-              if(lines.size!==1)failures.push(name+': '+lines.size+' text lines');
+              // New RX evidence rows intentionally wrap inside the existing card.
+              const rxDetails=item.matches('#continuousApSignalDetails .continuousApRxValue');
+              if(lines.size!==1&&!rxDetails)failures.push(name+': '+lines.size+' text lines');
+              if(rxDetails){const bounds=item.getBoundingClientRect();if(rects.some(q=>q.left<bounds.left-1||q.right>bounds.right+1||q.top<bounds.top-1||q.bottom>bounds.bottom+1))failures.push(name+': wrapped evidence clipped');}
               if(item.textContent!==item.dataset.layoutExpected)failures.push(name+': value text changed');
               const box=item.getBoundingClientRect(),style=getComputedStyle(item);
               if(box.left<r.left-1||box.right>r.right+1)failures.push(name+': outside row');

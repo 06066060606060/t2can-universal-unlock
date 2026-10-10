@@ -26,6 +26,8 @@ def function(src, name):
 code = r'''
 #include <cassert>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 #include <string>
 #include <map>
 #include "r79_ap_gate_pure.h"
@@ -38,18 +40,34 @@ struct String:std::string {
  int toInt() const { return std::stoi(*this); }
 };
 std::map<std::string,uint32_t> nvs;
-bool nvsOpen=true,nvsWrite=true;int writes=0,legacySaves=0;
+std::map<std::string,std::vector<uint8_t>> blobs;
+bool nvsOpen=true,nvsWrite=true,nvsRead=true;int writes=0,ordinarySaves=0;
+bool featureConfigNvsReadOk=true,r79CfgReadOk=true;
 struct Preferences {
- std::string ns;
- bool begin(const char*n,bool){ns=n;return nvsOpen;}
+ std::string ns;bool good=true;
+ bool begin(const char*n,bool){ns=n;good=nvsOpen;return nvsOpen;}
+ bool ok()const{return good;}
  void end(){}
- uint32_t getUInt(const char*k,uint32_t d){auto key=ns+"/"+k;return nvs.count(key)?nvs[key]:d;}
+ uint32_t getUInt(const char*k,uint32_t d){if(!nvsRead){good=false;return d;}auto key=ns+"/"+k;return nvs.count(key)?nvs[key]:d;}
  uint8_t getUChar(const char*k,uint8_t d){return getUInt(k,d);}
  uint16_t getUShort(const char*k,uint16_t d){return getUInt(k,d);}
  bool getBool(const char*k,bool d){return getUInt(k,d);}
  unsigned putBool(const char*k,bool v){++writes;if(!nvsWrite)return 0;nvs[ns+"/"+k]=v;return 1;}
- bool clear(){for(auto it=nvs.begin();it!=nvs.end();){if(it->first.rfind(ns+"/",0)==0)it=nvs.erase(it);else ++it;}return true;}
+ bool clear(){for(auto it=nvs.begin();it!=nvs.end();){if(it->first.rfind(ns+"/",0)==0)it=nvs.erase(it);else ++it;}for(auto it=blobs.begin();it!=blobs.end();){if(it->first.rfind(ns+"/",0)==0)it=blobs.erase(it);else ++it;}return true;}
 } prefs;
+using CheckedPreferences=Preferences;
+bool nvsCheckedReadBlob(const char*ns,const char*key,void*out,size_t size,bool&found){
+ if(!nvsOpen||!nvsRead)return false;
+ const std::string q=std::string(ns)+"/"+key;
+ found=blobs.count(q)!=0;
+ if(!found)return true;
+ if(blobs[q].size()!=size)return false;
+ std::memcpy(out,blobs[q].data(),size);return true;
+}
+bool nvsCheckedWriteBlob(const char*ns,const char*key,const void*data,size_t size){
+ ++writes;++ordinarySaves;if(!nvsOpen||!nvsWrite)return false;const auto bytes=static_cast<const uint8_t*>(data);
+ blobs[std::string(ns)+"/"+key]={bytes,bytes+size};return true;
+}
 int stateMux=0,r79LabMux=0,canTxBarrierMutex=1;
 constexpr int portMAX_DELAY=1000,pdTRUE=1;
 bool held=false;int takes=0;
@@ -74,7 +92,6 @@ uint32_t r79RetryDueMs=0,r79RetryGeneration=0;
 constexpr uint8_t R79LAB_TX_NONE=0,R79LAB_TX_PERIODIC=3;
 void setCanTxAdministrativeHold(bool){}
 void canTxCancellationGenerationAdvance(volatile uint32_t*g){++*g;}
-void r79CfgSave(){++legacySaves;}
 String r79StatsToJson(){return "{}";}
 struct Server {
  std::map<String,String> args;int status=0;String body;
@@ -83,13 +100,14 @@ struct Server {
  void send(int c,const char*,const String&b){status=c;body=b;}
 } server;
 '''
-for name in ('r79Hw3Active', 'r79CfgLoad', 'r79Hw3Apply'):
+code += logic[logic.index('struct R79CfgSnapshot {'):logic.index('static R79CfgSnapshot r79CfgRuntimeSnapshot()')]
+for name in ('featureNvsU16', 'r79CfgPersistCandidate', 'r79Hw3Active', 'r79CfgLoad', 'r79Hw3Apply'):
     code += function(logic, name)
 code += function(api, 'resetFirmwareSettingsPreserveProfileAndBle')
 code += function(api, 'httpR79Update')
 code += r'''
 void reset() {
- nvs.clear();nvsOpen=true;nvsWrite=true;writes=0;takes=0;legacySaves=0;held=false;
+ nvs.clear();blobs.clear();nvsOpen=true;nvsWrite=true;nvsRead=true;featureConfigNvsReadOk=true;r79CfgReadOk=true;writes=0;takes=0;ordinarySaves=0;held=false;
  activeVehicleProfile=VEHICLE_MODEL_Y_LEGACY;activeVehicleTopology=VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
  r79Hw3Enabled=false;r79ApGateGeneration=1;r79Mode1PostMux2Generation=1;
  r79ApGateConfig={true,1,4};r79ApGateSession={true,1234,true};
@@ -138,7 +156,20 @@ int main() {
  activeVehicleProfile=VEHICLE_MODEL_3_LEGACY;nvsWrite=false;server.args={{"hw3Enabled","1"}};httpR79Update();assert(server.status==503&&!r79Hw3Enabled);
  nvsWrite=true;httpR79Update();assert(server.status==200&&r79Hw3Enabled&&nvs["r79/hw3"]==1);
  server.args={{"hw3Enabled","0"}};httpR79Update();assert(server.status==200&&!r79Hw3Enabled&&nvs["r79/hw3"]==0);
- assert(legacySaves==0);
+ assert(ordinarySaves==0&&blobs.empty());
+ // Ordinary R79 snapshot saves preserve HW3 and AP-control independent keys.
+ nvs["r79/hw3"]=1;nvs["r79/apctl"]=(4u<<8)|3u;
+ server.args={{"mode","2"},{"mode2Reinject","1"},{"mode2DelayMs","321"}};
+ httpR79Update();assert(server.status==200&&ordinarySaves==1);
+ assert(nvs["r79/hw3"]==1&&nvs["r79/apctl"]==((4u<<8)|3u));
+ assert(blobs.count("r79/cfg3282")==1&&blobs["r79/cfg3282"].size()==10);
+ r79TransportMode=1;r79Mode2ReinjectEnabled=false;r79Mode2DelayMs=150;r79Hw3Enabled=false;
+ r79CfgLoad();assert(r79CfgReadOk&&r79TransportMode==2&&r79Mode2ReinjectEnabled&&r79Mode2DelayMs==321&&r79Hw3Enabled);
+ assert(r79ApGateConfig.enabled&&r79ApGateConfig.mode==1&&r79ApGateConfig.delaySeconds==4);
+ const auto retained=blobs["r79/cfg3282"];nvsWrite=false;server.args={{"mode","1"}};
+ httpR79Update();assert(server.status==500&&r79TransportMode==2&&blobs["r79/cfg3282"]==retained);
+ nvsRead=false;r79CfgLoad();assert(!r79CfgReadOk&&r79TransportMode==2&&r79Hw3Enabled&&nvs["r79/hw3"]==1);
+ nvsRead=true;blobs["r79/cfg3282"].pop_back();r79CfgLoad();assert(!r79CfgReadOk&&r79TransportMode==2&&r79Hw3Enabled);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='r79-hw3-settings-') as temp:

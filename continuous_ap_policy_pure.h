@@ -22,3 +22,21 @@ static inline ContApRoute continuousApGestureRoutePure(uint8_t p, uint8_t t, Con
 static inline bool vehicleProfileContinuousApMethodSupported(uint8_t p,uint8_t t,uint8_t m) {
   return continuousApGestureRoutePure(p,t,(ContApMethod)m)!=ContApRoute::None;
 }
+
+// RX readiness describes observations, never authorization to engage AP.
+static inline const char *continuousApRxStatusPure(const ContApObservation &s,uint32_t now,uint32_t epoch,uint32_t limit) {
+  if(!s.seen)return "Missing";
+  if(!epoch||s.epoch!=epoch||(uint32_t)(now-s.rxMs)>limit)return "Stale";
+  return s.valid?"Fresh":"Invalid";
+}
+static inline const char *continuousApSignalReadinessPure(const ContApInputs &i) {
+  if(continuousApGestureRoutePure(i.profile,i.topology,i.config.method)==ContApRoute::None)return "Unsupported";
+  const ContApObservation observations[]={i.ap,i.turn,i.brake,i.gear,i.torque,i.control};
+  const uint32_t limits[]={1000,350,250,1000,250,i.config.method==ContApMethod::StalkDouble?500u:250u};
+  bool missing=false,bad=false;
+  for(unsigned n=0;n<6;++n){
+    const char *state=continuousApRxStatusPure(observations[n],i.nowMs,i.epoch,limits[n]);
+    missing|=state[0]=='M';bad|=state[0]!='F';
+  }
+  return missing?"Waiting for signals":bad?"Stale / Invalid":"Available";
+}

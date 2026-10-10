@@ -27,7 +27,7 @@ async function check(html,variant){
   }
   await page.locator('#otaFile').setInputFiles({name:'test.bin',mimeType:'application/octet-stream',buffer:Buffer.from([1,2,3])});
   for(const failure of ['load','error','abort']){
-   await page.evaluate(failure=>{const Native=window.XMLHttpRequest;window.XMLHttpRequest=class{constructor(){this.upload={};this.status=500;this.responseText='{}'}open(){}send(){this['on'+failure]()}};document.getElementById('otaUpload').onclick();window.XMLHttpRequest=Native},failure);
+   await page.evaluate(async failure=>{const Native=window.XMLHttpRequest;window.XMLHttpRequest=class{constructor(){this.upload={};this.status=500;this.responseText='{}'}open(){}send(){this['on'+failure]()}};await document.getElementById('otaUpload').onclick();await new Promise(r=>setTimeout(r,50));window.XMLHttpRequest=Native},failure);
    assert.match(await page.locator('#otaMsg').textContent(),/If OTA started, CAN stays stopped\. Reboot T-2CAN before use\./);
   }
  }finally{await browser.close()}

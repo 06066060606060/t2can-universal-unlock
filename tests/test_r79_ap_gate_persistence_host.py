@@ -12,22 +12,42 @@ def function(name):
 code=r'''
 #include <cassert>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 #include <string>
 #include <map>
 #include "r79_ap_gate_pure.h"
 #include "r79_fixed_policy_pure.h"
 #include "r79_mode2_pure.h"
 std::map<std::string,uint32_t> nvs;
-bool nvsOpen=true,nvsWrite=true;int writes=0;bool held=false;
+std::map<std::string,std::vector<uint8_t>> blobs;
+bool nvsOpen=true,nvsWrite=true,nvsRead=true;int writes=0;bool held=false;
+bool r79CfgReadOk=true,featureConfigNvsReadOk=true;
 struct Preferences {
- bool begin(const char*,bool){return nvsOpen;}
+ bool good=true;
+ bool begin(const char*,bool){good=nvsOpen;return nvsOpen;}
+ bool ok()const{return good;}
  void end(){}
- uint32_t getUInt(const char*k,uint32_t d){return nvs.count(k)?nvs[k]:d;}
+ uint32_t getUInt(const char*k,uint32_t d){if(!nvsRead){good=false;return d;}return nvs.count(k)?nvs[k]:d;}
  uint8_t getUChar(const char*k,uint8_t d){return getUInt(k,d);}
  uint16_t getUShort(const char*k,uint16_t d){return getUInt(k,d);}
  bool getBool(const char*k,bool d){return getUInt(k,d);}
  unsigned putUInt(const char*k,uint32_t v){assert(held);++writes;if(!nvsWrite)return 0;nvs[k]=v;return 4;}
 } prefs;
+using CheckedPreferences=Preferences;
+bool nvsCheckedReadBlob(const char*ns,const char*key,void*out,size_t size,bool&found){
+ if(!nvsOpen||!nvsRead)return false;
+ const std::string q=std::string(ns)+"/"+key;
+ found=blobs.count(q)!=0;
+ if(!found)return true;
+ if(blobs[q].size()!=size)return false;
+ std::memcpy(out,blobs[q].data(),size);return true;
+}
+bool nvsCheckedWriteBlob(const char*ns,const char*key,const void*data,size_t size){
+ ++writes;if(!nvsOpen||!nvsWrite)return false;
+ const auto bytes=static_cast<const uint8_t*>(data);
+ blobs[std::string(ns)+"/"+key]={bytes,bytes+size};return true;
+}
 int stateMux=0,r79LabMux=0,canTxBarrierMutex=1;
 constexpr int portMAX_DELAY=1000,pdTRUE=1;
 bool busy=false;
@@ -53,7 +73,8 @@ uint8_t r79RetryIndex=0,r79RetryOriginKind=0;
 uint32_t r79RetryDueMs=0,r79RetryGeneration=0;
 constexpr uint8_t R79LAB_TX_NONE=0;
 '''
-code+=function('r79CfgLoad')+function('r79ApControlApply')
+code+=logic[logic.index('struct R79CfgSnapshot {'):logic.index('static R79CfgSnapshot r79CfgRuntimeSnapshot()')]
+code+=function('featureNvsU16')+function('r79CfgPersistCandidate')+function('r79CfgLoad')+function('r79ApControlApply')
 code+=r'''
 int main(){
  r79CfgLoad();assert(!r79ApGateConfig.enabled&&r79ApGateConfig.mode==0&&r79ApGateConfig.delaySeconds==2&&!r79ApGateConfig.allowManualDriving);
@@ -94,6 +115,22 @@ int main(){
   assert(r79ApGateConfig.enabled==bool(master)&&r79ApGateConfig.mode==mode&&r79ApGateConfig.delaySeconds==seconds&&r79ApGateConfig.allowManualDriving==allow);
  }
  nvs["apctl"]=520u;r79CfgLoad();assert(!r79ApGateConfig.allowManualDriving&&!r79ApGateConfig.enabled); // Reserved bit3 fails closed.
+ // Ordinary R79 blob migration must not replace the independently protected
+ // AP-control key (including manual opt-in) or HW3 bit47 selection.
+ nvs["hw3"]=1;
+ assert(r79ApControlApply({true,1,4,true}));const auto packed=nvs["apctl"];
+ assert(r79CfgPersistCandidate({0,2,1,true,150,true,321}));
+ assert(nvs["apctl"]==packed&&nvs["hw3"]==1&&blobs["r79/cfg3282"].size()==10);
+ r79ApGateConfig={};r79CfgLoad();
+ assert(r79CfgReadOk&&r79ApGateConfig.enabled&&r79ApGateConfig.mode==1&&r79ApGateConfig.delaySeconds==4&&r79ApGateConfig.allowManualDriving);
+ assert(r79TransportMode==2&&r79Mode2ReinjectEnabled&&r79Mode2DelayMs==321&&r79Hw3Enabled);
+ const auto retained=blobs["r79/cfg3282"];nvsWrite=false;
+ assert(!r79CfgPersistCandidate({0,1,1,true,150,false,150}));
+ assert(nvs["apctl"]==packed&&blobs["r79/cfg3282"]==retained&&r79ApGateConfig.allowManualDriving);nvsWrite=true;
+ nvsRead=false;r79CfgLoad();
+ assert(!r79CfgReadOk&&r79ApGateConfig.enabled&&r79ApGateConfig.delaySeconds==4&&r79ApGateConfig.allowManualDriving&&nvs["apctl"]==packed);
+ nvsRead=true;blobs["r79/cfg3282"].pop_back();r79CfgLoad();
+ assert(!r79CfgReadOk&&r79ApGateConfig.allowManualDriving&&nvs["apctl"]==packed);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='r79-ap-nvs-') as d:

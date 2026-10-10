@@ -5,7 +5,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 API = (ROOT / "web_api.h").read_text()
-INO = (ROOT / "T2CAN-Universal-v3.28.0-LP_YL.ino").read_text()
+INO = (ROOT / "T2CAN-Universal-v3.28.3-LP_YL.ino").read_text()
 
 
 class NvsKeepBleResetContract(unittest.TestCase):
@@ -27,7 +27,9 @@ class NvsKeepBleResetContract(unittest.TestCase):
         guard_reader = API.split("static bool resetNvsKeepBleGuardRead", 1)[1].split(
             "static bool resetNvsKeepBleGuardWrite", 1
         )[0]
-        self.assertIn("NVS_KEEP_BLE_RESET_GUARD_NAMESPACE, false", guard_reader)
+        self.assertIn("NVS_KEEP_BLE_RESET_GUARD_NAMESPACE, true", guard_reader)
+        self.assertIn("CheckedPreferences p", guard_reader)
+        self.assertIn("p.ok()", guard_reader)
         handler = API.split("static void httpResetNvsPreserveS3xyBle()", 1)[1].split(
             "static void httpFactoryReset()", 1
         )[0]

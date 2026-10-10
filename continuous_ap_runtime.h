@@ -9,6 +9,7 @@ static ContApObservation continuousApAp,continuousApTurn,continuousApBrake,conti
 static ContApObservation continuousApTorqueS,continuousApTorqueP,continuousApTorqueParty,continuousApStalkControl,continuousApScrollControl;
 static ContApStockFrame continuousApStalkStock,continuousApScrollStock,continuousApLastTx;
 static bool continuousApManualSeen=false,continuousApCancelLatched=false,continuousApEchoAmbiguous=false;
+static ContApReason continuousApCancelReason=ContApReason::None;
 static uint32_t continuousApManualMs=0,continuousApLastTxMs=0;
 static uint8_t continuousApStalkCounter=0;
 static inline bool continuousApNagBusy() {
@@ -53,28 +54,35 @@ static inline void continuousApObserveStock(uint8_t bus,uint16_t id,const uint8_
     if(!d.idle)continuousApEchoAmbiguous=true;
     portEXIT_CRITICAL(&continuousApMux);return;
   }
-  ContApObservation sample{true,d.valid,d.value,now,e};
+  ContApObservation sample{true,d.valid,d.value,now,e,id};
   switch(d.signal){
     case ContApSignal::Ap:continuousApAp=sample;break;
     case ContApSignal::Turn:continuousApTurn=sample;break;
     case ContApSignal::Brake:continuousApBrake=sample;break;
     case ContApSignal::Gear:if(id==0x118)continuousApGear118=sample;else continuousApGear186=sample;break;
     case ContApSignal::Torque:if(f.route==ContApRoute::PartyA)continuousApTorqueParty=sample;else if(id==0x372)continuousApTorqueS=sample;else continuousApTorqueP=sample;break;
-    case ContApSignal::Stalk:sample.value=d.idle?0:1;continuousApStalkControl=sample;continuousApStalkStock=f;continuousApStalkStock.valid=d.valid&&d.idle;continuousApEchoAmbiguous=false;break;
-    case ContApSignal::Scroll:sample.value=d.idle?0:1;continuousApScrollControl=sample;continuousApScrollStock=f;continuousApScrollStock.valid=d.valid&&d.idle;continuousApEchoAmbiguous=false;break;
+    case ContApSignal::Stalk:sample.value=d.idle?0:2;continuousApStalkControl=sample;continuousApStalkStock=f;continuousApStalkStock.valid=d.valid&&d.idle;continuousApEchoAmbiguous=false;break;
+    case ContApSignal::Scroll:sample.value=d.idle?0:(((data[1]>>4)&3)==2||((data[0]>>5)&3)==2||(data[5]&6)!=0?2:1);continuousApScrollControl=sample;continuousApScrollStock=f;continuousApScrollStock.valid=d.valid&&d.idle;continuousApEchoAmbiguous=false;break;
     default:break;
   }
-  const bool manual=(d.signal==ContApSignal::Brake&&(!d.valid||d.value!=1))||((d.signal==ContApSignal::Stalk||d.signal==ContApSignal::Scroll)&&(!d.valid||!d.idle));
+  const bool manual=(d.signal==ContApSignal::Brake&&(!d.valid||d.value!=1))||((d.signal==ContApSignal::Stalk||d.signal==ContApSignal::Scroll)&&(!d.valid||sample.value>=2||(sample.value==1&&(continuousApFsm.status().releaseOwed||continuousApFsm.hasPendingPress()))));
   const auto state=continuousApFsm.status().state;
   const bool inEpisode=state!=ContApState::Idle;
   const bool watch=inEpisode||continuousApFsm.hasArmedActive();
-  const bool apStop=d.signal==ContApSignal::Ap&&(!d.valid||d.value<2||d.value>6||(inEpisode&&d.value>=3));
+  const bool apStop=d.signal==ContApSignal::Ap&&(!d.valid||d.value==0||d.value>6||(inEpisode&&d.value>=3)||(inEpisode&&d.value==1&&continuousApFsm.status().attempts>0));
   const bool gearStop=d.signal==ContApSignal::Gear&&(!d.valid||d.value!=4);
   const bool turnStop=d.signal==ContApSignal::Turn&&(!d.valid||(d.value&0xf0)!=0||((d.value&3)!=0&&(d.value&12)!=0)||(inEpisode&&state!=ContApState::WaitSignalOff&&d.value!=0));
   const bool torqueStop=d.signal==ContApSignal::Torque&&!d.valid;
   if(manual){continuousApManualSeen=true;continuousApManualMs=now;}
   // Preserve stop events across a drained RX batch; later stock cannot undo them.
-  if(watch&&(manual||apStop||gearStop||turnStop||torqueStop))continuousApCancelLatched=true;
+  if(watch&&(manual||apStop||gearStop||turnStop||torqueStop)){
+    // Keep the first cancellation cause even if the RX batch later recovers.
+    if(!continuousApCancelLatched)continuousApCancelReason=
+      d.signal==ContApSignal::Brake?(!d.valid?ContApReason::Stale:ContApReason::Brake):
+      apStop?(d.valid&&d.value>=3&&d.value<=6?ContApReason::Complete:ContApReason::ApState):gearStop?ContApReason::Gear:torqueStop?ContApReason::Stale:
+      !d.valid?ContApReason::InputUnavailable:ContApReason::DriverInput;
+    continuousApCancelLatched=true;
+  }
   portEXIT_CRITICAL(&continuousApMux);
 }
 static inline void continuousApResetForEpoch(uint32_t e){
@@ -82,7 +90,7 @@ static inline void continuousApResetForEpoch(uint32_t e){
   ++continuousApGeneration;continuousApFsm.reset(e);
   continuousApAp={};continuousApTurn={};continuousApBrake={};continuousApGear118={};continuousApGear186={};
   continuousApTorqueS={};continuousApTorqueP={};continuousApTorqueParty={};continuousApStalkControl={};continuousApScrollControl={};
-  continuousApStalkStock={};continuousApScrollStock={};continuousApLastTx={};continuousApCancelLatched=continuousApEchoAmbiguous=continuousApManualSeen=false;
+  continuousApStalkStock={};continuousApScrollStock={};continuousApLastTx={};continuousApCancelReason=ContApReason::None;continuousApCancelLatched=continuousApEchoAmbiguous=continuousApManualSeen=false;
   portEXIT_CRITICAL(&continuousApMux);
 }
 struct ContinuousApTxContext {ContApCommand command;ContApStockFrame frame;};
@@ -131,7 +139,7 @@ static inline bool continuousApCommitCancel(uint32_t now){
   if(!pending)return true;
   if(!canTxBarrierMutex||xSemaphoreTake(canTxBarrierMutex,0)!=pdTRUE)return false;
   portENTER_CRITICAL(&continuousApMux);
-  if(continuousApCancelLatched){++continuousApGeneration;continuousApFsm.cancel(continuousApGeneration,canTxBarrierState.epoch,now);continuousApCancelLatched=false;}
+  if(continuousApCancelLatched){++continuousApGeneration;continuousApFsm.cancel(continuousApGeneration,canTxBarrierState.epoch,now,continuousApCancelReason);continuousApCancelLatched=false;}
   portEXIT_CRITICAL(&continuousApMux);xSemaphoreGive(canTxBarrierMutex);return true;
 }
 static inline void continuousApService(ContApRoute route){

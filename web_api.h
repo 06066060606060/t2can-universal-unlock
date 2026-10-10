@@ -1337,6 +1337,9 @@ static String systemStatsToJson() {
   jw.boolean("otaSuccess", otaSuccess);
   jw.boolean("otaError", otaError);
   jw.string("otaErrMsg", otaErrMsg);
+  jw.string("otaStage", otaStage);
+  jw.u32("otaUpdateError", otaUpdateError);
+  jw.u32("otaAttempt", otaAttempt);
   jw.u32("otaBytes", otaBytes);
   jw.u32("otaTotal", otaTotal);
   jw.finish();
@@ -2066,60 +2069,107 @@ static void httpS3xyLogCsv() {
 
 // ─── OTA update ─────────────────────────────────────────────
 
+// Diagnostics remain available after the multipart parser abandons a request.
+// A new START clears the prior attempt; querying status never changes it.
+static void otaRecordFailure(const char *stage, const char *message, uint8_t error) {
+    if (otaError) return; // Preserve the first failure when ABORT follows it.
+    otaError = true;
+    otaSuccess = false;
+    otaStage = stage;
+    otaUpdateError = error;
+    strncpy(otaErrMsg, message, sizeof(otaErrMsg) - 1);
+    otaErrMsg[sizeof(otaErrMsg) - 1] = '\0';
+}
+
+static String otaStatusJson() {
+    String resp;
+    JsonWriterArduino jw(resp);
+    jw.boolean("ok", otaSuccess && !otaError);
+    jw.boolean("inProgress", otaInProgress);
+    jw.string("error", otaErrMsg);
+    jw.string("stage", otaStage);
+    jw.u32("updateError", otaUpdateError);
+    jw.u32("attempt", otaAttempt);
+    jw.u32("receivedBytes", otaBytes);
+    jw.u32("totalBytes", otaTotal);
+    jw.finish();
+    return resp;
+}
+
+static void httpOtaStatus() {
+    server.send(200, "application/json", otaStatusJson());
+}
+
 static void httpOtaUpload() {
     HTTPUpload &up = server.upload();
 
     if (up.status == UPLOAD_FILE_START) {
+        // WebServer resets this client to 5 s before parsing. Set the payload
+        // read's idle timeout here, without changing other HTTP requests.
+        server.client().setTimeout(30000);
+        ++otaAttempt;
+        otaUploadEnded = false;
         otaInProgress = true;
         otaSuccess    = false;
         otaError      = false;
         otaBytes      = 0;
+        otaTotal      = 0;
+        otaStage      = "begin";
+        otaUpdateError = 0;
         otaErrMsg[0]  = '\0';
         T2CAN_SERIAL_PRINTF("[OTA] Start: %s\n", up.filename.c_str());
 
         if (!prepareCanForMaintenance()) {
-            otaError = true;
-            strncpy(otaErrMsg, "CAN stop not confirmed; OTA refused. Reboot required.", sizeof(otaErrMsg) - 1);
+            otaRecordFailure("maintenance", "CAN stop not confirmed; OTA refused. Reboot required.", 0);
             return;
         }
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-            otaError = true;
-            strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+            otaRecordFailure("begin", Update.getError() ? Update.errorString() : "Update begin failed without an error code", Update.getError());
             T2CAN_SERIAL_PRINTF("[OTA] begin() failed: %s\n", otaErrMsg);
         }
     } else if (up.status == UPLOAD_FILE_WRITE) {
-        if (!otaError && Update.write(up.buf, up.currentSize) != up.currentSize) {
-            otaError = true;
-            strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
-            T2CAN_SERIAL_PRINTF("[OTA] write() failed: %s\n", otaErrMsg);
+        otaBytes += up.currentSize; // Received payload, including failed writes.
+        if (!otaError) {
+            otaStage = "write";
+            if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+                otaRecordFailure("write", Update.errorString(), Update.getError());
+                Update.abort();
+                T2CAN_SERIAL_PRINTF("[OTA] write() failed: %s\n", otaErrMsg);
+            }
         }
-        otaBytes += up.currentSize;
     } else if (up.status == UPLOAD_FILE_END) {
+        otaUploadEnded = true;
         if (!otaError && Update.end(true)) {
             otaSuccess = true;
+            otaStage   = "complete";
             otaTotal   = otaBytes;
             T2CAN_SERIAL_PRINTF("[OTA] Success: %u bytes\n", up.totalSize);
         } else if (!otaError) {
-            otaError = true;
-            strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+            otaRecordFailure("end", Update.errorString(), Update.getError());
+            Update.abort();
             T2CAN_SERIAL_PRINTF("[OTA] end() failed: %s\n", otaErrMsg);
         }
         otaInProgress = false;
     } else if (up.status == UPLOAD_FILE_ABORTED) {
+        // totalSize counts dispatched chunks; currentSize may contain a final
+        // undispatched partial chunk. Never count the same WRITE twice.
+        const uint32_t received = up.totalSize + (otaUploadEnded ? 0 : up.currentSize);
+        if (received > otaBytes) otaBytes = received;
+        const uint8_t priorError = Update.getError();
         Update.abort();
+        if (!otaError) {
+            otaRecordFailure("abort", "Upload interrupted (connection closed or receive timeout)",
+                             priorError ? priorError : Update.getError());
+        }
         otaInProgress = false;
-        otaError      = true;
-        strncpy(otaErrMsg, "aborted", sizeof(otaErrMsg) - 1);
         T2CAN_SERIAL_PRINTLN("[OTA] Aborted");
     }
 }
 
 static void httpOtaFinish() {
     bool ok = otaSuccess && !otaError;
-    String resp = String("{\"ok\":") + (ok ? "true" : "false") +
-                  ",\"error\":\"" + String(otaErrMsg) + "\"}";
     server.sendHeader("Connection", "close");
-    server.send(200, "application/json", resp);
+    server.send(200, "application/json", otaStatusJson());
     if (ok) {
         delay(700);
         restartT2CanSafely();
@@ -2959,13 +3009,22 @@ static void httpIsaSuppressionControlUpdate() {
 }
 
 static String continuousApControlJson(){
+  const uint32_t now=(uint32_t)millis(),epoch=canTxEpochSnapshot();
   portENTER_CRITICAL(&continuousApMux);
   const auto cfg=continuousApConfig;const auto status=continuousApFsm.status();
+  auto inputs=continuousApInputsLocked(now,epoch,false);
+  // Do not hide an observed stale/invalid primary behind an unseen fallback.
+  // These diagnostic-only substitutions cannot satisfy freshness if control
+  // selection rejected the primary, and never affect the transmission inputs.
+  if(!inputs.gear.seen&&continuousApGear118.seen)inputs.gear=continuousApGear118;
+  if(inputs.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS&&!inputs.torque.seen&&continuousApTorqueS.seen)inputs.torque=continuousApTorqueS;
+  // Diagnostics describe the selected method even while an old adapter releases.
+  inputs.control=cfg.method==ContApMethod::StalkDouble?continuousApStalkControl:continuousApScrollControl;
   portEXIT_CRITICAL(&continuousApMux);
-  const auto route=continuousApGestureRoutePure(activeVehicleProfile,activeVehicleTopology,cfg.method);
-  const bool stalk=vehicleProfileContinuousApMethodSupported(activeVehicleProfile,activeVehicleTopology,1);
-  const bool single=vehicleProfileContinuousApMethodSupported(activeVehicleProfile,activeVehicleTopology,2);
-  const bool doubleClick=vehicleProfileContinuousApMethodSupported(activeVehicleProfile,activeVehicleTopology,3);
+  const auto route=continuousApGestureRoutePure(inputs.profile,inputs.topology,cfg.method);
+  const bool stalk=vehicleProfileContinuousApMethodSupported(inputs.profile,inputs.topology,1);
+  const bool single=vehicleProfileContinuousApMethodSupported(inputs.profile,inputs.topology,2);
+  const bool doubleClick=vehicleProfileContinuousApMethodSupported(inputs.profile,inputs.topology,3);
   String json;JsonWriterArduino jw(json);
   jw.boolean("enabled",cfg.enabled);jw.u32("method",(uint8_t)cfg.method);
   jw.boolean("effectiveEnabled",cfg.enabled&&route!=ContApRoute::None);
@@ -2974,6 +3033,27 @@ static String continuousApControlJson(){
   jw.string("supportReason",stalk||single||doubleClick?"Select a supported method that matches your vehicle's Autopilot setting.":"Unavailable for this vehicle connection. Standard Model 3/Y with Chassis CAN is required.");
   jw.string("route",route==ContApRoute::BodyA?"Body CAN A":route==ContApRoute::ChassisB?"Chassis CAN B":"Unavailable");
   jw.string("state",continuousApStateName(status.state));jw.string("blockedReason",continuousApReasonName(status.reason));
+  jw.string("lastCancelReason",status.lastCancelReason==ContApReason::None?"None":continuousApReasonName(status.lastCancelReason));
+  jw.string("signalReadiness",continuousApSignalReadinessPure(inputs));
+  const ContApObservation observations[]={inputs.ap,inputs.turn,inputs.brake,inputs.gear,inputs.torque,inputs.control};
+  const char *prefixes[]={"rxAp","rxTurn","rxBrake","rxGear","rxTorque","rxControl"};
+  const uint32_t limits[]={1000,350,250,1000,250,cfg.method==ContApMethod::StalkDouble?500u:250u};
+  for(unsigned n=0;n<6;++n){
+    const auto &sample=observations[n];char key[32],value[48];
+    snprintf(key,sizeof(key),"%sStatus",prefixes[n]);jw.string(key,continuousApRxStatusPure(sample,now,epoch,limits[n]));
+    snprintf(key,sizeof(key),"%sAgeMs",prefixes[n]);jw.u32(key,sample.seen?(uint32_t)(now-sample.rxMs):UINT32_MAX);
+    snprintf(key,sizeof(key),"%sValue",prefixes[n]);
+    if(!sample.seen)snprintf(value,sizeof(value),"—");
+    else if(n==4)snprintf(value,sizeof(value),"%.2f Nm",sample.value/100.0);
+    else if(n==5)snprintf(value,sizeof(value),"%s",sample.value==0?"Idle":sample.value==1?"Moving":"Pressed");
+    else snprintf(value,sizeof(value),"%ld",(long)sample.value);
+    jw.string(key,value);
+    snprintf(key,sizeof(key),"%sId",prefixes[n]);
+    const uint16_t expected[]={0x399,0x3f5,0x39d,0x118,uint16_t(inputs.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS?0x372:0x370),uint16_t(cfg.method==ContApMethod::StalkDouble?0x229:0x3c2)};
+    snprintf(value,sizeof(value),"0x%03X",sample.sourceId?sample.sourceId:expected[n]);jw.string(key,value);
+    snprintf(key,sizeof(key),"%sBus",prefixes[n]);
+    jw.string(key,n==4?(inputs.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS?"Body CAN A":"Party CAN A"):n==5?(route==ContApRoute::BodyA?"Body CAN A":route==ContApRoute::ChassisB?"Chassis CAN B":"Unavailable"):"Chassis CAN B");
+  }
   jw.u32("attempts",status.attempts);jw.u32("txOk",status.txOk);jw.u32("txFail",status.txFail);jw.u32("cleanupSends",status.cleanupSends);
   jw.boolean("releasePending",status.releaseOwed);jw.boolean("cleanupUnconfirmed",status.cleanupUnconfirmed);jw.finish();return json;
 }
@@ -3070,25 +3150,18 @@ static void httpFeatureLab() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
     return;
   }
-  if (!countryOverrideSetLabEnabledWithBarrier(enabled)) {
-    server.send(503, "application/json", "{\"ok\":false,\"error\":\"TX barrier unavailable\"}");
+  if (enabled && !researchCaptureEntries && !researchCaptureInit()) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Research Capture allocation failed\"}");
     return;
   }
-  if (enabled && !researchCaptureEntries) {
-    if (!researchCaptureInit()) {
-      (void)countryOverrideSetLabEnabledWithBarrier(false);
-      featureCfgSave();
-      server.send(500, "application/json", "{\"ok\":false,\"error\":\"Research Capture allocation failed\"}");
-      return;
-    }
+  if (!countryOverrideSetLabEnabledWithBarrier(enabled, true)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}");
+    return;
   }
   if (enabled && !driverMonitorPreRing) {
-    // Driver Monitoring Capture is diagnostic-only; failure does not disable
-    // the rest of LAB. Its panel will report ERROR if allocation is unavailable.
+    // Capture allocation is diagnostic-only; failure is shown in its panel.
     driverMonitorCaptureInit();
   } else if (!enabled) {
-    // LAB OFF suspends LAB-only capture and injection features. Production
-    // NAG/DMS ownership is intentionally independent of this menu gate.
     portENTER_CRITICAL(&researchCaptureMux);
     if (!researchCaptureExporting && researchCaptureState == RESEARCH_CAPTURE_CAPTURING)
       researchCaptureState = RESEARCH_CAPTURE_PAUSED;
@@ -3096,12 +3169,12 @@ static void httpFeatureLab() {
     driverMonitorCaptureSuspend();
     driverWindowLabResetRuntime();
   }
-  featureCfgSave();
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
 
 
 static void httpFeatureDoorCancel() {
+  FeatureCfgSnapshot next = featureCfgRuntimeSnapshot();
   if (!activeProfileBodyControlsSupported() && !activeProfileIsYl()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"door cancel requires Body CAN\"}");
     return;
@@ -3111,12 +3184,17 @@ static void httpFeatureDoorCancel() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
     return;
   }
-  doorOpenCancelEnabled = enabled;
-  featureCfgSave();
+  next.door = enabled;
+  if (!featureCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}");
+    return;
+  }
+  featureCfgRuntimeRestore(next);
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
 
 static void httpFeatureApDriveProfile() {
+  FeatureCfgSnapshot next = featureCfgRuntimeSnapshot();
   if (!activeProfileApDriveProfileSupported()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"AP Pedal / Regen Profile requires a supported 0x334 route\"}");
     return;
@@ -3129,9 +3207,7 @@ static void httpFeatureApDriveProfile() {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
       return;
     }
-    portENTER_CRITICAL(&stateMux);
-    apDriveProfileEnabled = enabled;
-    portEXIT_CRITICAL(&stateMux);
+    next.apDrive = enabled;
     changed = true;
   }
 
@@ -3146,9 +3222,7 @@ static void httpFeatureApDriveProfile() {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid regen profile\"}");
       return;
     }
-    portENTER_CRITICAL(&stateMux);
-    apDriveProfileRegenRaw = raw;
-    portEXIT_CRITICAL(&stateMux);
+    next.regen = raw;
     changed = true;
   }
 
@@ -3159,11 +3233,16 @@ static void httpFeatureApDriveProfile() {
 
   // AP Drive Profile owns outgoing 0x334 only while its AP gate is open.
   // A manual PedalMap drive-session target remains armed and resumes after AP.
-  featureCfgSave();
+  if (!featureCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}");
+    return;
+  }
+  featureCfgRuntimeRestore(next);
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
 
 static void httpFeatureBanned() {
+  const FeatureCfgSnapshot before = featureCfgRuntimeSnapshot();
   bool enabled;
   if (!httpBoolArg("enabled", enabled)) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
@@ -3173,23 +3252,21 @@ static void httpFeatureBanned() {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"banned car not supported for current profile\"}");
     return;
   }
-  if (!enabled) {
-    // Close every application TX path before changing the Restore invariant.
-    // This prevents a concurrent CAN task from enqueueing a Restore frame while
-    // Banned Car is transitioning OFF and its persisted state is sanitized.
-    setCanTxAdministrativeHold(true);
-    tlsscRestoreEnabled = false;
-    bannedCar = false;
-    featureCfgSave();
+  FeatureCfgSnapshot next = before;
+  next.banned = enabled;
+  if (!enabled) next.restore = false;
+  setCanTxAdministrativeHold(true);
+  if (!featureCfgPersistCandidate(next)) {
     setCanTxAdministrativeHold(false);
-  } else {
-    bannedCar = true;
-    featureCfgSave();
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
   }
+  featureCfgRuntimeRestore(next);
+  setCanTxAdministrativeHold(false);
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
 
 static void httpFeatureTlsscRestore() {
+  FeatureCfgSnapshot next = featureCfgRuntimeSnapshot();
   bool enabled;
   if (!httpBoolArg("enabled", enabled)) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
@@ -3199,8 +3276,12 @@ static void httpFeatureTlsscRestore() {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"restore not allowed for current state/profile\"}");
     return;
   }
-  tlsscRestoreEnabled = enabled;
-  featureCfgSave();
+  next.restore = enabled;
+  if (!featureCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}");
+    return;
+  }
+  featureCfgRuntimeRestore(next);
   server.send(200, "application/json", v3FeaturePolicyJson());
 }
 
@@ -3247,13 +3328,13 @@ static constexpr const char *NVS_KEEP_BLE_RESET_GUARD_KEY = "pending";
 
 static bool resetNvsKeepBleGuardRead(bool &active) {
   active = false;
-  Preferences p;
-  // Open read/write so the namespace is created on ordinary installations;
-  // Preferences read-only open reports NOT_FOUND when the guard never existed.
-  if (!p.begin(NVS_KEEP_BLE_RESET_GUARD_NAMESPACE, false)) return false;
+  CheckedPreferences p;
+  // A missing guard is normal; a read error must block destructive recovery.
+  if (!p.begin(NVS_KEEP_BLE_RESET_GUARD_NAMESPACE, true)) return false;
   active = p.getBool(NVS_KEEP_BLE_RESET_GUARD_KEY, false);
+  const bool ok = p.ok();
   p.end();
-  return true;
+  return ok;
 }
 
 static bool resetNvsKeepBleGuardWrite(bool active) {
@@ -3460,8 +3541,10 @@ static void httpNagSetMode() {
   nc.tsl9DowngradeWindow = tsl9Window;
   nc.tsl9InputMode = tsl9InputMode;
   nc.tsl9LegacyRoute = tsl9LegacyRoute;
+  if (!nagCfgSaveCandidate(nc)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
   nagCfgCommit(nc);
-  nagCfgSave();
   server.send(200, "application/json", nagCfgToJson());
 }
 
@@ -3681,27 +3764,20 @@ static void httpNagUpdate() {
                 "{\"ok\":false,\"error\":\"TSL9 input cleanup pending; retry after a fresh MUX1 frame\"}");
     return;
   }
-  if (server.hasArg("ignoreApState") && !nagIgnoreApStatePersist(nc.ignoreApState)) {
-    server.send(500, "application/json", "{\"ok\":false,\"error\":\"NAG option NVS write failed\"}");
-    return;
-  }
   if (inputTransportChanged) setCanTxAdministrativeHold(true);
+  const NagScrollStoredSnapshot nextScroll = {torqueRightScrollEnabled,
+      torqueRightScrollInterval, torqueRightScrollPattern,
+      tsl9RightPeriodicEnabled, tsl9RightPeriodicInterval};
+  if (!nagCfgSaveCandidateWithScroll(nc, nextScroll)) {
+    if (inputTransportChanged) setCanTxAdministrativeHold(false);
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
+  nagScrollRuntimeRestore(nextScroll);
   if (tsl9TransportChanged) nagTsl9RuntimeReset();
   nagCfgCommit(nc);
   if (previous.ignoreApState != nc.ignoreApState) {
     nagExactEchoReset();
     nagHumanRuntimeReset(false);
-  }
-  nagCfgSave();
-  if (rightScrollChanged) {
-    portENTER_CRITICAL(&nagRightScrollMux);
-    nagTorqueRightScrollEnabled = torqueRightScrollEnabled;
-    nagTorqueRightScrollIntervalSeconds = torqueRightScrollInterval;
-    nagTorqueRightScrollPattern = torqueRightScrollPattern;
-    nagTsl9RightPeriodicEnabled = tsl9RightPeriodicEnabled;
-    nagTsl9RightPeriodicIntervalSeconds = tsl9RightPeriodicInterval;
-    portEXIT_CRITICAL(&nagRightScrollMux);
-    featureCfgSave();
   }
   if (inputTransportChanged) {
     tsl9InputHardResetAfterQuiesce(false);
@@ -3720,9 +3796,17 @@ static void httpNagReset() {
   NagConfig nc;
   nagCfgDefaultsModeH(nc);
   nagCfgApplyActiveProfilePolicy(nc, true);
+  const NagScrollStoredSnapshot defaultScroll = {false,
+      AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE, NAG_RIGHT_SCROLL_PATTERN_DEFAULT,
+      false, AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE};
+  if (!nagCfgPersistSnapshot(nc, nagHumanV4DefaultConfigPure(),
+          nagModeHDefaultVariantPure(), defaultScroll)) {
+    setCanTxAdministrativeHold(false);
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
   nagHumanRuntimeLoadDefaults();
+  nagScrollRuntimeRestore(defaultScroll);
   nagCfgCommit(nc);
-  nagCfgSave();
   nagRxFrames = nagEchoCount = mcpTxOk = mcpTxFail = 0;
   portENTER_CRITICAL(&nagDiagMux);
   nagTxOk=nagTxFail=0; nagSkipDisabled=nagSkipBootDelay=nagSkipWarmup=nagSkipSelfFrame=0;
@@ -3748,7 +3832,6 @@ static void httpNagReset() {
   nagTsl9RightPeriodicIntervalSeconds =
       AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE;
   portEXIT_CRITICAL(&nagRightScrollMux);
-  featureCfgSave();
   tsl9InputHardResetAfterQuiesce(true);
   setCanTxAdministrativeHold(false);
   server.send(200, "application/json", nagCfgToJson());
@@ -3756,14 +3839,19 @@ static void httpNagReset() {
 
 static void httpSummonStats()  { server.send(200, "application/json", summonStatsToJson()); }
 static void httpSummonTlsscEnable() {
-    setTlsscEnabled(true, true);
+    if (!setTlsscEnabled(true, true)) {
+      server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+    }
     server.send(200, "application/json", summonStatsToJson());
 }
 static void httpSummonTlsscDisable() {
-    setTlsscEnabled(false, true);
+    if (!setTlsscEnabled(false, true)) {
+      server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+    }
     server.send(200, "application/json", summonStatsToJson());
 }
 static void httpSummonTlsscHighwayGate() {
+  SummonCfgSnapshot next = summonCfgRuntimeSnapshot();
     if (!server.hasArg("enabled")) {
       server.send(400, "text/plain", "missing enabled");
       return;
@@ -3774,24 +3862,29 @@ static void httpSummonTlsscHighwayGate() {
       return;
     }
     const bool enabled = (arg == "1");
-    portENTER_CRITICAL(&stateMux);
-    tlsscHighwayGateEnabled = enabled;
-    portEXIT_CRITICAL(&stateMux);
-    summonCfgSave();
+  next.highway = enabled;
+    if (!summonCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
+  summonCfgRuntimeRestore(next);
     server.send(200, "application/json", summonStatsToJson());
 }
 
 static void httpSummonTlsscNoaBlock() {
+  SummonCfgSnapshot next = summonCfgRuntimeSnapshot();
     bool enabled;
     if (!httpBoolArg("enabled", enabled)) {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
       return;
     }
-    portENTER_CRITICAL(&stateMux);
-    tlsscBlockInNoa = enabled;
-    if (enabled && gateNOAActive && tlsscInjectedActive) tlsscClearPending = true;
-    portEXIT_CRITICAL(&stateMux);
-    summonCfgSave();
+  next.noa = enabled;
+    if (!summonCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
+  summonCfgRuntimeRestore(next);
+  portENTER_CRITICAL(&stateMux);
+  if (enabled && gateNOAActive && tlsscInjectedActive) tlsscClearPending = true;
+  portEXIT_CRITICAL(&stateMux);
     server.send(200, "application/json", summonStatsToJson());
 }
 
@@ -4089,14 +4182,24 @@ static void httpNagHumanProfileUpdate() {
     if (!parse16("waitMinMs",waitMinMs)||!parse16("waitMaxMs",waitMaxMs)||!parse16("refractoryMinMs",refMinMs)||!parse16("refractoryMaxMs",refMaxMs)||!parse16("visualRescueDelayMs",visualRescueDelayMs)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid Mode H timing\"}"); return; }
     if (server.hasArg("hoPolicy")) { int v=server.arg("hoPolicy").toInt(); if(v<0||v>255||!nagHumanV3HoPolicyValidPure((uint8_t)v)){server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid hoPolicy\"}");return;} hoPolicy=(uint8_t)v; }
     if (server.hasArg("visualRescueEnabled") && !httpBoolArg("visualRescueEnabled", visualRescueEnabled)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid visualRescueEnabled\"}"); return; }
-    if (!nagHumanV4RuntimeSetLabTuning(peakMinRaw,peakMaxRaw,waitMinMs,waitMaxMs,refMinMs,refMaxMs,
-                                       carrierMinRaw,carrierMaxRaw,hoPolicy,ho1Raw,ho2Raw,
-                                       visualRescueEnabled,visualRescueDelayMs)) {
+    c.base.peakMinRaw=peakMinRaw; c.base.peakMaxRaw=peakMaxRaw;
+    c.base.waitMinMs=waitMinMs; c.base.waitMaxMs=waitMaxMs;
+    c.base.refractoryMinMs=refMinMs; c.base.refractoryMaxMs=refMaxMs;
+    c.base.hoOverridePct=0u; c.carrierMinRaw=carrierMinRaw; c.carrierMaxRaw=carrierMaxRaw;
+    c.hoPolicy=hoPolicy; c.ho1ThresholdRaw=ho1Raw; c.ho2ThresholdRaw=ho2Raw;
+    c.visualRescueEnabled=visualRescueEnabled; c.visualRescueDelayMs=visualRescueDelayMs;
+    if (!nagHumanV4ConfigValidPure(c)) {
       server.send(400,"application/json","{\"ok\":false,\"error\":\"Rev.4 ranges invalid: peak 1.00..3.00 Nm, carrier 0.10..0.80 Nm, HO thresholds 0.10..3.00 Nm with HO1 <= HO2, wait 0.3..5.0 s, refractory 0.3..2.5 s, rescue delay 0..2.0 s\"}");
       return;
     }
+    NagConfig config;
+    portENTER_CRITICAL(&nagCfgMux); config = nagCfg; portEXIT_CRITICAL(&nagCfgMux);
+    if (!nagCfgPersist(config, c, nagHumanVariant)) {
+      server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+    }
+    (void)nagHumanV4RuntimeSetLabTuning(peakMinRaw,peakMaxRaw,waitMinMs,waitMaxMs,refMinMs,refMaxMs,
+        carrierMinRaw,carrierMaxRaw,hoPolicy,ho1Raw,ho2Raw,visualRescueEnabled,visualRescueDelayMs);
   }
-  nagCfgSave();
   server.send(200,"application/json",nagHumanProfileStatsToJson());
 }
 
@@ -4107,12 +4210,16 @@ static void httpNagHumanProfileReset() {
   }
 {
     const NagHumanV4ConfigPure d = nagHumanV4DefaultConfigPure();
+    NagConfig config;
+    portENTER_CRITICAL(&nagCfgMux); config = nagCfg; portEXIT_CRITICAL(&nagCfgMux);
+    if (!nagCfgPersist(config, d, nagHumanVariant)) {
+      server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+    }
     (void)nagHumanV4RuntimeSetLabTuning(d.base.peakMinRaw,d.base.peakMaxRaw,
         d.base.waitMinMs,d.base.waitMaxMs,d.base.refractoryMinMs,d.base.refractoryMaxMs,
         d.carrierMinRaw,d.carrierMaxRaw,d.hoPolicy,d.ho1ThresholdRaw,d.ho2ThresholdRaw,
         d.visualRescueEnabled,d.visualRescueDelayMs);
   }
-  nagCfgSave();
   server.send(200, "application/json", nagHumanProfileStatsToJson());
 }
 
@@ -4284,6 +4391,11 @@ static void httpR79Update() {
   const bool disablingMode1Reinject =
       currentMode1Reinject && !nextMode1Reinject;
 
+  const R79CfgSnapshot next = {nextBit18, nextMode, nextMode1Wait,
+      nextMode1Reinject, nextMode1Delay, nextMode2Reinject, nextMode2Delay};
+  if (!r79CfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
   if (!onlyMode1ReinjectChanged) setCanTxAdministrativeHold(true);
   portENTER_CRITICAL(&r79LabMux);
   r79TransportMode = r79ModeSanitizePure(nextMode);
@@ -4315,7 +4427,7 @@ static void httpR79Update() {
   portEXIT_CRITICAL(&r79LabMux);
   if (disablingMode1Reinject)
     canTxCancellationGenerationAdvance(&r79Mode1PostMux2Generation);
-  r79CfgSave();
+
   if (!onlyMode1ReinjectChanged) setCanTxAdministrativeHold(false);
   server.send(200, "application/json", r79StatsToJson());
 }
@@ -4368,6 +4480,9 @@ static void httpUlcUpdate() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"no setting supplied\"}"); return;
   }
 
+  if (!ulcCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"NVS write failed\"}"); return;
+  }
   portENTER_CRITICAL(&lab3f8Mux);
   lab3f8AlcMode = next.ulc.alcOffHighwayEnabled ? LAB3F8_ALC_FORCE_ON : LAB3F8_ALC_STOCK;
   lab3f8UlcBlindMode = next.ulc.blindSpotMode;
@@ -4375,16 +4490,7 @@ static void httpUlcUpdate() {
   ulcNoConfirmEnabled = next.ulc.confirmFreeEnabled;
   ulcNoConfirmTimingMode = next.ulc.confirmFreeTiming;
   portEXIT_CRITICAL(&lab3f8Mux);
-  if (!ulcCfgSave()) {
-    portENTER_CRITICAL(&lab3f8Mux);
-    lab3f8AlcMode = before.ulc.alcOffHighwayEnabled ? LAB3F8_ALC_FORCE_ON : LAB3F8_ALC_STOCK;
-    lab3f8UlcBlindMode = before.ulc.blindSpotMode;
-    lab3f8UlcOffHighwayMode = before.ulc.ulcOffHighwayMode;
-    ulcNoConfirmEnabled = before.ulc.confirmFreeEnabled;
-    ulcNoConfirmTimingMode = before.ulc.confirmFreeTiming;
-    portEXIT_CRITICAL(&lab3f8Mux);
-    server.send(500, "application/json", "{\"ok\":false,\"error\":\"NVS write failed\"}"); return;
-  }
+
   if (next.ulc.confirmFreeEnabled) {
     portENTER_CRITICAL(&blinkAMux);
     autoBlinkerClearPendingLocked();
@@ -4458,17 +4564,16 @@ static void httpAutoLaneChangeLabUpdate() {
     }
     targetBus = (uint8_t)arg.toInt();
   }
+  FeatureConfigMigrationPure next = before;
+  next.autoLaneChange.enabled = enabled; next.autoLaneChange.bus = targetBus;
+  if (!autoLaneChangeLabCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"NVS write failed\"}"); return;
+  }
   portENTER_CRITICAL(&autoLc293Mux);
   uiAutoLaneChangeEnabled = enabled;
   uiAutoLaneChangeTargetBus = targetBus;
   portEXIT_CRITICAL(&autoLc293Mux);
-  if (!autoLaneChangeLabCfgSave()) {
-    portENTER_CRITICAL(&autoLc293Mux);
-    uiAutoLaneChangeEnabled = before.autoLaneChange.enabled;
-    uiAutoLaneChangeTargetBus = before.autoLaneChange.bus;
-    portEXIT_CRITICAL(&autoLc293Mux);
-    server.send(500, "application/json", "{\"ok\":false,\"error\":\"NVS write failed\"}"); return;
-  }
+
   server.send(200, "application/json", ulcStatsToJson());
 }
 
@@ -4590,29 +4695,36 @@ static void httpBlinkAStats() {
 }
 
 static void httpBlinkAEnable() {
-  if (!setAutoBlinkerEnabled(true, true)) {
+  if (!activeProfileAdvancedEapSupported()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"Advanced EAP unavailable for current topology\"}");
     return;
+  }
+  if (!setAutoBlinkerEnabled(true, true)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
   }
   server.send(200, "application/json", blinkAStatsToJson());
 }
 
 static void httpBlinkADisable() {
-  setAutoBlinkerEnabled(false, true);
+  if (!setAutoBlinkerEnabled(false, true)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
   server.send(200, "application/json", blinkAStatsToJson());
 }
 
 static void httpBlinkADelay() {
+  SummonCfgSnapshot next = summonCfgRuntimeSnapshot();
   if (!activeProfileAdvancedEapSupported()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"Advanced EAP unavailable for current topology\"}");
     return;
   }
   int v = server.hasArg("ms") ? server.arg("ms").toInt() : (int)BLINKA_AUTO_DELAY_DEFAULT_MS;
   v = constrain(v, 0, 30000);
-  portENTER_CRITICAL(&blinkAMux);
-  blinkADelayMs = (uint32_t)v;
-  portEXIT_CRITICAL(&blinkAMux);
-  summonCfgSave();
+  next.delayMs = (uint32_t)v;
+  if (!summonCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
+  summonCfgRuntimeRestore(next);
   server.send(200, "application/json", blinkAStatsToJson());
 }
 
@@ -4653,15 +4765,18 @@ static void httpBlinkATiming() {
     nextPause = (uint8_t)value;
   }
 
+  SummonCfgSnapshot next = summonCfgRuntimeSnapshot();
+  next.stabilize = nextNoa; next.pause = nextPause;
+  if (!summonCfgPersistCandidate(next)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
+  }
   const uint32_t now = (uint32_t)millis();
   portENTER_CRITICAL(&blinkAMux);
   if (hasNoa && nextNoa != previousNoa)
-    autoBlinkerNoaReconfigurePure(
-        autoBlinkerNoaSessionState, now, nextNoa);
+    autoBlinkerNoaReconfigurePure(autoBlinkerNoaSessionState, now, nextNoa);
   blinkANoaStabilizationSeconds = nextNoa;
   blinkACancelPauseSeconds = nextPause;
   portEXIT_CRITICAL(&blinkAMux);
-  summonCfgSave();
   server.send(200, "application/json", blinkAStatsToJson());
 }
 
@@ -5510,6 +5625,7 @@ static void webTask(void *arg) {
   server.on("/api/system/reboot", HTTP_POST, httpRebootT2Can);
   server.on("/api/wifi/status", HTTP_GET, httpWifiStatus);
   server.on("/api/wifi/apply", HTTP_POST, httpWifiApply);
+  server.on("/api/ota/status", HTTP_GET, httpOtaStatus);
   server.on("/update", HTTP_POST, httpOtaFinish, httpOtaUpload);
 
   if (!vehicleProfileSetupMode && !vehicleProfileNvsError) {

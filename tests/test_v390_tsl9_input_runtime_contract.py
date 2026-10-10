@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 class Tsl9InputRuntimeContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.ino = (ROOT / "T2CAN-Universal-v3.28.0-LP_YL.ino").read_text()
+        cls.ino = (ROOT / "T2CAN-Universal-v3.28.3-LP_YL.ino").read_text()
         cls.core = (ROOT / "can_core.h").read_text()
         cls.logic = (ROOT / "vehicle_logic.h").read_text()
         cls.runtime = (ROOT / "can_runtime.h").read_text()
@@ -18,7 +18,7 @@ class Tsl9InputRuntimeContractTests(unittest.TestCase):
         self.assertIn("uint8_t  tsl9InputMode;", self.core)
         self.assertIn("TSL9_INPUT_MODE_DEFAULT_PURE", self.core)
         self.assertIn('getUChar("tsl9in"', self.core)
-        self.assertIn('putUChar("tsl9in"', self.core)
+        self.assertIn('stored.config = config;', self.core)
 
     def test_rx_observes_warning_templates_and_services_periodic_right_scroll(self):
         self.assertIn("tsl9InputObserveCanA(rxf);", self.runtime)

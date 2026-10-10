@@ -9,7 +9,7 @@ forward = (root / 't2can_forward.h').read_text(encoding='utf-8')
 ino_files = list(root.glob('*.ino'))
 assert len(ino_files) == 1
 ino = ino_files[0].read_text(encoding='utf-8')
-assert '#define FW_VERSION "v3.28.0"' in ino
+assert '#define FW_VERSION "v3.28.3"' in ino
 
 # PedalMap mode changes cache the full latest stock 0x334 template and attempt
 # one immediate one-shot TX, while preserving the existing stock-follow overlay.
@@ -55,13 +55,14 @@ for fn, end in [('static void sendStalkFrameCanB', 'static void handle249OnCanA'
 # value is restored only when the active topology supports the feature;
 # unsupported profiles must not erase the stored preference.
 load = logic[logic.index('static bool ulcCfgLoadAndMigrate()'):logic.index('static bool autoLaneChangeLabCfgLoadAndMigrate()')]
-save = logic[logic.index('static bool ulcCfgSave()'):logic.index('static bool autoLaneChangeLabCfgSave()')]
+save = logic[logic.index('static bool ulcCfgPersistCandidate('):logic.index('static bool ulcCfgSave()')]
 assert 'getBool("confirm", false)' in load
 assert 'activeProfileUlcNoConfirmSupported() && confirm' in load
-assert 'putBool("confirm"' in save
+assert '(uint8_t)config.ulc.confirmFreeEnabled' in save
+assert 'nvsCheckedWriteBlob("ulc", "cfg3282"' in save
 
 api_fn = api[api.index('static void httpUlcUpdate()'):api.index('static void httpAutoLaneChangeLabStats()')]
-assert 'ulcCfgSave()' in api_fn
+assert 'ulcCfgPersistCandidate(next)' in api_fn
 assert 'httpRequireLab()' not in api_fn
 
 # Turning the LAB master OFF must not alter the production selection.

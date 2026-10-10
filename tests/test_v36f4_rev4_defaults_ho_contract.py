@@ -53,10 +53,10 @@ assert "hoPolicyName" in API, "Rev.4 API policy label missing"
 
 for key in ["h4hop", "h4ho1", "h4ho2"]:
     assert f'getUChar("{key}"' in CORE or f'getUShort("{key}"' in CORE
-    assert f'putUChar("{key}"' in CORE or f'putUShort("{key}"' in CORE
+    assert "stored.human = human;" in CORE
 
 assert 'nagCfgVersion < 18u' in CORE
-assert 'prefs.putUChar("v", 20u)' in CORE
+assert 'stored.config = config;' in CORE
 assert 'nagHumanV4MigrateV16DefaultPure(rev4Cfg)' in CORE
 assert 'nagHumanV4MigrateV17DefaultPure(rev4Cfg)' in CORE
 

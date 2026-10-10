@@ -82,9 +82,9 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run([str(executable)], check=True)
 
 load = LOGIC[LOGIC.index("static void featureCfgLoad()") : LOGIC.index("static bool blinkerTxModePersist")]
-save = LOGIC[LOGIC.index("static void featureCfgSave()") : LOGIC.index("static void summonCfgLoad()")]
+save = LOGIC[LOGIC.index("static bool featureCfgSave()") : LOGIC.index("static void summonCfgLoad()")]
 assert "const bool featuresOpened = prefs.begin" in load
-assert "if (featuresOpened)" in load
+assert "if (!featureCfgReadOk) return;" in load
 assert 'putBool("dmsDisable"' not in save
 
 print("Standalone Driver Monitoring NVS and TX-barrier transaction PASS")

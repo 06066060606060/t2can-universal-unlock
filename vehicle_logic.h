@@ -1157,9 +1157,13 @@ static bool countryOverrideApplySelection(uint8_t country, uint8_t map) {
   return saved;
 }
 
-static bool countryOverrideSetLabEnabledWithBarrier(bool enabled) {
+static bool countryOverrideSetLabEnabledWithBarrier(bool enabled, bool persist) {
   if (!canTxBarrierMutex) return false;
   if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (persist && !featureCfgPersistLab(enabled)) {
+    xSemaphoreGive(canTxBarrierMutex);
+    return false;
+  }
   const bool changed = labMenuEnabled != enabled;
   labMenuEnabled = enabled;
   bool heartbeatChanged = false;
@@ -4452,19 +4456,127 @@ static void r79TransportTick() {
   else r79FixedTick();
 }
 
+// Each legacy settings group is committed as one versioned NVS value. The
+// older scalar keys remain available for first-load compatibility.
+static bool featureConfigNvsReadOk = true;
+static bool featureCfgReadOk = true;
+static bool summonCfgReadOk = true;
+static bool r79CfgReadOk = true;
+static bool ulcCfgReadOk = true;
+static bool autoLaneChangeCfgReadOk = true;
+
+struct FeatureCfgSnapshot {
+  bool lab, banned, door, restore, apDrive;
+  uint8_t regen;
+  bool rightScroll;
+  uint16_t rightInterval;
+  uint8_t rightPattern;
+  bool tsl9Periodic;
+  uint16_t tsl9Interval;
+};
+static FeatureCfgSnapshot featureCfgRuntimeSnapshot() {
+  FeatureCfgSnapshot out = {labMenuEnabled, bannedCar, doorOpenCancelEnabled,
+      tlsscRestoreEnabled, apDriveProfileEnabled, apDriveProfileRegenRaw,
+      false, 0u, 0u, false, 0u};
+  portENTER_CRITICAL(&nagRightScrollMux);
+  out.rightScroll = nagTorqueRightScrollEnabled;
+  out.rightInterval = nagTorqueRightScrollIntervalSeconds;
+  out.rightPattern = nagTorqueRightScrollPattern;
+  out.tsl9Periodic = nagTsl9RightPeriodicEnabled;
+  out.tsl9Interval = nagTsl9RightPeriodicIntervalSeconds;
+  portEXIT_CRITICAL(&nagRightScrollMux);
+  return out;
+}
+static void featureCfgRuntimeRestore(const FeatureCfgSnapshot &value) {
+  labMenuEnabled = value.lab; bannedCar = value.banned;
+  doorOpenCancelEnabled = value.door; tlsscRestoreEnabled = value.restore;
+  portENTER_CRITICAL(&stateMux);
+  apDriveProfileEnabled = value.apDrive; apDriveProfileRegenRaw = value.regen;
+  portEXIT_CRITICAL(&stateMux);
+  portENTER_CRITICAL(&nagRightScrollMux);
+  nagTorqueRightScrollEnabled = value.rightScroll;
+  nagTorqueRightScrollIntervalSeconds = value.rightInterval;
+  nagTorqueRightScrollPattern = value.rightPattern;
+  nagTsl9RightPeriodicEnabled = value.tsl9Periodic;
+  nagTsl9RightPeriodicIntervalSeconds = apRightScrollIntervalSanitizePure(value.tsl9Interval);
+  portEXIT_CRITICAL(&nagRightScrollMux);
+}
+struct SummonCfgSnapshot {
+  bool tlssc, highway, noa, blinker;
+  uint32_t delayMs;
+  uint8_t stabilize, pause;
+};
+static bool summonCfgPersistCandidate(const SummonCfgSnapshot &value);
+static SummonCfgSnapshot summonCfgRuntimeSnapshot() {
+  portENTER_CRITICAL(&stateMux);
+  SummonCfgSnapshot value = {tlsscEnabled, tlsscHighwayGateEnabled,
+      tlsscBlockInNoa, false, 0u, 0u, 0u};
+  portEXIT_CRITICAL(&stateMux);
+  portENTER_CRITICAL(&blinkAMux);
+  value.blinker = blinkAEnabled; value.delayMs = blinkADelayMs;
+  value.stabilize = blinkANoaStabilizationSeconds;
+  value.pause = blinkACancelPauseSeconds;
+  portEXIT_CRITICAL(&blinkAMux);
+  return value;
+}
+static void summonCfgRuntimeRestore(const SummonCfgSnapshot &value) {
+  portENTER_CRITICAL(&stateMux);
+  tlsscEnabled = value.tlssc; tlsscHighwayGateEnabled = value.highway;
+  tlsscBlockInNoa = value.noa;
+  portEXIT_CRITICAL(&stateMux);
+  portENTER_CRITICAL(&blinkAMux);
+  blinkAEnabled = value.blinker; blinkADelayMs = value.delayMs;
+  blinkANoaStabilizationSeconds = value.stabilize;
+  blinkACancelPauseSeconds = value.pause;
+  portEXIT_CRITICAL(&blinkAMux);
+}
+
+static NagScrollStoredSnapshot nagScrollRuntimeSnapshot() {
+  portENTER_CRITICAL(&nagRightScrollMux);
+  const NagScrollStoredSnapshot value = {nagTorqueRightScrollEnabled,
+      nagTorqueRightScrollIntervalSeconds, nagTorqueRightScrollPattern,
+      nagTsl9RightPeriodicEnabled, nagTsl9RightPeriodicIntervalSeconds};
+  portEXIT_CRITICAL(&nagRightScrollMux);
+  return value;
+}
+static void nagScrollRuntimeRestore(const NagScrollStoredSnapshot &value) {
+  portENTER_CRITICAL(&nagRightScrollMux);
+  nagTorqueRightScrollEnabled = value.torqueEnabled;
+  nagTorqueRightScrollIntervalSeconds = apRightScrollIntervalSanitizePure(value.torqueInterval);
+  nagTorqueRightScrollPattern = nagRightScrollPatternSanitize(value.torquePattern);
+  nagTsl9RightPeriodicEnabled = value.tsl9Enabled;
+  nagTsl9RightPeriodicIntervalSeconds = apRightScrollIntervalSanitizePure(value.tsl9Interval);
+  portEXIT_CRITICAL(&nagRightScrollMux);
+}
+
+static uint16_t featureNvsU16(const uint8_t *bytes) {
+  return (uint16_t)(bytes[0] | ((uint16_t)bytes[1] << 8u));
+}
+static uint32_t featureNvsU32(const uint8_t *bytes) {
+  return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8u) |
+      ((uint32_t)bytes[2] << 16u) | ((uint32_t)bytes[3] << 24u);
+}
+
 static bool setTlsscEnabled(bool enabled, bool persist) {
+  if (persist) {
+    SummonCfgSnapshot next = summonCfgRuntimeSnapshot(); next.tlssc = enabled;
+    if (!summonCfgPersistCandidate(next)) return false;
+  }
   portENTER_CRITICAL(&stateMux);
   const bool wasEnabled = tlsscEnabled;
   tlsscEnabled = enabled;
   if (!enabled && wasEnabled && tlsscInjectedActive) tlsscClearPending = true;
   if (enabled) tlsscClearPending = false;
   portEXIT_CRITICAL(&stateMux);
-  if (persist) summonCfgSave();
   return true;
 }
 
 static bool setAutoBlinkerEnabled(bool enabled, bool persist) {
   if (enabled && !activeProfileAdvancedEapSupported()) return false;
+  if (persist) {
+    SummonCfgSnapshot next = summonCfgRuntimeSnapshot(); next.blinker = enabled;
+    if (!summonCfgPersistCandidate(next)) return false;
+  }
   portENTER_CRITICAL(&blinkAMux);
   blinkAEnabled = enabled;
   if (!enabled) {
@@ -4484,14 +4596,16 @@ static bool setAutoBlinkerEnabled(bool enabled, bool persist) {
   }
   portEXIT_CRITICAL(&blinkAMux);
   if (enabled) evaluateAutoBlinker();
-  if (persist) summonCfgSave();
   return true;
 }
 
 static void toggleTlsscEnabledFromButton() {
   bool enabled;
   portENTER_CRITICAL(&stateMux); enabled = tlsscEnabled; portEXIT_CRITICAL(&stateMux);
-  setTlsscEnabled(!enabled, true);
+  if (!setTlsscEnabled(!enabled, true)) {
+    s3xyLogPush(S3XY_LOG_INFO, "TLSSC toggle failed: settings save failed");
+    return;
+  }
   s3xyLogPush(S3XY_LOG_INFO, enabled ? "TLSSC -> OFF" : "TLSSC -> ON");
 }
 
@@ -4634,17 +4748,19 @@ static uint16_t nvsSchemaVersion = 0;
 static uint16_t nvsSchemaBootVersion = 0;
 
 static void nvsSchemaRead() {
-  Preferences p;
+  CheckedPreferences p;
   uint16_t version = 0;
-  if (p.begin("t2meta", true)) {
-    version = p.getUShort("schema", 0);
-    p.end();
+  featureConfigNvsReadOk = p.begin("t2meta", true);
+  if (featureConfigNvsReadOk) {
+    version = p.getUShort("schema", 0u);
+    featureConfigNvsReadOk = p.ok(); p.end();
   }
   nvsSchemaVersion = version;
   nvsSchemaBootVersion = version;
 }
 
 static void nvsSchemaFinalize() {
+  if (!featureConfigNvsReadOk) return;
   if (nvsSchemaBootVersion >= 1) return;
 
   bool ok = true;
@@ -4762,8 +4878,12 @@ static bool isaSuppressionControlApply(bool enabled) {
 }
 
 static void featureCfgLoad() {
-    const bool featuresOpened = prefs.begin("features", false);
-    labMenuEnabled = featuresOpened && prefs.getBool("lab", false);
+    CheckedPreferences prefs;
+    const bool featuresOpened = prefs.begin("features", true);
+    uint8_t bytes[14] = {}; bool found = false;
+    if (!featuresOpened || !nvsCheckedReadBlob("features", "cfg3282", bytes, sizeof(bytes), found) ||
+        (found && bytes[0] != 1u)) { featureCfgReadOk = false; return; }
+    const bool storedLab = found ? bytes[1] != 0u : prefs.getBool("lab", false);
     const bool hasDriverMonitoringControl =
         featuresOpened && prefs.isKey("dmsDisable");
     const bool persistedDriverMonitoringControl =
@@ -4775,27 +4895,30 @@ static void featureCfgLoad() {
     const bool persistedIsaSuppressionControl =
         featuresOpened && prefs.getBool("isaSuppress", false);
     const uint8_t persistedBlinkerTx = prefs.getUChar("blinkTx", 0xFFu);
+    const bool storedBanned = found ? bytes[2] != 0u : prefs.getBool("banned", false);
+    const bool storedDoor = found ? bytes[3] != 0u : prefs.getBool("doorCancel", false);
+    const bool storedRestore = found ? bytes[4] != 0u : prefs.getBool("tlRestore", false);
+    const bool persistedApDriveProfile = found ? bytes[5] != 0u : prefs.getBool("apDrive", false);
+    const uint8_t persistedApRegen = found ? bytes[6] : prefs.getUChar("apRegen", AP_DRIVE_REGEN_REDUCED_RAW);
+    const bool persistedRightScroll = found ? bytes[7] != 0u : prefs.getBool("rsEnabled", false);
+    const uint16_t persistedRightScrollInterval = found ? featureNvsU16(bytes + 8u) : prefs.getUShort(
+        "rsInterval", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
+    const uint8_t persistedRightScrollPattern = found ? bytes[10] : prefs.getUChar(
+        "rsPattern", NAG_RIGHT_SCROLL_PATTERN_DEFAULT);
+    const bool persistedTsl9Periodic = found ? bytes[11] != 0u : prefs.getBool("tsl9RsEn", false);
+    const uint16_t persistedTsl9Interval = found ? featureNvsU16(bytes + 12u) : prefs.getUShort(
+        "tsl9RsInt", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
+    featureCfgReadOk = prefs.ok();
+    prefs.end();
+    if (!featureCfgReadOk) return;
+    labMenuEnabled = storedLab; bannedCar = storedBanned;
+    doorOpenCancelEnabled = storedDoor; tlsscRestoreEnabled = storedRestore;
     portENTER_CRITICAL(&blinkAMux);
     blinkerTxMode = blinkerTxStoredModePure(
         persistedBlinkerTx, activeProfileIsYl());
     portEXIT_CRITICAL(&blinkAMux);
-    bannedCar = prefs.getBool("banned", false);
-    doorOpenCancelEnabled = prefs.getBool("doorCancel", false);
-    tlsscRestoreEnabled = prefs.getBool("tlRestore", false);
-    const bool persistedApDriveProfile = prefs.getBool("apDrive", false);
-    const uint8_t persistedApRegen = prefs.getUChar("apRegen", AP_DRIVE_REGEN_REDUCED_RAW);
-    const bool persistedRightScroll = prefs.getBool("rsEnabled", false);
-    const uint16_t persistedRightScrollInterval = prefs.getUShort(
-        "rsInterval", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
-    const uint8_t persistedRightScrollPattern = prefs.getUChar(
-        "rsPattern", NAG_RIGHT_SCROLL_PATTERN_DEFAULT);
-    const bool persistedTsl9Periodic = prefs.getBool("tsl9RsEn", false);
-    const uint16_t persistedTsl9Interval = prefs.getUShort(
-        "tsl9RsInt", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
     apDriveProfileEnabled = activeProfileApDriveProfileSupported() && persistedApDriveProfile;
     apDriveProfileRegenRaw = apDriveRegenRawSelectablePure(persistedApRegen) ? persistedApRegen : AP_DRIVE_REGEN_REDUCED_RAW;
-    if (!activeProfileApDriveProfileSupported() && persistedApDriveProfile) prefs.putBool("apDrive", false);
-    if (!apDriveRegenRawSelectablePure(persistedApRegen)) prefs.putUChar("apRegen", AP_DRIVE_REGEN_REDUCED_RAW);
     portENTER_CRITICAL(&nagRightScrollMux);
     nagTorqueRightScrollEnabled = persistedRightScroll;
     nagTorqueRightScrollIntervalSeconds =
@@ -4806,61 +4929,39 @@ static void featureCfgLoad() {
     nagTsl9RightPeriodicIntervalSeconds =
         apRightScrollIntervalSanitizePure(persistedTsl9Interval);
     portEXIT_CRITICAL(&nagRightScrollMux);
-    if (!apRightScrollIntervalValidPure(persistedRightScrollInterval))
-      prefs.putUShort("rsInterval", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
-    if (persistedRightScrollPattern != nagTorqueRightScrollPattern)
-      prefs.putUChar("rsPattern", nagTorqueRightScrollPattern);
-    if (!apRightScrollIntervalValidPure(persistedTsl9Interval))
-      prefs.putUShort("tsl9RsInt", AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE);
     if (!activeProfileBodyControlsSupported() && !activeProfileIsYl() && doorOpenCancelEnabled) {
       // Door-open cancel consumes Body CAN on Standard 3/Y. A topology change
       // to Party+Chassis must not retain an enabled-but-unreachable feature.
       doorOpenCancelEnabled = false;
-      prefs.putBool("doorCancel", false);
     }
     if (!activeProfileBannedCarSupported()) {
       // Model Y L does not expose Banned Car in v3.2 hotfix. Fail closed if an older
       // profile/settings combination left either flag persisted. Avoid writing
       // unchanged false values on every YL boot.
-      const bool persistedBanned = bannedCar;
-      const bool persistedRestore = tlsscRestoreEnabled;
       bannedCar = false;
       tlsscRestoreEnabled = false;
-      if (persistedBanned) prefs.putBool("banned", false);
-      if (persistedRestore) prefs.putBool("tlRestore", false);
     } else if (!bannedCar && tlsscRestoreEnabled) {
       // Persisted-state invariant: Restore may never remain ON while Banned Car is OFF.
       tlsscRestoreEnabled = false;
-      prefs.putBool("tlRestore", false);
     }
     if (!activeProfileTlsscRestoreSupported() && tlsscRestoreEnabled) {
       tlsscRestoreEnabled = false;
-      prefs.putBool("tlRestore", false);
     }
-    if (featuresOpened) prefs.end();
-    if (!featuresOpened) {
-      // A source read failure is not evidence that the previous setting was
-      // OFF. Stay fail-closed without creating the new key so boot can retry.
-      portENTER_CRITICAL(&driverMonitoringControlMux);
-      driverMonitoringDisableEnabled = false;
-      portEXIT_CRITICAL(&driverMonitoringControlMux);
-      portENTER_CRITICAL(&isaSuppressionControlMux);
-      isaSuppressionEnabled = false;
-      portEXIT_CRITICAL(&isaSuppressionControlMux);
-      return;
-    }
+
     if (hasDriverMonitoringControl) {
       portENTER_CRITICAL(&driverMonitoringControlMux);
       driverMonitoringDisableEnabled = persistedDriverMonitoringControl;
       portEXIT_CRITICAL(&driverMonitoringControlMux);
     } else {
       bool migrated = legacyFeatureDriverMonitoringControl;
-      Preferences oldNag;
-      // Read-write begin distinguishes an absent legacy namespace (which may
-      // be created empty) from an unavailable NVS backend.
-      if (oldNag.begin("nag", false)) {
+      CheckedPreferences oldNag;
+      // Missing legacy data uses the established default; read errors do not
+      // publish or persist a default over the previous setting.
+      if (oldNag.begin("nag", true)) {
         migrated = oldNag.getBool("dms43", migrated);
+        const bool readOk = oldNag.ok();
         oldNag.end();
+        if (!readOk) { featureCfgReadOk = false; return; }
         // Publish only after the standalone key is durable. A failed migration
         // remains safely OFF and retries on the next boot.
         (void)driverMonitoringControlApply(migrated);
@@ -4871,10 +4972,12 @@ static void featureCfgLoad() {
       isaSuppressionEnabled = persistedIsaSuppressionControl;
       portEXIT_CRITICAL(&isaSuppressionControlMux);
     } else {
-      Preferences oldNag;
-      if (!oldNag.begin("nag", false)) return;
+      CheckedPreferences oldNag;
+      if (!oldNag.begin("nag", true)) return;
       const bool migrated = oldNag.getBool("tsl9isa", false);
+      const bool readOk = oldNag.ok();
       oldNag.end();
+      if (!readOk) { featureCfgReadOk = false; return; }
       // Publish only after the standalone key is durable. Failed migration
       // remains safely OFF and retries on the next boot.
       (void)isaSuppressionControlApply(migrated);
@@ -4890,76 +4993,77 @@ static bool blinkerTxModePersist(uint8_t requested) {
     return ok;
 }
 
-static void featureCfgSave() {
-    prefs.begin("features", false);
-    prefs.putBool("lab", labMenuEnabled);
-    prefs.putBool("banned", activeProfileBannedCarSupported() ? bannedCar : false);
-    prefs.putBool("doorCancel", (activeProfileBodyControlsSupported() || activeProfileIsYl()) ? doorOpenCancelEnabled : false);
-    prefs.putBool("tlRestore", (activeProfileBannedCarSupported() && bannedCar && activeProfileTlsscRestoreSupported()) ? tlsscRestoreEnabled : false);
-    prefs.putBool("apDrive", activeProfileApDriveProfileSupported() ? apDriveProfileEnabled : false);
-    prefs.putUChar("apRegen", apDriveRegenRawSelectablePure(apDriveProfileRegenRaw) ? apDriveProfileRegenRaw : AP_DRIVE_REGEN_REDUCED_RAW);
-    bool torqueEnabled, tsl9PeriodicEnabled;
-    uint16_t torqueInterval, tsl9Interval;
-    uint8_t torquePattern;
-    portENTER_CRITICAL(&nagRightScrollMux);
-    torqueEnabled = nagTorqueRightScrollEnabled;
-    torqueInterval = nagTorqueRightScrollIntervalSeconds;
-    torquePattern = nagTorqueRightScrollPattern;
-    tsl9PeriodicEnabled = nagTsl9RightPeriodicEnabled;
-    tsl9Interval = nagTsl9RightPeriodicIntervalSeconds;
-    portEXIT_CRITICAL(&nagRightScrollMux);
-    prefs.putBool("rsEnabled", torqueEnabled);
-    prefs.putUShort("rsInterval", apRightScrollIntervalSanitizePure(torqueInterval));
-    prefs.putUChar("rsPattern", nagRightScrollPatternSanitize(torquePattern));
-    prefs.putBool("tsl9RsEn", tsl9PeriodicEnabled);
-    prefs.putUShort("tsl9RsInt", apRightScrollIntervalSanitizePure(tsl9Interval));
-    prefs.end();
+static bool featureCfgPersistCandidate(const FeatureCfgSnapshot &v) {
+  if (!featureConfigNvsReadOk || !featureCfgReadOk) return false;
+  const uint16_t interval = apRightScrollIntervalSanitizePure(v.rightInterval);
+  const uint16_t tsl9Interval = apRightScrollIntervalSanitizePure(v.tsl9Interval);
+  const uint8_t bytes[14] = {1u, (uint8_t)v.lab,
+      (uint8_t)(activeProfileBannedCarSupported() && v.banned),
+      (uint8_t)((activeProfileBodyControlsSupported() || activeProfileIsYl()) && v.door),
+      (uint8_t)(activeProfileBannedCarSupported() && v.banned &&
+                activeProfileTlsscRestoreSupported() && v.restore),
+      (uint8_t)(activeProfileApDriveProfileSupported() && v.apDrive),
+      apDriveRegenRawSelectablePure(v.regen) ? v.regen : AP_DRIVE_REGEN_REDUCED_RAW,
+      (uint8_t)v.rightScroll, (uint8_t)interval, (uint8_t)(interval >> 8u),
+      nagRightScrollPatternSanitize(v.rightPattern), (uint8_t)v.tsl9Periodic,
+      (uint8_t)tsl9Interval, (uint8_t)(tsl9Interval >> 8u)};
+  return nvsCheckedWriteBlob("features", "cfg3282", bytes, sizeof(bytes));
+}
+
+static bool featureCfgPersistLab(bool enabled) {
+  FeatureCfgSnapshot candidate = featureCfgRuntimeSnapshot();
+  candidate.lab = enabled;
+  return featureCfgPersistCandidate(candidate);
+}
+
+static bool featureCfgSave() {
+  return featureCfgPersistCandidate(featureCfgRuntimeSnapshot());
 }
 
 static void summonCfgLoad() {
-    prefs.begin("summon", false);
-    tlsscEnabled  = prefs.getBool("tlssc", false);
-    tlsscHighwayGateEnabled = prefs.getBool("tlHwy", false);
-    tlsscBlockInNoa = prefs.getBool("tlNoa", false);
-    blinkAEnabled = prefs.getBool("blkA", false);
-    tlsscInjectedActive = false;
-    tlsscClearPending = false;
-
-    // Pre-schema builds used blkDly17 as a one-time migration marker. Preserve
-    // that behavior exactly once when upgrading directly from those versions.
-    if (nvsSchemaVersion < 1) {
-      const bool delayMigratedRev17 = prefs.getBool("blkDly17", false);
-      if (!delayMigratedRev17) {
-        blinkADelayMs = BLINKA_AUTO_DELAY_DEFAULT_MS;
-        prefs.putUInt("blkADly", blinkADelayMs);
-      } else {
-        blinkADelayMs = prefs.getUInt("blkADly", BLINKA_AUTO_DELAY_DEFAULT_MS);
-      }
-    } else {
-      blinkADelayMs = prefs.getUInt("blkADly", BLINKA_AUTO_DELAY_DEFAULT_MS);
-    }
-    blinkADelayMs = constrain((uint32_t)blinkADelayMs, (uint32_t)0, (uint32_t)30000);
-    blinkANoaStabilizationSeconds =
-        autoBlinkerNoaStabilizationSecondsSanitizePure(
-            prefs.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE));
-    blinkACancelPauseSeconds = autoBlinkerCancelPauseSecondsSanitizePure(
-        prefs.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE));
-    prefs.end();
+    CheckedPreferences prefs;
+    uint8_t bytes[11] = {}; bool found = false;
+    if (!prefs.begin("summon", true) ||
+        !nvsCheckedReadBlob("summon", "cfg3282", bytes, sizeof(bytes), found) ||
+        (found && bytes[0] != 1u)) { summonCfgReadOk = false; return; }
+    const bool enabled = found ? bytes[1] != 0u : prefs.getBool("tlssc", false);
+    const bool highway = found ? bytes[2] != 0u : prefs.getBool("tlHwy", false);
+    const bool noa = found ? bytes[3] != 0u : prefs.getBool("tlNoa", false);
+    const bool blinker = found ? bytes[4] != 0u : prefs.getBool("blkA", false);
+    uint32_t delayMs = found ? featureNvsU32(bytes + 5u) :
+        prefs.getUInt("blkADly", BLINKA_AUTO_DELAY_DEFAULT_MS);
+    if (!found && nvsSchemaVersion < 1u && !prefs.getBool("blkDly17", false))
+      delayMs = BLINKA_AUTO_DELAY_DEFAULT_MS;
+    const uint8_t stabilize = found ? bytes[9] :
+        prefs.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE);
+    const uint8_t pause = found ? bytes[10] :
+        prefs.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE);
+    summonCfgReadOk = prefs.ok(); prefs.end();
+    if (!summonCfgReadOk) return;
+    tlsscEnabled = enabled; tlsscHighwayGateEnabled = highway;
+    tlsscBlockInNoa = noa; blinkAEnabled = blinker;
+    tlsscInjectedActive = false; tlsscClearPending = false;
+    blinkADelayMs = constrain(delayMs, (uint32_t)0, (uint32_t)30000);
+    blinkANoaStabilizationSeconds = autoBlinkerNoaStabilizationSecondsSanitizePure(stabilize);
+    blinkACancelPauseSeconds = autoBlinkerCancelPauseSecondsSanitizePure(pause);
 }
 
-static void summonCfgSave() {
-    prefs.begin("summon", false);
-    prefs.putBool("tlssc", tlsscEnabled);
-    prefs.putBool("tlHwy", tlsscHighwayGateEnabled);
-    prefs.putBool("tlNoa", tlsscBlockInNoa);
-    prefs.putBool("blkA", blinkAEnabled);
-    prefs.putUInt("blkADly", blinkADelayMs);
-    prefs.putUChar("noaStabS", autoBlinkerNoaStabilizationSecondsSanitizePure(
-        blinkANoaStabilizationSeconds));
-    prefs.putUChar("cancelPauseS", autoBlinkerCancelPauseSecondsSanitizePure(
-        blinkACancelPauseSeconds));
-    prefs.end();
+static bool summonCfgPersistCandidate(const SummonCfgSnapshot &value) {
+  if (!featureConfigNvsReadOk || !summonCfgReadOk) return false;
+  const uint8_t bytes[11] = {1u, (uint8_t)value.tlssc,
+      (uint8_t)value.highway, (uint8_t)value.noa,
+      (uint8_t)value.blinker, (uint8_t)value.delayMs,
+      (uint8_t)(value.delayMs >> 8u), (uint8_t)(value.delayMs >> 16u),
+      (uint8_t)(value.delayMs >> 24u),
+      autoBlinkerNoaStabilizationSecondsSanitizePure(value.stabilize),
+      autoBlinkerCancelPauseSecondsSanitizePure(value.pause)};
+  return nvsCheckedWriteBlob("summon", "cfg3282", bytes, sizeof(bytes));
 }
+static bool summonCfgSave() {
+  return summonCfgPersistCandidate(summonCfgRuntimeSnapshot());
+}
+
+
 
 static bool featureConfigWriteSchema3Values(
     const FeatureConfigV37Pure &config) {
@@ -4979,12 +5083,12 @@ static bool featureConfigWriteSchema3Values(
 
 static bool featureConfigSchema3ReadBackMatches(
     const FeatureConfigV37Pure &expected) {
-  Preferences p;
+  CheckedPreferences p;
   if (!p.begin("r79", true)) return false;
   const bool r79Ok = p.getUChar("bit18", 0xFFu) ==
       r79Bit18PolicySanitizePure(expected.r79Bit18Mode);
-  p.end();
-  if (!r79Ok || !p.begin("summon", true)) return false;
+  const bool r79ReadOk = p.ok(); p.end();
+  if (!r79ReadOk || !r79Ok || !p.begin("summon", true)) return false;
   const bool summonOk =
       p.getUChar("noaStabS", 0u) ==
           autoBlinkerNoaStabilizationSecondsSanitizePure(
@@ -4992,8 +5096,8 @@ static bool featureConfigSchema3ReadBackMatches(
       p.getUChar("cancelPauseS", 0u) ==
           autoBlinkerCancelPauseSecondsSanitizePure(
               expected.cancelPauseSeconds);
-  p.end();
-  return summonOk;
+  const bool summonReadOk = p.ok(); p.end();
+  return summonReadOk && summonOk;
 }
 
 static void featureConfigCleanupRetiredR79Keys() {
@@ -5018,6 +5122,7 @@ static void featureConfigCleanupRetiredR79Keys() {
 }
 
 static bool featureConfigMigrateToSchema3() {
+  if (!featureConfigNvsReadOk) return false;
   if (nvsSchemaVersion >= NVS_SCHEMA_CURRENT) {
     // A reset immediately after the durable marker may have interrupted only
     // cleanup. It is safe and intentional to retry cleanup on every such boot.
@@ -5025,21 +5130,24 @@ static bool featureConfigMigrateToSchema3() {
     return true;
   }
 
+  CheckedPreferences source;
   Preferences p;
   uint8_t legacyR79Bit18 = R79_BIT18_DEFAULT_PURE;
-  if (!p.begin("r79lab", false)) return false;
-  legacyR79Bit18 = p.getUChar("smart18", R79_BIT18_DEFAULT_PURE);
-  p.end();
+  if (!source.begin("r79lab", true)) { featureConfigNvsReadOk = false; return false; }
+  legacyR79Bit18 = source.getUChar("smart18", R79_BIT18_DEFAULT_PURE);
+  const bool r79labReadOk = source.ok(); source.end();
+  if (!r79labReadOk) { featureConfigNvsReadOk = false; return false; }
 
   FeatureConfigV37Pure config =
       featureConfigV37FromLegacyPure(legacyR79Bit18);
-  if (!p.begin("summon", false)) return false;
+  if (!source.begin("summon", true)) { featureConfigNvsReadOk = false; return false; }
   config.noaStabilizationSeconds =
       autoBlinkerNoaStabilizationSecondsSanitizePure(
-          p.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE));
+          source.getUChar("noaStabS", BLINKA_NOA_STABILIZE_DEFAULT_S_PURE));
   config.cancelPauseSeconds = autoBlinkerCancelPauseSecondsSanitizePure(
-      p.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE));
-  p.end();
+      source.getUChar("cancelPauseS", BLINKA_CANCEL_PAUSE_DEFAULT_S_PURE));
+  const bool summonReadOk = source.ok(); source.end();
+  if (!summonReadOk) { featureConfigNvsReadOk = false; return false; }
   if (!featureConfigWriteSchema3Values(config) ||
       !featureConfigSchema3ReadBackMatches(config)) {
     T2CAN_SERIAL_PRINTLN("NVS schema 3 value verification failed; will retry");
@@ -5081,7 +5189,7 @@ static bool featureConfigWriteSchema2Values(
 
 static bool featureConfigSchema2ReadBackMatches(
     const FeatureConfigMigrationPure &expected) {
-  Preferences p;
+  CheckedPreferences p;
   if (!p.begin("ulc", true)) return false;
   const bool ulcOk =
       p.getBool("alcOff", false) == expected.ulc.alcOffHighwayEnabled &&
@@ -5089,33 +5197,36 @@ static bool featureConfigSchema2ReadBackMatches(
       p.getUChar("ulcOff", 0) == expected.ulc.ulcOffHighwayMode &&
       p.getBool("confirm", false) == expected.ulc.confirmFreeEnabled &&
       p.getUChar("timing", 0) == expected.ulc.confirmFreeTiming;
-  p.end();
-  if (!ulcOk || !p.begin("alc293lab", true)) return false;
+  const bool ulcReadOk = p.ok(); p.end();
+  if (!ulcReadOk || !ulcOk || !p.begin("alc293lab", true)) return false;
   const bool alcOk =
       p.getBool("enabled", false) == expected.autoLaneChange.enabled &&
       p.getUChar("bus", 0) == expected.autoLaneChange.bus;
-  p.end();
-  return alcOk;
+  const bool alcReadOk = p.ok(); p.end();
+  return alcReadOk && alcOk;
 }
 
 static bool featureConfigMigrateToSchema2() {
+  if (!featureConfigNvsReadOk) return false;
   if (nvsSchemaVersion >= NVS_SCHEMA_ULC) return true;
 
   LegacyLab3f8ConfigPure legacy = {};
+  CheckedPreferences source;
   Preferences p;
-  // Opening read-write also creates the legacy namespace on a fresh install,
-  // allowing an all-default migration instead of treating absence as failure.
-  if (!p.begin("lab3f8", false)) return false;
-  legacy.alcMode = p.getUChar("alc", LAB3F8_ALC_STOCK);
-  legacy.blindMode = p.getUChar("ulcbs", LAB3F8_STOCK);
-  legacy.ulcOffHighwayMode = p.getUChar("ulcoff", LAB3F8_STOCK);
-  legacy.confirmFreeEnabled = p.getBool("ulcNoConf", false);
-  legacy.confirmFreeTiming = p.getUChar(
+  // Checked read-only access distinguishes an absent legacy namespace from
+  // an unavailable backend before any migration writes are attempted.
+  if (!source.begin("lab3f8", true)) { featureConfigNvsReadOk = false; return false; }
+  legacy.alcMode = source.getUChar("alc", LAB3F8_ALC_STOCK);
+  legacy.blindMode = source.getUChar("ulcbs", LAB3F8_STOCK);
+  legacy.ulcOffHighwayMode = source.getUChar("ulcoff", LAB3F8_STOCK);
+  legacy.confirmFreeEnabled = source.getBool("ulcNoConf", false);
+  legacy.confirmFreeTiming = source.getUChar(
       "ulcTiming", ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE);
-  legacy.autoLaneChange293Enabled = p.getBool("autoLc293", false);
-  legacy.autoLaneChange293Bus = p.getUChar(
+  legacy.autoLaneChange293Enabled = source.getBool("autoLc293", false);
+  legacy.autoLaneChange293Bus = source.getUChar(
       "autoLcBus", UI_AUTO_LC_BUS_BOTH_PURE);
-  p.end();
+  const bool lab3f8ReadOk = source.ok(); source.end();
+  if (!lab3f8ReadOk) { featureConfigNvsReadOk = false; return false; }
 
   const FeatureConfigMigrationPure migrated = migrateLegacyLab3f8Pure(legacy);
   if (!featureConfigWriteSchema2Values(migrated) ||
@@ -5164,43 +5275,47 @@ static FeatureConfigMigrationPure featureConfigRuntimeSnapshot() {
   return config;
 }
 
+static bool ulcCfgPersistCandidate(const FeatureConfigMigrationPure &config) {
+  if (!featureConfigNvsReadOk || !ulcCfgReadOk) return false;
+  const uint8_t bytes[6] = {1u, (uint8_t)config.ulc.alcOffHighwayEnabled,
+      config.ulc.blindSpotMode, config.ulc.ulcOffHighwayMode,
+      (uint8_t)config.ulc.confirmFreeEnabled, config.ulc.confirmFreeTiming};
+  return nvsCheckedWriteBlob("ulc", "cfg3282", bytes, sizeof(bytes));
+}
+
 static bool ulcCfgSave() {
-  const FeatureConfigMigrationPure config = featureConfigRuntimeSnapshot();
-  Preferences p;
-  if (!p.begin("ulc", false)) return false;
-  const bool ok =
-      p.putBool("alcOff", config.ulc.alcOffHighwayEnabled) > 0 &&
-      p.putUChar("blind", config.ulc.blindSpotMode) > 0 &&
-      p.putUChar("ulcOff", config.ulc.ulcOffHighwayMode) > 0 &&
-      p.putBool("confirm", config.ulc.confirmFreeEnabled) > 0 &&
-      p.putUChar("timing", config.ulc.confirmFreeTiming) > 0;
-  p.end();
-  return ok;
+  return ulcCfgPersistCandidate(featureConfigRuntimeSnapshot());
+}
+
+static bool autoLaneChangeLabCfgPersistCandidate(const FeatureConfigMigrationPure &config) {
+  if (!featureConfigNvsReadOk || !autoLaneChangeCfgReadOk) return false;
+  const uint8_t bytes[3] = {1u, (uint8_t)config.autoLaneChange.enabled,
+      config.autoLaneChange.bus};
+  return nvsCheckedWriteBlob("alc293lab", "cfg3282", bytes, sizeof(bytes));
 }
 
 static bool autoLaneChangeLabCfgSave() {
-  const FeatureConfigMigrationPure config = featureConfigRuntimeSnapshot();
-  Preferences p;
-  if (!p.begin("alc293lab", false)) return false;
-  const bool ok = p.putBool("enabled", config.autoLaneChange.enabled) > 0 &&
-                  p.putUChar("bus", config.autoLaneChange.bus) > 0;
-  p.end();
-  return ok;
+  return autoLaneChangeLabCfgPersistCandidate(featureConfigRuntimeSnapshot());
 }
 
 static bool ulcCfgLoadAndMigrate() {
   const bool migrated = featureConfigMigrateToSchema2();
-  Preferences p;
+  CheckedPreferences p;
+  uint8_t bytes[6] = {}; bool found = false;
+  if (!migrated || !nvsCheckedReadBlob("ulc", "cfg3282", bytes, sizeof(bytes), found) ||
+      (found && bytes[0] != 1u)) { ulcCfgReadOk = false; return false; }
   bool alcOff = false, confirm = false;
   uint8_t blind = LAB3F8_STOCK, ulcOff = LAB3F8_STOCK;
   uint8_t timing = ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE;
-  if (migrated && p.begin("ulc", true)) {
-    alcOff = p.getBool("alcOff", false);
-    blind = p.getUChar("blind", LAB3F8_STOCK);
-    ulcOff = p.getUChar("ulcOff", LAB3F8_STOCK);
-    confirm = p.getBool("confirm", false);
-    timing = p.getUChar("timing", ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE);
-    p.end();
+  if (!p.begin("ulc", true)) { ulcCfgReadOk = false; return false; }
+  {
+    alcOff = found ? bytes[1] != 0u : p.getBool("alcOff", false);
+    blind = found ? bytes[2] : p.getUChar("blind", LAB3F8_STOCK);
+    ulcOff = found ? bytes[3] : p.getUChar("ulcOff", LAB3F8_STOCK);
+    confirm = found ? bytes[4] != 0u : p.getBool("confirm", false);
+    timing = found ? bytes[5] : p.getUChar("timing", ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE);
+    ulcCfgReadOk = p.ok(); p.end();
+    if (!ulcCfgReadOk) return false;
   }
   if (blind != LAB3F8_STOCK && blind > 2) blind = LAB3F8_STOCK;
   if (ulcOff != LAB3F8_STOCK && ulcOff > 1) ulcOff = LAB3F8_STOCK;
@@ -5218,13 +5333,18 @@ static bool ulcCfgLoadAndMigrate() {
 
 static bool autoLaneChangeLabCfgLoadAndMigrate() {
   const bool migrated = featureConfigMigrateToSchema2();
-  Preferences p;
+  CheckedPreferences p;
+  uint8_t bytes[3] = {}; bool found = false;
+  if (!migrated || !nvsCheckedReadBlob("alc293lab", "cfg3282", bytes, sizeof(bytes), found) ||
+      (found && bytes[0] != 1u)) { autoLaneChangeCfgReadOk = false; return false; }
   bool enabled = false;
   uint8_t bus = UI_AUTO_LC_BUS_BOTH_PURE;
-  if (migrated && p.begin("alc293lab", true)) {
-    enabled = p.getBool("enabled", false);
-    bus = p.getUChar("bus", UI_AUTO_LC_BUS_BOTH_PURE);
-    p.end();
+  if (!p.begin("alc293lab", true)) { autoLaneChangeCfgReadOk = false; return false; }
+  {
+    enabled = found ? bytes[1] != 0u : p.getBool("enabled", false);
+    bus = found ? bytes[2] : p.getUChar("bus", UI_AUTO_LC_BUS_BOTH_PURE);
+    autoLaneChangeCfgReadOk = p.ok(); p.end();
+    if (!autoLaneChangeCfgReadOk) return false;
   }
   if (!uiAutoLaneChangeBusTargetValidPure(bus))
     bus = UI_AUTO_LC_BUS_BOTH_PURE;
@@ -5260,20 +5380,25 @@ static void countryOverrideCfgLoad() {
 }
 
 static void r79CfgLoad() {
-  prefs.begin("r79", false);
+  CheckedPreferences prefs;
+  uint8_t bytes[10] = {}; bool found = false;
+  if (!prefs.begin("r79", true) ||
+      !nvsCheckedReadBlob("r79", "cfg3282", bytes, sizeof(bytes), found) ||
+      (found && bytes[0] != 1u)) { r79CfgReadOk = false; return; }
   const uint32_t apPacked = prefs.getUInt("apctl", 2u << 8);
   const bool storedHw3 = prefs.getBool("hw3", false);
-  const uint8_t stored = prefs.getUChar("bit18", R79_BIT18_DEFAULT_PURE);
-  const uint8_t storedMode = prefs.getUChar("mode", R79_MODE_DEFAULT_PURE);
-  const uint8_t storedMode1Wait = prefs.getUChar(
+  const uint8_t stored = found ? bytes[1] : prefs.getUChar("bit18", R79_BIT18_DEFAULT_PURE);
+  const uint8_t storedMode = found ? bytes[2] : prefs.getUChar("mode", R79_MODE_DEFAULT_PURE);
+  const uint8_t storedMode1Wait = found ? bytes[3] : prefs.getUChar(
       "m1wait", R79_MODE1_WAIT_DEFAULT_PURE);
-  const bool storedMode1Reinject = prefs.getBool("m1re", true);
-  const uint16_t storedMode1Delay = prefs.getUShort(
+  const bool storedMode1Reinject = found ? bytes[4] != 0u : prefs.getBool("m1re", true);
+  const uint16_t storedMode1Delay = found ? featureNvsU16(bytes + 5u) : prefs.getUShort(
       "m1delay", R79_FIXED_QUIET_DELAY_MS_PURE);
-  const bool storedMode2Reinject = prefs.getBool("m2re", false);
-  const uint16_t storedMode2Delay = prefs.getUShort(
+  const bool storedMode2Reinject = found ? bytes[7] != 0u : prefs.getBool("m2re", false);
+  const uint16_t storedMode2Delay = found ? featureNvsU16(bytes + 8u) : prefs.getUShort(
       "m2delay", R79_MODE2_DELAY_DEFAULT_MS_PURE);
-  prefs.end();
+  r79CfgReadOk = prefs.ok(); prefs.end();
+  if (!r79CfgReadOk) return;
   R79ApGateConfigPure apConfig = {
       (apPacked & 1u) != 0u, (uint8_t)((apPacked >> 1) & 1u),
       (uint8_t)((apPacked >> 8) & 0xFFu), (apPacked & 4u) != 0u};
@@ -5373,29 +5498,45 @@ static bool r79Hw3Apply(bool enabled) {
   return true;
 }
 
-static void r79CfgSave() {
-  uint8_t bit18Policy, mode, mode1Wait;
-  bool mode1Reinject, mode2Reinject;
-  uint16_t mode1Delay, mode2Delay;
+struct R79CfgSnapshot {
+  uint8_t bit18, mode, wait;
+  bool reinject1;
+  uint16_t delay1;
+  bool reinject2;
+  uint16_t delay2;
+};
+static R79CfgSnapshot r79CfgRuntimeSnapshot() {
   portENTER_CRITICAL(&r79LabMux);
-  bit18Policy = r79Bit18Policy;
-  mode = r79TransportMode;
-  mode1Wait = r79Mode1TxWaitMode;
-  mode1Reinject = r79Mode1ReinjectEnabled;
-  mode1Delay = r79Mode1DelayMs;
-  mode2Reinject = r79Mode2ReinjectEnabled;
-  mode2Delay = r79Mode2DelayMs;
+  const R79CfgSnapshot value = {r79Bit18Policy, r79TransportMode,
+      r79Mode1TxWaitMode, r79Mode1ReinjectEnabled, r79Mode1DelayMs,
+      r79Mode2ReinjectEnabled, r79Mode2DelayMs};
   portEXIT_CRITICAL(&r79LabMux);
-  prefs.begin("r79", false);
-  prefs.putUChar("bit18", r79Bit18PolicySanitizePure(bit18Policy));
-  prefs.putUChar("mode", r79ModeSanitizePure(mode));
-  prefs.putUChar("m1wait", r79Mode1WaitModeSanitizePure(mode1Wait));
-  prefs.putBool("m1re", mode1Reinject);
-  prefs.putUShort("m1delay", r79FixedQuietDelaySanitizePure(mode1Delay));
-  prefs.putBool("m2re", mode2Reinject);
-  prefs.putUShort("m2delay", r79Mode2DelaySanitizePure(mode2Delay));
-  prefs.end();
+  return value;
 }
+static void r79CfgRuntimeRestore(const R79CfgSnapshot &value) {
+  portENTER_CRITICAL(&r79LabMux);
+  r79Bit18Policy = value.bit18; r79TransportMode = value.mode;
+  r79Mode1TxWaitMode = value.wait; r79Mode1ReinjectEnabled = value.reinject1;
+  r79Mode1DelayMs = value.delay1; r79Mode2ReinjectEnabled = value.reinject2;
+  r79Mode2DelayMs = value.delay2;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+
+static bool r79CfgPersistCandidate(const R79CfgSnapshot &value) {
+  if (!featureConfigNvsReadOk || !r79CfgReadOk) return false;
+  const uint16_t d1 = r79FixedQuietDelaySanitizePure(value.delay1);
+  const uint16_t d2 = r79Mode2DelaySanitizePure(value.delay2);
+  const uint8_t bytes[10] = {1u, r79Bit18PolicySanitizePure(value.bit18),
+      r79ModeSanitizePure(value.mode),
+      r79Mode1WaitModeSanitizePure(value.wait),
+      (uint8_t)value.reinject1, (uint8_t)d1, (uint8_t)(d1 >> 8u),
+      (uint8_t)value.reinject2, (uint8_t)d2, (uint8_t)(d2 >> 8u)};
+  return nvsCheckedWriteBlob("r79", "cfg3282", bytes, sizeof(bytes));
+}
+static bool r79CfgSave() {
+  return r79CfgPersistCandidate(r79CfgRuntimeSnapshot());
+}
+
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -5408,3 +5549,7 @@ static volatile bool     otaError      = false;
 static volatile uint32_t otaBytes      = 0;
 static volatile uint32_t otaTotal      = 0;
 static char              otaErrMsg[64] = "";
+static const char       *otaStage = "idle";
+static uint8_t           otaUpdateError = 0;
+static uint32_t          otaAttempt = 0;
+static bool              otaUploadEnded = false;
