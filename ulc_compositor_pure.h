@@ -1,7 +1,50 @@
 #pragma once
-
+#include "tesla_can_fields_pure.h"
 #include <stdint.h>
+#include <stddef.h>
 
+// ulc policy pure
+static constexpr uint8_t UI_ULC_POLICY_STOCK_PURE = 0xFFu;
+
+static inline uint8_t uiUlcOffHighwayReadRawPure(const uint8_t *data, uint8_t dlc) {
+  if (!data || dlc < 2) return UI_ULC_POLICY_STOCK_PURE;
+  return (uint8_t)((data[1] >> 7) & 0x01u);  // bit 15
+}
+
+static inline bool ulcPolicyApGateOpenPure(bool selectionActive,
+                                            bool dasStateValid, uint8_t dasState4) {
+  if (!selectionActive || !dasStateValid) return false;
+  return teslaApStateActivePure(dasState4);
+}
+
+// ulc stalk confirm pure
+// Production UI_ulcStalkConfirm policy. The feature uses the fixed stock-follow
+// CAN B / Chassis 0x3F8 path. Timing remains selectable without a LAB gate.
+static constexpr uint8_t ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE = 0u;
+static constexpr uint8_t ULC_NO_CONFIRM_TIMING_PRE_AP_PURE = 1u;
+
+static inline bool ulcNoConfirmTimingValidPure(uint8_t timingMode) {
+  return timingMode == ULC_NO_CONFIRM_TIMING_AP_ACTIVE_ONLY_PURE ||
+         timingMode == ULC_NO_CONFIRM_TIMING_PRE_AP_PURE;
+}
+
+static inline bool ulcNoConfirmSupportedPure(bool profileAvailable) {
+  return profileAvailable;
+}
+
+static inline bool ulcNoConfirmGateOpenWithTimingPure(bool profileAvailable,
+                                                       bool featureEnabled,
+                                                       uint8_t timingMode,
+                                                       bool dasStateValid,
+                                                       uint8_t dasState4) {
+  if (!profileAvailable || !featureEnabled ||
+      !ulcNoConfirmTimingValidPure(timingMode)) return false;
+  if (timingMode == ULC_NO_CONFIRM_TIMING_PRE_AP_PURE) return true;
+  if (!dasStateValid) return false;
+  return teslaApStateActivePure(dasState4);
+}
+
+// ulc compositor pure
 static constexpr uint8_t ULC_COMPOSITE_STOCK_PURE = 0xFFu;
 static constexpr uint32_t LAB3F8_FRESH_MS_PURE = 3000u;
 static inline bool lab3f8FrameValidPure(uint32_t id, uint8_t dlc, bool extended, bool remote) {

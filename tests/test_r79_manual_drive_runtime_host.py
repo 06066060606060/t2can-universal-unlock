@@ -17,9 +17,9 @@ code=r'''
 #include <initializer_list>
 #include "summon_state_pure.h"
 #include "runtime_gate_pure.h"
-#include "r79_ap_gate_pure.h"
 #include "r79_fixed_policy_pure.h"
-#include "r79_mode2_pure.h"
+#include "r79_fixed_policy_pure.h"
+#include "r79_fixed_policy_pure.h"
 int stateMux=0,r79LabMux=0,canTxBarrierMutex=1;
 constexpr int portMAX_DELAY=1000,pdTRUE=1;
 bool held=false,busy=false;

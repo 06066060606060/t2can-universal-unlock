@@ -16,9 +16,9 @@ code=r'''
 #include <vector>
 #include <string>
 #include <map>
-#include "r79_ap_gate_pure.h"
 #include "r79_fixed_policy_pure.h"
-#include "r79_mode2_pure.h"
+#include "r79_fixed_policy_pure.h"
+#include "r79_fixed_policy_pure.h"
 std::map<std::string,uint32_t> nvs;
 std::map<std::string,std::vector<uint8_t>> blobs;
 bool nvsOpen=true,nvsWrite=true,nvsRead=true;int writes=0;bool held=false;

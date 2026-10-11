@@ -7,7 +7,7 @@ PREFIX=r"""
 #include <cstring>
 #include <initializer_list>
 #include <string>
-#include "continuous_ap_types.h"
+#include "continuous_ap_fsm_pure.h"
 using portMUX_TYPE=int;
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(x) ((void)(x))
@@ -29,7 +29,7 @@ namespace MCP2515{enum ERROR{ERROR_OK,ERROR_FAIL};}
 struct can_frame{uint32_t can_id=0;uint8_t can_dlc=0,data[8]={};};
 struct twai_message_t{uint32_t identifier=0;uint8_t data_length_code=0,data[8]={};uint32_t flags=0;};
 int sent=0;uint16_t sentId=0;uint8_t sentData[8]={};void (*beforeValidate)()=nullptr;void (*afterTransport)()=nullptr;
-struct NagState{bool active=false,cleanupPending=false;};struct NagScheduler{NagState state;NagState snapshot(uint32_t){return state;}} tsl9InputScheduler;
+struct NagState{bool active=false,cleanupPending=false;uint8_t mode=0;};struct NagScheduler{NagState state;NagState snapshot(uint32_t){return state;}} tsl9InputScheduler;
 int tsl9InputMux=0;
 #include "runtime_gate_pure.h"
 constexpr uint8_t CAN_TX_TRACE_SOURCE_DEFAULT=0;
@@ -55,7 +55,7 @@ void feed(uint32_t t,uint8_t ap,uint8_t turn){
 """
 def production_function(name):
  import re
- source=(ROOT/'can_core.h').read_text()
+ source=(ROOT/'can_core.h').read_text().replace('#include "mode_h_runtime.h"', (ROOT / "mode_h_runtime.h").read_text())
  match=re.search(r'^static\s+[^;{}]*?\b'+name+r'\([^;{}]*?\)\s*\{',source,re.M)
  assert match,name
  end=source.index('{',match.start())+1;depth=1

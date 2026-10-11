@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "../r79_dms_nag_lab_pure.h"
+#include "fixtures/retired/r79_dms_nag_lab_pure.h"
 
 int main() {
   static_assert(R79_DMS_ENABLE_CABIN_CAMERA_BIT_PURE == 43u, "bit43 contract");

@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='can-usb-e2e-') as tmp:
 #include "can_usb_logger_pure.h"
 #include <cstdio>
 int main() {
-  std::puts("@HELLO,1,v3.28.3");
+  std::puts("@HELLO,1,v3.29.1");
   std::puts("@START,1,PASSIVE");
   std::puts("@CTRL,1,1,0,0,0,1");
   CanUsbQueue<4> queue; queue.start();

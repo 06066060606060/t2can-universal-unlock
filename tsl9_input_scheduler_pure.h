@@ -1,7 +1,24 @@
 #pragma once
-
 #include <stdint.h>
 
+// ap right scroll pure
+static constexpr uint16_t AP_RIGHT_SCROLL_MIN_INTERVAL_S_PURE = 1;
+
+static constexpr uint16_t AP_RIGHT_SCROLL_MAX_INTERVAL_S_PURE = 600;
+
+static constexpr uint16_t AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE = 30;
+
+static inline bool apRightScrollIntervalValidPure(uint16_t seconds) {
+  return seconds >= AP_RIGHT_SCROLL_MIN_INTERVAL_S_PURE &&
+         seconds <= AP_RIGHT_SCROLL_MAX_INTERVAL_S_PURE;
+}
+
+static inline uint16_t apRightScrollIntervalSanitizePure(uint16_t seconds) {
+  return apRightScrollIntervalValidPure(seconds)
+      ? seconds : AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE;
+}
+
+// tsl9 input scheduler pure
 enum Tsl9InputModePure : uint8_t {
   TSL9_INPUT_MODE_LEFT_VOLUME_PURE = 0,
   TSL9_INPUT_MODE_RIGHT_SPEED_PURE = 1,

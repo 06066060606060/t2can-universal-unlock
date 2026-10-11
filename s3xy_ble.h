@@ -1,4 +1,5 @@
 #pragma once
+#include "text_format_arduino.h"
 
 // S3XY BUTTON BLE / REGISTRY / AUTO-RECONNECT
 // Kept in the same translation unit to preserve proven runtime behavior.
@@ -242,6 +243,29 @@ static volatile uint32_t s3xyAutoBlinkerActionPending = 0;
 static volatile uint32_t s3xyLeftBlinkerActionPending = 0;
 static volatile uint32_t s3xyRightBlinkerActionPending = 0;
 
+enum S3xyPendingClearScope : uint8_t {
+  S3XY_PENDING_CAN_RECOVERY,
+  S3XY_PENDING_ALL
+};
+
+// Caller must hold s3xyMux; scope preserves each established reset boundary.
+static void s3xyClearPendingActionsLocked(S3xyPendingClearScope scope) {
+  s3xyActionPending = 0;
+  s3xyAccelActionPending = 0;
+  s3xyPerformanceActionPending = 0;
+  s3xyResearchCaptureAPending = 0;
+  s3xyResearchCaptureBPending = 0;
+  s3xyResearchCaptureCPending = 0;
+  s3xyResearchCaptureDPending = 0;
+  s3xyResearchCaptureResetPending = 0;
+  s3xyTlsscActionPending = 0;
+  s3xyAutoBlinkerActionPending = 0;
+  if (scope == S3XY_PENDING_ALL) {
+    s3xyLeftBlinkerActionPending = 0;
+    s3xyRightBlinkerActionPending = 0;
+  }
+}
+
 static volatile bool s3xyAutoEnabled = true;
 static volatile bool s3xyBluetoothEnabled = false;
 static S3xyCommandRequest s3xyCommand = {};
@@ -405,14 +429,7 @@ static void s3xyLogPush(uint8_t type, const char *detail,
 #endif
 
 static void s3xyBytesToHex(const uint8_t *data, size_t len, char *out, size_t outLen) {
-  if (!out || outLen == 0) return;
-  out[0] = '\0';
-  size_t used = 0;
-  for (size_t i = 0; data && i < len; i++) {
-    int n = snprintf(out + used, outLen - used, "%s%02X", i ? " " : "", data[i]);
-    if (n <= 0 || (size_t)n >= outLen - used) break;
-    used += (size_t)n;
-  }
+  formatHexBytesPure(data, len, out, outLen);
 }
 
 static uint8_t s3xyHexNibble(char c) {
@@ -521,12 +538,7 @@ static void s3xyAutoTimingReady(uint8_t slot) {
 #endif
 
 static String s3xyJsonEscape(const char *src) {
-  String s = src ? String(src) : String("");
-  s.replace("\\", "\\\\");
-  s.replace("\"", "\\\"");
-  s.replace("\n", "\\n");
-  s.replace("\r", "");
-  return s;
+  return escapedTextArduino(src, src ? strlen(src) : 0, JsonTextPolicy::Ble);
 }
 
 static bool s3xyAddressEquals(const char *a, const char *b) {
@@ -750,6 +762,81 @@ static void s3xyRegistrySaveSlot(uint8_t slot) {
   portEXIT_CRITICAL(&s3xyMux);
   if (peerIdLen && !verified)
     s3xyLogPush(S3XY_LOG_ERROR, "3D49 NVS read-back verification FAILED", peerId, peerIdLen, -127, (int8_t)slot);
+}
+
+// Callers retain HTTP validation, including name normalization and profile
+// admission. SaveSlot remains best-effort: these edits do not claim durable
+// persistence. The action result reports only whether the gesture is known.
+static void s3xyRegistryRename(uint8_t slot, const String &name) {
+  portENTER_CRITICAL(&s3xyMux);
+  strncpy(s3xyDevices[slot].name, name.c_str(), sizeof(s3xyDevices[slot].name) - 1);
+  s3xyDevices[slot].name[sizeof(s3xyDevices[slot].name) - 1] = '\0';
+  portEXIT_CRITICAL(&s3xyMux);
+  s3xyRegistrySaveSlot((uint8_t)slot);
+}
+
+static bool s3xyRegistrySetAction(uint8_t slot, const String &gesture, uint8_t action) {
+  bool validGesture = true;
+  portENTER_CRITICAL(&s3xyMux);
+  if (gesture == "single") s3xyDevices[slot].singleAction = action;
+  else if (gesture == "double") s3xyDevices[slot].doubleAction = action;
+  else if (gesture == "long") s3xyDevices[slot].longAction = action;
+  else validGesture = false;
+  portEXIT_CRITICAL(&s3xyMux);
+  if (!validGesture) return false;
+  s3xyRegistrySaveSlot(slot);
+  return true;
+}
+
+static void s3xyRegistrySetAutoConnect(uint8_t slot, bool enabled) {
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&s3xyMux);
+  s3xyDevices[slot].autoConnect = enabled;
+  if (enabled) {
+    s3xyDevices[slot].manualPaused = false;
+    const bool schedule = s3xyBluetoothEnabled && s3xyAutoEnabled && !s3xyDevices[slot].connected;
+    s3xyDevices[slot].nextAttemptMs = schedule ? (now + 250U) : 0;
+  } else {
+    s3xyDevices[slot].nextAttemptMs = 0;
+  }
+  portEXIT_CRITICAL(&s3xyMux);
+  s3xyRegistrySaveSlot((uint8_t)slot);
+  s3xyLogPush(S3XY_LOG_INFO, enabled ? "device auto-connect enabled" : "device auto-connect disabled", nullptr, 0, -127, (int8_t)slot);
+}
+
+// Called by the schema finalizer only after legacy BLE config/identity load.
+// Preserve retry semantics: namespace-open failures prevent schema commit;
+// individual remove results retain the existing best-effort policy.
+static bool s3xyFinalizeLegacyKeys() {
+  bool ok = true;
+  Preferences p;
+  // s3xy/addr is a legacy single-device target. s3xyAutoLoadConfig() runs
+  // before this finalizer and migrates it into the registry when needed.
+  if (p.begin("s3xy", false)) {
+    if (s3xyRegisteredCount() > 0) p.remove("addr");
+    p.end();
+  } else {
+    ok = false;
+  }
+
+  // Raw bN is the canonical persisted 3D49 identity. Remove the legacy iN
+  // string only after the raw bytes can be read back from NVS successfully.
+  if (p.begin("s3xyreg", false)) {
+    for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
+      String sb = "b" + String(i);
+      String si = "i" + String(i);
+      const size_t rawLen = p.getBytesLength(sb.c_str());
+      if (rawLen == 0 || rawLen > S3XY_PEER_ID_MAX) continue;
+      uint8_t raw[S3XY_PEER_ID_MAX] = {};
+      const size_t got = p.getBytes(sb.c_str(), raw, sizeof(raw));
+      if (got == rawLen) p.remove(si.c_str());
+    }
+    p.end();
+  } else {
+    ok = false;
+  }
+
+  return ok;
 }
 
 static void s3xyRegistryClearSlotRuntime(uint8_t slot, bool keepClient = true) {
@@ -1029,18 +1116,7 @@ static void s3xyRequestRuntimeStop() {
   s3xyScanTargetFound = false;
   s3xyScanTargetAddress[0] = '\0';
   s3xyDiscoveryScanning = false;
-  s3xyActionPending = 0;
-  s3xyAccelActionPending = 0;
-  s3xyPerformanceActionPending = 0;
-  s3xyResearchCaptureAPending = 0;
-  s3xyResearchCaptureBPending = 0;
-  s3xyResearchCaptureCPending = 0;
-  s3xyResearchCaptureDPending = 0;
-  s3xyResearchCaptureResetPending = 0;
-  s3xyTlsscActionPending = 0;
-  s3xyAutoBlinkerActionPending = 0;
-  s3xyLeftBlinkerActionPending = 0;
-  s3xyRightBlinkerActionPending = 0;
+  s3xyClearPendingActionsLocked(S3XY_PENDING_ALL);
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
     if (!s3xyDevices[i].used) continue;
     s3xyDevices[i].nextAttemptMs = 0;
@@ -1139,21 +1215,7 @@ static void s3xyRunMappedAction(uint8_t slot, uint8_t action, const char *gestur
 // firmware/library combinations can deliver the same token inside a longer
 // notification buffer.  Do not require len==2: look for the validated token
 // anywhere in the 3D50 payload, while still accepting only known tokens.
-static int s3xyFindToken2(const uint8_t *data, size_t len, uint8_t a, uint8_t b) {
-  if (!data || len < 2) return -1;
-  for (size_t i = 0; i + 1 < len; i++) {
-    if (data[i] == a && data[i + 1] == b) return (int)i;
-  }
-  return -1;
-}
-
-static int s3xyFindToken3(const uint8_t *data, size_t len, uint8_t a, uint8_t b, uint8_t c1, uint8_t c2) {
-  if (!data || len < 3) return -1;
-  for (size_t i = 0; i + 2 < len; i++) {
-    if (data[i] == a && data[i + 1] == b && (data[i + 2] == c1 || data[i + 2] == c2)) return (int)i;
-  }
-  return -1;
-}
+#include "s3xy_notify_pure.h"
 
 static void s3xyNotifyCallbackForSlot(uint8_t slot, BLERemoteCharacteristic *chr,
                                       uint8_t *data, size_t len, bool isNotify) {
@@ -1170,10 +1232,11 @@ static void s3xyNotifyCallbackForSlot(uint8_t slot, BLERemoteCharacteristic *chr
     return;
   }
 
-  const bool single = s3xyFindToken2(data, len, 0xC1, 0x01) >= 0;
-  const bool dbl    = s3xyFindToken2(data, len, 0xC1, 0x02) >= 0;
-  const bool lng    = s3xyFindToken2(data, len, 0xC3, 0x01) >= 0;
-  const bool ack    = s3xyFindToken3(data, len, 0xC7, 0x00, 0x01, 0xC3) >= 0;
+  const S3xyNotifyTokensPure tokens = s3xyParseNotifyTokensPure(data, len);
+  const bool single = tokens.single;
+  const bool dbl = tokens.dbl;
+  const bool lng = tokens.lng;
+  const bool ack = tokens.ack;
   const uint8_t n = (uint8_t)min(len, (size_t)S3XY_LOG_DATA_MAX);
   uint8_t action = S3XY_ACTION_NONE;
   const char *gesture = nullptr;
@@ -2427,7 +2490,7 @@ static void s3xyResetAllBluetoothData() {
   s3xyScanTargetFound = false;
   s3xyScanSlot = -1;
   s3xyScanTargetAddress[0] = '\0';
-  s3xyActionPending = 0; s3xyAccelActionPending = 0; s3xyPerformanceActionPending = 0; s3xyResearchCaptureAPending = 0; s3xyResearchCaptureBPending = 0; s3xyResearchCaptureCPending = 0; s3xyResearchCaptureDPending = 0; s3xyResearchCaptureResetPending = 0; s3xyTlsscActionPending = 0; s3xyAutoBlinkerActionPending = 0; s3xyLeftBlinkerActionPending = 0; s3xyRightBlinkerActionPending = 0;
+  s3xyClearPendingActionsLocked(S3XY_PENDING_ALL);
   s3xyIdentityProbeAttempts = 0;
   s3xyIdentityProbeMatches = 0;
   s3xyIdentityProbeMismatches = 0;
@@ -3349,11 +3412,7 @@ static void s3xyClearLog() {
 #if S3XY_DIAGNOSTICS_ENABLED
   portENTER_CRITICAL(&s3xyMux);
   s3xyLogHead = 0; s3xyLogCount = 0; s3xyLogDropped = 0;
-  s3xyActionPending = 0; s3xyAccelActionPending = 0;
-  s3xyPerformanceActionPending = 0;
-  s3xyResearchCaptureAPending = 0; s3xyResearchCaptureBPending = 0;
-  s3xyResearchCaptureCPending = 0; s3xyResearchCaptureDPending = 0;
-  s3xyResearchCaptureResetPending = 0; s3xyTlsscActionPending = 0; s3xyAutoBlinkerActionPending = 0; s3xyLeftBlinkerActionPending = 0; s3xyRightBlinkerActionPending = 0;
+  s3xyClearPendingActionsLocked(S3XY_PENDING_ALL);
   for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
     if (!s3xyDevices[i].used) continue;
     s3xyDevices[i].notifyCount = 0;

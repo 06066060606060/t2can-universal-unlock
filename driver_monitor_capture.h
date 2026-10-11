@@ -1,4 +1,5 @@
 #pragma once
+#include "text_format_arduino.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -403,16 +404,7 @@ static bool driverMonitorCaptureCopyRecord(uint16_t index, DriverMonitorRecord *
 }
 
 static String driverMonitorRawHex(const uint8_t *data, uint8_t dlc) {
-  String out;
-  const uint8_t n = dlc > 8 ? 8 : dlc;
-  out.reserve(n ? n * 3 : 1);
-  for (uint8_t i = 0; i < n; i++) {
-    if (i) out += ' ';
-    char b[4];
-    snprintf(b, sizeof(b), "%02X", data[i]);
-    out += b;
-  }
-  return out;
+  return canFrameHexArduino(data, dlc);
 }
 
 static String driverMonitorCaptureStatsToJson() {

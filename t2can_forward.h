@@ -135,7 +135,7 @@ static void nagExactEchoReset();
 static void nagHumanRuntimeReset(bool reseed);
 static uint8_t nagHumanVariantSnapshot();
 static void nagHumanRuntimeSetVariant(uint8_t variant);
-static NagHumanV1StepResultPure nagHumanRuntimeStep(uint32_t nowMs, uint16_t sourceRaw,
+static ModeHBaseStepResultPure nagHumanRuntimeStep(uint32_t nowMs, uint16_t sourceRaw,
                                                     bool runAllowed, bool speedValid,
                                                     bool speedFresh, uint16_t speedRaw);
 static void nagHumanRuntimeApTransition(bool apActive, bool wasApActive);
@@ -153,7 +153,6 @@ static inline void setBit(uint8_t *data, int bit, bool val);
 static const char* r79RuntimeStateName(uint8_t state);
 static const char* r79GearName(uint8_t raw);
 static void r79LabObserve3fdMux1(const uint8_t *data, uint8_t dlc);
-static bool r79LabApplySelectedBits(uint8_t *data);
 static void r79LabRecordTxResult(bool ok, const twai_message_t &out, uint8_t txKind);
 static inline uint8_t readVehicleGear(const uint8_t *data);
 static inline int gearState(uint8_t gear);
@@ -267,7 +266,6 @@ static bool ulcCfgSave();
 static bool autoLaneChangeLabCfgLoadAndMigrate();
 static bool autoLaneChangeLabCfgSave();
 static void countryOverrideCfgLoad();
-static bool countryOverrideCfgSave();
 static void r79CfgLoad();
 static bool r79CfgSave();
 static String nagCfgToJson();

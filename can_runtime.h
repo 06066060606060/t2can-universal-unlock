@@ -143,16 +143,7 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   portEXIT_CRITICAL(&ulcSnoozeMux);
 
   portENTER_CRITICAL(&s3xyMux);
-  s3xyActionPending = 0;
-  s3xyAccelActionPending = 0;
-  s3xyPerformanceActionPending = 0;
-  s3xyResearchCaptureAPending = 0;
-  s3xyResearchCaptureBPending = 0;
-  s3xyResearchCaptureCPending = 0;
-  s3xyResearchCaptureDPending = 0;
-  s3xyResearchCaptureResetPending = 0;
-  s3xyTlsscActionPending = 0;
-  s3xyAutoBlinkerActionPending = 0;
+  s3xyClearPendingActionsLocked(S3XY_PENDING_CAN_RECOVERY);
   portEXIT_CRITICAL(&s3xyMux);
 
   portENTER_CRITICAL(&pedalMapMux);
@@ -398,7 +389,7 @@ static void canTaskMcp(void* arg) {
     // ── BOUNDED READ LOOP ──
     // Process each MCP2515 frame before reading the next. The 32-frame yield
     // budget and task priority remain unchanged; saved settings cannot batch RX.
-    static constexpr uint8_t MCP_PREFETCH_CAPACITY = 1;
+    static constexpr uint8_t MCP_PREFETCH_CAPACITY = canARxReadBatchBudgetPure();
     const uint8_t readBatchBudget = canARxReadBatchBudgetPure();
     struct can_frame prefetched[MCP_PREFETCH_CAPACITY];
     uint32_t prefetchedRxMs[MCP_PREFETCH_CAPACITY];

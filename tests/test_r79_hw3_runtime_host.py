@@ -47,9 +47,9 @@ code = r'''
 #include <initializer_list>
 #include "summon_state_pure.h"
 #include "runtime_gate_pure.h"
-#include "r79_ap_gate_pure.h"
 #include "r79_fixed_policy_pure.h"
-#include "r79_mode2_pure.h"
+#include "r79_fixed_policy_pure.h"
+#include "r79_fixed_policy_pure.h"
 using esp_err_t=int;
 constexpr int ESP_OK=0, ESP_ERR_INVALID_ARG=1, ESP_ERR_INVALID_STATE=2, ESP_ERR_TIMEOUT=3;
 constexpr int pdTRUE=1;

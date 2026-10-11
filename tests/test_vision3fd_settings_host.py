@@ -16,7 +16,7 @@ code+=r'''
 #include <string>
 #include <map>
 #include "r79_fixed_policy_pure.h"
-#include "r79_mode2_pure.h"
+#include "r79_fixed_policy_pure.h"
 constexpr int portMAX_DELAY=1000;
 R79FixedQuietStatePure r79FixedQuietState{};R79Mode2DelayedStatePure r79Mode2DelayedState{};
 volatile uint32_t r79Mode1PostMux2Generation=1;

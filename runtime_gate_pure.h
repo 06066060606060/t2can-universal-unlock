@@ -1,12 +1,20 @@
 #pragma once
 #include <stdint.h>
+#include "tesla_can_fields_pure.h"
 
+// can a rx mode pure
+static constexpr uint8_t CAN_A_RX_IMMEDIATE = 1u;
+static constexpr uint8_t canARxReadBatchBudgetPure() {
+  return CAN_A_RX_IMMEDIATE;
+}
+
+// runtime gate pure
 // Host-testable AP state validity helpers. AP/NOA/manual state remains latched
 // until the active topology receives a newer DAS_status frame or the relevant
 // CAN recovery boundary invalidates that authorization.
 static inline bool dasStateApActivePure(bool valid, uint8_t state4) {
   if (!valid) return false;
-  return state4 == 3 || state4 == 4 || state4 == 5 || state4 == 6;
+  return teslaApStateActivePure(state4);
 }
 
 static inline bool dasStateNoaPure(bool valid, uint8_t state4) {

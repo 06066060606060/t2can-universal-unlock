@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #include "das_status_pure.h"
-#include "nag_human_v4_pure.h"
+#include "mode_h_pure.h"
 #include "runtime_gate_pure.h"
 
 static DasStatus399Pure decode(uint8_t apState, uint8_t handsOnByte) {
@@ -19,13 +19,13 @@ int main() {
   assert(actual.apState == 3u);
   assert(actual.handsOnState == 1u);
   assert(dasStateApActivePure(actual.valid, actual.apState));
-  assert(!nagHumanV4VisualWarningActivePure(actual.handsOnState));
+  assert(!modeHVisualWarningActivePure(actual.handsOnState));
 
   const DasStatus399Pure noa = decode(0x05u, 0x0Cu);
   assert(noa.valid && noa.apState == 5u && noa.handsOnState == 3u);
   assert(dasStateApActivePure(noa.valid, noa.apState));
   assert(dasStateNoaPure(noa.valid, noa.apState));
-  assert(nagHumanV4VisualWarningEdgePure(1u, noa.handsOnState));
+  assert(modeHVisualWarningEdgePure(1u, noa.handsOnState));
 
   const DasStatus399Pure fault = decode(0x0Eu, 0x04u);
   assert(fault.valid && fault.apState == 14u && fault.handsOnState == 1u);
@@ -35,8 +35,8 @@ int main() {
   assert(restricted.valid && restricted.apState == 6u &&
          restricted.handsOnState == 5u);
   assert(dasStateApActivePure(restricted.valid, restricted.apState));
-  assert(!nagHumanV4VisualWarningEdgePure(3u, 4u));
-  assert(!nagHumanV4VisualWarningEdgePure(4u, 5u));
+  assert(!modeHVisualWarningEdgePure(3u, 4u));
+  assert(!modeHVisualWarningEdgePure(4u, 5u));
 
   const DasStatus399Pure shortFrame = dasStatus399DecodePure(captured, 5u);
   assert(!shortFrame.valid);

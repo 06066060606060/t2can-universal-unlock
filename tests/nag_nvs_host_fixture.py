@@ -1,9 +1,9 @@
 """Production NAG persistence fixture using IDF NVS fault seams."""
 from pathlib import Path
 import re
-from test_v3282_profile_nvs_host import PREAMBLE
+from test_profile_nvs_host import PREAMBLE
 ROOT=Path(__file__).resolve().parents[1]
-core=(ROOT/'can_core.h').read_text()
+core=(ROOT/'can_core.h').read_text().replace('#include "mode_h_runtime.h"', (ROOT / "mode_h_runtime.h").read_text())
 def extract(src,name):
  m=re.search(r'^static\s+[^;{}]*?\b'+name+r'\([^;{}]*?\)\s*\{',src,re.M);assert m,name
  i=src.index('{',m.start())+1;depth=1
@@ -19,8 +19,8 @@ def make_code():
 #include "das_status_pure.h"
 #include "tsl9_hands_on_0x399_pure.h"
 #include "tsl9_input_scheduler_pure.h"
-#include "nag_human_v4_pure.h"
-#include "nag_mode_h_variant_pure.h"
+#include "mode_h_pure.h"
+#include "mode_h_pure.h"
 #define T2CAN_SERIAL_DIAGNOSTICS 0
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
@@ -29,9 +29,9 @@ bool activeProfileNagTorqueSupported(){return true;}
 bool activeProfileNagTsl9Supported(){return true;}
 void nagRxSelectorsRefreshFromConfig(){}
 uint8_t nagHumanVariant=1;
-NagHumanV4ConfigPure nagHumanV4Config=nagHumanV4DefaultConfigPure();
-NagHumanV4StatePure nagHumanV4State={};
-bool nagHumanV4Initialized=false;
+ModeHConfigPure modeHConfig=modeHDefaultConfigPure();
+ModeHStatePure modeHState={};
+bool modeHInitialized=false;
 static bool nagCfgSave();
 '''
  code+=core[core.index('static const uint16_t NAG_TORQUE_RAW_MAX'):core.index('static portMUX_TYPE nagCfgMux')]

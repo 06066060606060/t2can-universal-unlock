@@ -3,7 +3,7 @@ from pathlib import Path
 import os,re,subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[1]
 logic=(ROOT/'vehicle_logic.h').read_text()
-core=(ROOT/'can_core.h').read_text()
+core=(ROOT/'can_core.h').read_text().replace('#include "mode_h_runtime.h"', (ROOT / "mode_h_runtime.h").read_text())
 def function(source,name):
  match=re.search(r'^static\s+[^;{}]*?\b'+name+r'\([^;{}]*?\)\s*\{',source,re.M);assert match,name
  end=source.index('{',match.start())+1;depth=1
@@ -21,7 +21,7 @@ code=r'''
 #include "ulc_compositor_pure.h"
 #include "vehicle_profile.h"
 #include "das_status_pure.h"
-#include "ulc_policy_pure.h"
+#include "ulc_compositor_pure.h"
 #include "runtime_gate_pure.h"
 using esp_err_t=int;
 [[maybe_unused]] constexpr int ESP_OK=0,ESP_ERR_INVALID_ARG=1,ESP_ERR_TIMEOUT=2,ESP_ERR_INVALID_STATE=3,pdTRUE=1,portMAX_DELAY=1000;

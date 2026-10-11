@@ -291,7 +291,7 @@ async function validate(browser, base, variant) {
     }
     assert.deepEqual(report.pageErrors,[]);
     report.status='passed';
-    process.stdout.write('v3.28.3 copy source/embedded: PASS (48 fixed descriptions, 48 mobile/theme screens, 16 valid saves, 16 invalid edits)\n');
+    process.stdout.write('v3.29.1 copy source/embedded: PASS (48 fixed descriptions, 48 mobile/theme screens, 16 valid saves, 16 invalid edits)\n');
   } catch(error) { report.status='failed'; report.failure=error.stack; process.stderr.write(error.stack+'\n'); process.exitCode=1; }
   finally {
     if(browser) await browser.close();

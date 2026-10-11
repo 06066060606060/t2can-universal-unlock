@@ -994,157 +994,7 @@ static void nagExactEchoReset() {
   portEXIT_CRITICAL(&nagExactEchoMux);
 }
 
-// Mode H uses the established Rev.4 engine; persisted id 1 and h4* tuning remain stable.
-static volatile uint8_t nagHumanVariant = nagModeHDefaultVariantPure();
-static portMUX_TYPE nagHumanMux = portMUX_INITIALIZER_UNLOCKED;
-static NagHumanV4ConfigPure nagHumanV4Config = nagHumanV4DefaultConfigPure();
-static NagHumanV4StatePure nagHumanV4State = {};
-static bool nagHumanV4Initialized = false;
-
-static uint32_t nagHumanRuntimeSeed() {
-  uint32_t seed = (uint32_t)esp_random() ^ (uint32_t)micros() ^ 0x484D4F44u;
-  return nagHumanV1SanitizeSeedPure(seed);
-}
-
-static uint8_t nagHumanVariantSnapshot() {
-  portENTER_CRITICAL(&nagHumanMux);
-  const uint8_t v = nagModeHVariantValidPure(nagHumanVariant) ? nagHumanVariant : nagModeHDefaultVariantPure();
-  portEXIT_CRITICAL(&nagHumanMux);
-  return v;
-}
-
-static void nagHumanRuntimeReset(bool reseed) {
-  const uint32_t seed = reseed ? nagHumanRuntimeSeed() : 0u;
-  portENTER_CRITICAL(&nagHumanMux);
-  if (!nagHumanV4Initialized) {
-    nagHumanV4InitPure(nagHumanV4State, reseed ? seed ^ 0x52345634u : 0x52345634u);
-    nagHumanV4Initialized = true;
-  } else if (reseed) {
-    nagHumanV4ReseedPure(nagHumanV4State, seed ^ 0x52345634u);
-  } else {
-    nagHumanV4ResetRuntimePure(nagHumanV4State, H1_IDLE);
-  }
-  portEXIT_CRITICAL(&nagHumanMux);
-}
-
-static void nagHumanRuntimeSetVariant(uint8_t variant) {
-  const uint8_t normalized = nagModeHVariantValidPure(variant) ? variant : nagModeHDefaultVariantPure();
-  portENTER_CRITICAL(&nagHumanMux);
-  nagHumanVariant = normalized;
-  portEXIT_CRITICAL(&nagHumanMux);
-  nagExactEchoReset();
-  nagHumanRuntimeReset(true);
-  if (normalized == H_VARIANT_REV4) {
-    uint32_t currentVisualWarningEpoch;
-    portENTER_CRITICAL(&nagCtxMux);
-    currentVisualWarningEpoch = nagCtx.visualWarningEpoch;
-    portEXIT_CRITICAL(&nagCtxMux);
-    portENTER_CRITICAL(&nagHumanMux);
-    nagHumanV4State.visualWarningEpochSeen = currentVisualWarningEpoch;
-    nagHumanV4State.visualRescuePending = false;
-    nagHumanV4State.visualRescuePendingSinceMs = 0u;
-    portEXIT_CRITICAL(&nagHumanMux);
-  }
-}
-
-static NagHumanV1StepResultPure nagHumanRuntimeStep(uint32_t nowMs,
-                                                     uint16_t sourceRaw,
-                                                     bool runAllowed,
-                                                     bool speedValid,
-                                                     bool speedFresh,
-                                                     uint16_t speedRaw,
-                                                     uint32_t visualWarningEpoch,
-                                                     uint32_t visualWarningEnterMs,
-                                                     bool visualWarningActive) {
-  NagHumanV1StepResultPure result = {};
-  portENTER_CRITICAL(&nagHumanMux);
-{
-    if (!nagHumanV4Initialized) {
-      nagHumanV4InitPure(nagHumanV4State, nagHumanRuntimeSeed() ^ 0x52345634u);
-      nagHumanV4Initialized = true;
-    }
-    result = nagHumanV4StepPure(nagHumanV4State, nagHumanV4Config, nowMs,
-                                sourceRaw, runAllowed, speedValid, speedFresh, speedRaw,
-                                visualWarningEpoch, visualWarningEnterMs, visualWarningActive);
-  }
-  portEXIT_CRITICAL(&nagHumanMux);
-  return result;
-}
-
-static NagHumanV4StatePure nagHumanV4RuntimeSnapshot() {
-  NagHumanV4StatePure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanV4State;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
-}
-
-static NagHumanV4ConfigPure nagHumanV4RuntimeConfigSnapshot() {
-  NagHumanV4ConfigPure snapshot = {};
-  portENTER_CRITICAL(&nagHumanMux);
-  snapshot = nagHumanV4Config;
-  portEXIT_CRITICAL(&nagHumanMux);
-  return snapshot;
-}
-
-static bool nagHumanV4RuntimeSetLabTuning(
-    uint16_t peakMinRaw, uint16_t peakMaxRaw,
-    uint16_t waitMinMs, uint16_t waitMaxMs,
-    uint16_t refractoryMinMs, uint16_t refractoryMaxMs,
-    uint16_t carrierMinRaw, uint16_t carrierMaxRaw,
-    uint8_t hoPolicy, uint16_t ho1ThresholdRaw, uint16_t ho2ThresholdRaw,
-    bool visualRescueEnabled, uint16_t visualRescueDelayMs) {
-  NagHumanV4ConfigPure next = nagHumanV4RuntimeConfigSnapshot();
-  next.base.peakMinRaw = peakMinRaw;
-  next.base.peakMaxRaw = peakMaxRaw;
-  next.base.waitMinMs = waitMinMs;
-  next.base.waitMaxMs = waitMaxMs;
-  next.base.refractoryMinMs = refractoryMinMs;
-  next.base.refractoryMaxMs = refractoryMaxMs;
-  next.base.hoOverridePct = 0u;
-  next.carrierMinRaw = carrierMinRaw;
-  next.carrierMaxRaw = carrierMaxRaw;
-  next.hoPolicy = hoPolicy;
-  next.ho1ThresholdRaw = ho1ThresholdRaw;
-  next.ho2ThresholdRaw = ho2ThresholdRaw;
-  next.visualRescueEnabled = visualRescueEnabled;
-  next.visualRescueDelayMs = visualRescueDelayMs;
-  if (!nagHumanV4ConfigValidPure(next)) return false;
-  portENTER_CRITICAL(&nagHumanMux);
-  const uint32_t visualWarningEpochSeen = nagHumanV4State.visualWarningEpochSeen;
-  const uint32_t visualRescueCount = nagHumanV4State.visualRescueCount;
-  nagHumanV4Config = next;
-  nagHumanV4State = NagHumanV4StatePure{};
-  nagHumanV4State.visualWarningEpochSeen = visualWarningEpochSeen;
-  nagHumanV4State.visualRescueCount = visualRescueCount;
-  nagHumanV4Initialized = false;
-  portEXIT_CRITICAL(&nagHumanMux);
-  nagExactEchoReset();
-  return true;
-}
-
-static void nagHumanRuntimeLoadDefaults() {
-  portENTER_CRITICAL(&nagHumanMux);
-  nagHumanVariant = nagModeHDefaultVariantPure();
-  nagHumanV4Config = nagHumanV4DefaultConfigPure();
-  nagHumanV4State = NagHumanV4StatePure{};
-  nagHumanV4Initialized = false;
-  portEXIT_CRITICAL(&nagHumanMux);
-}
-
-static void nagHumanRuntimeApTransition(bool apActive, bool wasApActive) {
-  if (apActive == wasApActive) return;
-  uint8_t mode;
-  bool ignoreApState;
-  portENTER_CRITICAL(&nagCfgMux);
-  mode = nagCfg.mode;
-  ignoreApState = nagCfg.ignoreApState;
-  portEXIT_CRITICAL(&nagCfgMux);
-  if (mode == MODE_H && !ignoreApState) {
-    nagExactEchoReset();
-    nagHumanRuntimeReset(true);
-  }
-}
+#include "mode_h_runtime.h"
 
 // ── Nag helpers ──
 
@@ -1365,7 +1215,7 @@ static void nagScrollRuntimeRestore(const NagScrollStoredSnapshot&);
 struct NagStoredSnapshot {
   uint32_t version;
   NagConfig config;
-  NagHumanV4ConfigPure human;
+  ModeHConfigPure human;
   uint8_t variant;
   NagScrollStoredSnapshot scroll;
 };
@@ -1384,7 +1234,7 @@ static void nagCfgLoadSafeDefaults() {
 }
 
 static bool nagCfgPersistSnapshot(const NagConfig& config,
-                          const NagHumanV4ConfigPure& human,
+                          const ModeHConfigPure& human,
                           uint8_t variant, const NagScrollStoredSnapshot& scroll) {
   if (nagNvsReadError) return false;
   NagStoredSnapshot stored = {};
@@ -1400,16 +1250,16 @@ static bool nagCfgPersistSnapshot(const NagConfig& config,
 }
 
 static bool nagCfgPersist(const NagConfig& config,
-                          const NagHumanV4ConfigPure& human, uint8_t variant) {
+                          const ModeHConfigPure& human, uint8_t variant) {
   return nagCfgPersistSnapshot(config, human, variant, nagScrollRuntimeSnapshot());
 }
 
 static bool nagCfgSaveCandidateWithScroll(const NagConfig& config,
                                           const NagScrollStoredSnapshot& scroll) {
-  NagHumanV4ConfigPure human;
+  ModeHConfigPure human;
   uint8_t variant;
   portENTER_CRITICAL(&nagHumanMux);
-  human = nagHumanV4Config;
+  human = modeHConfig;
   variant = nagHumanVariant;
   portEXIT_CRITICAL(&nagHumanMux);
   return nagCfgPersistSnapshot(config, human, variant, scroll);
@@ -1430,7 +1280,7 @@ static void nagCfgLoad() {
   }
   if (found) {
     if (stored.version != 1u || !nagModePersistedIdSupported(stored.config.mode) ||
-        !nagHumanV4ConfigValidPure(stored.human)) {
+        !modeHConfigValidPure(stored.human)) {
       nagNvsReadError = true;
       nagCfgLoadSafeDefaults();
       return;
@@ -1442,9 +1292,9 @@ static void nagCfgLoad() {
     portENTER_CRITICAL(&nagHumanMux);
     nagHumanVariant = nagModeHVariantValidPure(stored.variant)
         ? stored.variant : nagModeHDefaultVariantPure();
-    nagHumanV4Config = stored.human;
-    nagHumanV4State = NagHumanV4StatePure{};
-    nagHumanV4Initialized = false;
+    modeHConfig = stored.human;
+    modeHState = ModeHStatePure{};
+    modeHInitialized = false;
     portEXIT_CRITICAL(&nagHumanMux);
     nagRxSelectorsRefreshFromConfig();
     return;
@@ -1509,13 +1359,13 @@ static void nagCfgLoad() {
   nagCfg.apStateId      = reader.getUShort("apid", 0x399);
   nagCfg.steeringId     = reader.getUShort("stid", 0x129);
 
-  const NagHumanV4ConfigPure rev4Defaults = nagHumanV4DefaultConfigPure();
+  const ModeHConfigPure rev4Defaults = modeHDefaultConfigPure();
   uint8_t humanVariant = reader.getUChar("hv", nagModeHDefaultVariantPure());
   if (!nagModeHVariantValidPure(humanVariant)) humanVariant = nagModeHDefaultVariantPure();
 
   // Rev.4 has owned the h4* namespace since schema v15. Legacy Rev.1 Plus h1*
   // keys are deliberately never reinterpreted as Rev.4 tuning.
-  NagHumanV4ConfigPure rev4Cfg = rev4Defaults;
+  ModeHConfigPure rev4Cfg = rev4Defaults;
   rev4Cfg.base.peakMinRaw = reader.getUShort("h4pmin", rev4Defaults.base.peakMinRaw);
   rev4Cfg.base.peakMaxRaw = reader.getUShort("h4pmax", rev4Defaults.base.peakMaxRaw);
   rev4Cfg.base.waitMinMs = reader.getUShort("h4wmin", rev4Defaults.base.waitMinMs);
@@ -1539,8 +1389,8 @@ static void nagCfgLoad() {
 
   // Schema v17 promotes only the exact v16 Rev.4 defaults. Custom Rev.4
   // tuning survives unchanged while all profiles gain the new HO defaults.
-  const bool migratedRev4V17 = nagCfgVersion < 17u && nagHumanV4MigrateV16DefaultPure(rev4Cfg);
-  const bool migratedRev4V18 = nagCfgVersion < 18u && nagHumanV4MigrateV17DefaultPure(rev4Cfg);
+  const bool migratedRev4V17 = nagCfgVersion < 17u && modeHMigrateV16DefaultPure(rev4Cfg);
+  const bool migratedRev4V18 = nagCfgVersion < 18u && modeHMigrateV17DefaultPure(rev4Cfg);
   if ((migratedRev4V17 || migratedRev4V18) &&
       nagCfg.modeHStopBehavior == H_STOP_STOCK_CARRIER) {
     nagCfg.modeHStopBehavior = nagModeHDefaultStopBehaviorPure();
@@ -1548,12 +1398,12 @@ static void nagCfgLoad() {
 
   nagCfgClampAll(nagCfg);
   const bool profileMethodMigrated = nagCfgApplyActiveProfilePolicy(nagCfg, true);
-  if (!nagHumanV4ConfigValidPure(rev4Cfg)) rev4Cfg = rev4Defaults;
+  if (!modeHConfigValidPure(rev4Cfg)) rev4Cfg = rev4Defaults;
   portENTER_CRITICAL(&nagHumanMux);
   nagHumanVariant = humanVariant;
-  nagHumanV4Config = rev4Cfg;
-  nagHumanV4State = NagHumanV4StatePure{};
-  nagHumanV4Initialized = false;
+  modeHConfig = rev4Cfg;
+  modeHState = ModeHStatePure{};
+  modeHInitialized = false;
   portEXIT_CRITICAL(&nagHumanMux);
 
   // Schema v18 updates only an exact prior Rev.4 default profile. Custom
@@ -1687,11 +1537,11 @@ static void nagObserveHandsOnState(uint8_t ho, uint32_t now) {
     const uint8_t previousHandsOnState = nagCtx.handsOnState;
     nagCtx.prevHandsOnState = previousHandsOnState;
     nagCtx.handsOnState = ho;
-    const bool visualWarningNow = nagHumanV4VisualWarningActivePure(ho);
+    const bool visualWarningNow = modeHVisualWarningActivePure(ho);
     const bool scrollWarningWas =
         tsl9InputWarningStatePure(previousHandsOnState);
     const bool scrollWarningNow = tsl9InputWarningStatePure(ho);
-    if (nagHumanV4VisualWarningEdgePure(previousHandsOnState, ho)) {
+    if (modeHVisualWarningEdgePure(previousHandsOnState, ho)) {
       nagCtx.visualWarningEpoch++;
       if (nagCtx.visualWarningEpoch == 0u) nagCtx.visualWarningEpoch = 1u;
       nagCtx.visualWarningEnterMs = now;
@@ -1800,17 +1650,15 @@ static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo,
 
 // Model Y L uses DAS_status 0x399 on Party CAN A. Legacy Model 3/Y uses the
 // gateway-translated DAS_status 0x39B on Body CAN A.
-static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
-  const bool yl399Route = activeProfileIsYl();
-  const bool legacyBody39BRoute = nagTsl9Body39BSelected();
-  const bool handsOnRoute = activeProfileNagTsl9Supported() &&
-      (yl399Route || legacyBody39BRoute);
-  const bool isaRoute = yl399Route && activeProfileIsaSuppressionSupported();
-  if (!handsOnRoute && !isaRoute) return false;
-  const uint16_t expectedId = legacyBody39BRoute ? 0x39Bu : 0x399u;
-  if ((rxf.can_id & 0xC0000000UL) != 0 ||
-      (rxf.can_id & 0x7FFu) != expectedId || rxf.can_dlc < 8u) return false;
-
+struct NagTsl9TransformConfig {
+  bool enabled;
+  uint8_t method;
+  uint8_t sequence;
+  uint8_t downgradeWindow;
+  bool isaSuppression;
+  uint32_t isaSuppressionGenerationSnapshot;
+};
+static NagTsl9TransformConfig nagTsl9TransformConfigSnapshot() {
   bool enabled;
   uint8_t method;
   uint8_t sequence;
@@ -1827,18 +1675,23 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   isaSuppressionControlSnapshot(
       isaSuppression, isaSuppressionGenerationSnapshot);
 
-  struct can_frame out = rxf;
-  const uint32_t nowMs = (uint32_t)millis();
+  return {enabled, method, sequence, downgradeWindow, isaSuppression,
+          isaSuppressionGenerationSnapshot};
+}
+
+static Tsl9DasTransformResultPure nagTsl9TransformStock(
+    const NagTsl9TransformConfig &config, bool handsOnRoute, bool isaRoute,
+    uint16_t expectedId, uint8_t *data, uint8_t dlc, uint32_t nowMs) {
   Tsl9DasTransformResultPure result;
   // ISA on a separate route must not start/reset the Nag downgrade window.
   Tsl9HandsOnStatePure isaOnlyState = {};
   portENTER_CRITICAL(&nagTsl9Mux);
-  if (handsOnRoute && method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
+  if (handsOnRoute && config.method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
   result = tsl9ApplyDasTransformForCanIdPure(
       handsOnRoute ? nagTsl9State : isaOnlyState,
-      handsOnRoute && enabled && method == NAG_METHOD_TSL9_PURE,
-      sequence, downgradeWindow, isaRoute && isaSuppression, expectedId,
-      out.data, out.can_dlc, nowMs);
+      handsOnRoute && config.enabled && config.method == NAG_METHOD_TSL9_PURE,
+      config.sequence, config.downgradeWindow, isaRoute && config.isaSuppression, expectedId,
+      data, dlc, nowMs);
   if (result.handsOnModified) nagTsl9Modified++;
   if (result.handsOnModified) nagTsl9HandsOnModified++;
   portEXIT_CRITICAL(&nagTsl9Mux);
@@ -1847,6 +1700,25 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
     isaSuppressionModified++;
     portEXIT_CRITICAL(&isaSuppressionControlMux);
   }
+  return result;
+}
+
+static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
+  const bool yl399Route = activeProfileIsYl();
+  const bool legacyBody39BRoute = nagTsl9Body39BSelected();
+  const bool handsOnRoute = activeProfileNagTsl9Supported() &&
+      (yl399Route || legacyBody39BRoute);
+  const bool isaRoute = yl399Route && activeProfileIsaSuppressionSupported();
+  if (!handsOnRoute && !isaRoute) return false;
+  const uint16_t expectedId = legacyBody39BRoute ? 0x39Bu : 0x399u;
+  if ((rxf.can_id & 0xC0000000UL) != 0 ||
+      (rxf.can_id & 0x7FFu) != expectedId || rxf.can_dlc < 8u) return false;
+
+  const auto config = nagTsl9TransformConfigSnapshot();
+  struct can_frame out = rxf;
+  const uint32_t nowMs = (uint32_t)millis();
+  const auto result = nagTsl9TransformStock(config, handsOnRoute, isaRoute,
+      expectedId, out.data, out.can_dlc, nowMs);
   if (!result.modified) return false;
 
   const uint32_t txEpoch = canTxEpochSnapshot();
@@ -1854,7 +1726,7 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   McpTxResultReason txReason = MCP_TX_INVALID_MSG;
   const bool attempted = canTxMcpSendTaggedGuarded(
       &out, txEpoch, CAN_TX_TRACE_SOURCE_DEFAULT,
-      &isaSuppressionGeneration, isaSuppressionGenerationSnapshot,
+      &isaSuppressionGeneration, config.isaSuppressionGenerationSnapshot,
       err, &txReason);
   const bool ok = attempted && err == MCP2515::ERROR_OK;
   if (ok) {
@@ -1879,43 +1751,12 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   if (src.extd || src.rtr || src.identifier != 0x399u ||
       src.data_length_code < 8u) return false;
 
-  bool enabled;
-  uint8_t method;
-  uint8_t sequence;
-  uint8_t downgradeWindow;
-  bool isaSuppression;
-  uint32_t isaSuppressionGenerationSnapshot;
-  portENTER_CRITICAL(&nagCfgMux);
-  enabled = nagCfg.enabled;
-  method = nagMethodSanitizePure(nagCfg.method);
-  sequence = tsl9SequenceSanitizePure(nagCfg.tsl9Sequence);
-  downgradeWindow = tsl9DowngradeWindowSanitizePure(
-      nagCfg.tsl9DowngradeWindow);
-  portEXIT_CRITICAL(&nagCfgMux);
-  isaSuppressionControlSnapshot(
-      isaSuppression, isaSuppressionGenerationSnapshot);
-
+  const auto config = nagTsl9TransformConfigSnapshot();
   twai_message_t out = src;
   out.flags = 0;
   const uint32_t nowMs = (uint32_t)millis();
-  Tsl9DasTransformResultPure result;
-  // ISA on a separate route must not start/reset the Nag downgrade window.
-  Tsl9HandsOnStatePure isaOnlyState = {};
-  portENTER_CRITICAL(&nagTsl9Mux);
-  if (handsOnRoute && method == NAG_METHOD_TSL9_PURE) nagTsl9Rx++;
-  result = tsl9ApplyDasTransformForCanIdPure(
-      handsOnRoute ? nagTsl9State : isaOnlyState,
-      handsOnRoute && enabled && method == NAG_METHOD_TSL9_PURE,
-      sequence, downgradeWindow, isaRoute && isaSuppression, 0x399u,
-      out.data, out.data_length_code, nowMs);
-  if (result.handsOnModified) nagTsl9Modified++;
-  if (result.handsOnModified) nagTsl9HandsOnModified++;
-  portEXIT_CRITICAL(&nagTsl9Mux);
-  if (result.isaModified) {
-    portENTER_CRITICAL(&isaSuppressionControlMux);
-    isaSuppressionModified++;
-    portEXIT_CRITICAL(&isaSuppressionControlMux);
-  }
+  const auto result = nagTsl9TransformStock(config, handsOnRoute, isaRoute,
+      0x399u, out.data, out.data_length_code, nowMs);
   if (!result.modified) return false;
 
   const uint32_t txEpoch = canTxEpochSnapshot();
@@ -1924,7 +1765,7 @@ static bool nagProcessTsl9Twai399(const twai_message_t &src) {
   const esp_err_t err = result.isaModified && !twaiNonSummonAdmissionOpen()
       ? ESP_FAIL : canTxTwaiTransmitWithMaskTaggedGuarded(
           &out, txEpoch, CAN_TX_FRESH_BOTH, CAN_TX_TRACE_SOURCE_DEFAULT,
-          &isaSuppressionGeneration, isaSuppressionGenerationSnapshot);
+          &isaSuppressionGeneration, config.isaSuppressionGenerationSnapshot);
   const bool ok = err == ESP_OK;
   nagTsl9RecordTx(ok, nowMs, (uint8_t)((out.data[5] >> 2) & 0x0Fu),
                   result.handsOnModified, result.isaModified);
@@ -2088,13 +1929,13 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   portEXIT_CRITICAL(&nagCtxMux);
   const bool speedFresh = speedLastMs != 0 && (uint32_t)(nowMs - speedLastMs) <= NAG_SPEED_FRESH_MS;
 
-  NagHumanV1StepResultPure humanDecision = {};
+  ModeHBaseStepResultPure humanDecision = {};
   bool modeHStopCarrier = false;
   if (modeNow == MODE_H) {
     humanDecision = nagHumanRuntimeStep(nowMs, tRaw, true, speedValid, speedFresh, speedRaw,
                                         visualWarningEpoch, visualWarningEnterMs, visualWarningActive);
     if (!humanDecision.tx) {
-      const bool confirmedStopped = humanDecision.blockReason == H1_BLOCK_STOPPED;
+      const bool confirmedStopped = humanDecision.blockReason == MH_BLOCK_STOPPED;
       if (nagModeHUseStopCarrierPure(modeHStopBehavior, confirmedStopped)) {
         // d5 A/B experiment: keep Mode H's event engine paused at a confirmed
         // stop, but preserve transport continuity. Torque and the complete HO
@@ -2106,7 +1947,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
         humanDecision.hoLevel = 0u;
         modeHStopCarrier = true;
       } else {
-        const NagSkipReasonPure reason = humanDecision.blockReason == H1_BLOCK_SPEED_STALE
+        const NagSkipReasonPure reason = humanDecision.blockReason == MH_BLOCK_SPEED_STALE
             ? NAG_SKIP_SPEED_STALE
             : NAG_SKIP_STOPPED;
         nagDiagRecordSkip(reason, nowMs);

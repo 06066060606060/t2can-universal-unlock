@@ -1,4 +1,5 @@
 #pragma once
+#include "text_format_arduino.h"
 
 // WEB API / OTA / DASHBOARD SERVICE
 // Kept in the same translation unit to preserve proven runtime behavior.
@@ -42,7 +43,7 @@ static void httpPedalMapSet() {
 static String nagCfgToJson() {
   NagConfig c;
   const uint8_t variant = nagHumanVariantSnapshot();
-  const NagHumanV4ConfigPure humanV4 = nagHumanV4RuntimeConfigSnapshot();
+  const ModeHConfigPure humanV4 = modeHRuntimeConfigSnapshot();
   portENTER_CRITICAL(&nagCfgMux);
   c = nagCfg;
   portEXIT_CRITICAL(&nagCfgMux);
@@ -101,7 +102,7 @@ static String nagCfgToJson() {
     jw.fixed("humanPeakMinNm", (int32_t)humanV4.base.peakMinRaw, 2u);
     jw.fixed("humanPeakMaxNm", (int32_t)humanV4.base.peakMaxRaw, 2u);
     jw.u32("hoPolicy", (uint32_t)humanV4.hoPolicy);
-    jw.string("hoPolicyName", nagHumanV3HoPolicyNamePure(humanV4.hoPolicy));
+    jw.string("hoPolicyName", modeHHandsOnHoPolicyNamePure(humanV4.hoPolicy));
     jw.fixed("ho1ThresholdNm", (int32_t)humanV4.ho1ThresholdRaw, 2u);
     jw.fixed("ho2ThresholdNm", (int32_t)humanV4.ho2ThresholdRaw, 2u);
     jw.boolean("visualRescueEnabled", humanV4.visualRescueEnabled);
@@ -172,9 +173,9 @@ static String nagStatsToJson() {
   const uint16_t speedKphX100 = c.vehicleSpeedValid ? nagPartySpeedKphX100Pure(c.vehicleSpeedRaw) : 0u;
   const bool humanMode = nagModeNow == MODE_H;
   const uint8_t humanVariant = nagHumanVariantSnapshot();
-  const NagHumanV4StatePure humanV4 = humanMode ? nagHumanV4RuntimeSnapshot() : NagHumanV4StatePure{};
-  const NagHumanV4ConfigPure humanV4Config = nagHumanV4RuntimeConfigSnapshot();
-  const bool humanPaused = humanMode && humanV4.base.phase == H1_PAUSED_STOPPED;
+  const ModeHStatePure humanV4 = humanMode ? modeHRuntimeSnapshot() : ModeHStatePure{};
+  const ModeHConfigPure humanV4Config = modeHRuntimeConfigSnapshot();
+  const bool humanPaused = humanMode && humanV4.base.phase == MH_PAUSED_STOPPED;
   const bool stoppedGate = nagPauseAtZeroBlocksPure(pauseAtZero, c.vehicleSpeedValid, speedFresh, c.vehicleSpeedRaw) || humanPaused;
   uint32_t tsl9Rx, tsl9Modified, tsl9HandsOnModified;
   uint32_t tsl9TxOk, tsl9TxFail;
@@ -203,7 +204,7 @@ static String nagStatsToJson() {
   tsl9InputFail = tsl9InputTxFail;
   tsl9InputCleanup = tsl9InputCleanupTx;
   portEXIT_CRITICAL(&tsl9InputMux);
-  const uint16_t humanOutputRaw = humanV4.base.outputRaw != 0u ? humanV4.base.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW;
+  const uint16_t humanOutputRaw = humanV4.base.outputRaw != 0u ? humanV4.base.outputRaw : MODE_H_BASE_TORQUE_CENTER_RAW;
   const int16_t humanOutputCenti = (int16_t)humanOutputRaw - 2050;
 
   String s;
@@ -275,9 +276,9 @@ static String nagStatsToJson() {
     jw.u32("visualRescueDelayMs", (uint32_t)humanV4Config.visualRescueDelayMs);
     jw.boolean("visualRescuePending", humanV4.visualRescuePending);
     jw.u32("visualRescueCount", humanV4.visualRescueCount);
-    jw.string("humanPhase", nagHumanV1PhaseNamePure(humanV4.base.phase));
-    jw.string("humanMotion", nagHumanV1MotionNamePure(humanV4.base.motion));
-    jw.string("humanEventType", nagHumanV1EventTypeNamePure(humanV4.base.event.type));
+    jw.string("humanPhase", modeHBasePhaseNamePure(humanV4.base.phase));
+    jw.string("humanMotion", modeHBaseMotionNamePure(humanV4.base.motion));
+    jw.string("humanEventType", modeHBaseEventTypeNamePure(humanV4.base.event.type));
     jw.u32("humanEventCount", (uint32_t)(humanV4.base.eventCount));
     jw.i32("humanDirection", (int32_t)(humanV4.base.event.direction));
     jw.boolean("humanCarrier", humanV4.base.carrier);
@@ -688,14 +689,7 @@ static String blinkAStatsToJson() {
   jw.u32("realCksum", rCk);
   jw.u32("realDlc", rDlc);
   jw.u32("visualDebugRx", visualDebugRxCount);
-  String rawHex;
-  rawHex.reserve(24);
-  for (uint8_t i = 0; i < rDlc; i++) {
-    if (i) rawHex += " ";
-    if (raw249[i] < 0x10) rawHex += "0";
-    rawHex += String(raw249[i], HEX);
-  }
-  rawHex.toUpperCase();
+  const String rawHex = canFrameHexArduino(raw249, rDlc);
   jw.string("realRaw", rawHex);
   jw.boolean("cksumSelfTest", selfTest);
   jw.i32("canBState", (int32_t)twaiReady);
@@ -719,17 +713,7 @@ static String dasTelemetryStatsToJson() {
 
 
 static String lab3f8RawHex(const uint8_t *data, uint8_t dlc) {
-  String out;
-  if (!data || dlc == 0) return out;
-  const uint8_t n = dlc > 8 ? 8 : dlc;
-  out.reserve((size_t)n * 3u);
-  for (uint8_t i = 0; i < n; i++) {
-    if (i) out += " ";
-    if (data[i] < 0x10) out += "0";
-    out += String(data[i], HEX);
-  }
-  out.toUpperCase();
-  return out;
+  return canFrameHexArduino(data, dlc);
 }
 
 static String ulcStatsToJson() {
@@ -1452,17 +1436,7 @@ static const char *canTxTraceSourceName(uint8_t source) {
 
 static void canTxTraceRawHex(const uint8_t *data, uint8_t dlc,
                              char *out, size_t outLen) {
-  if (!out || outLen == 0u) return;
-  out[0] = '\0';
-  if (!data) return;
-  char *write = out;
-  size_t remain = outLen;
-  for (uint8_t i = 0; i < dlc && i < 8u; ++i) {
-    const int n = snprintf(write, remain, "%s%02X", i ? " " : "", data[i]);
-    if (n <= 0 || (size_t)n >= remain) break;
-    write += n;
-    remain -= (size_t)n;
-  }
+  formatHexBytesPure(data, dlc < 8u ? dlc : 8u, out, outLen);
 }
 
 static const char *canATxTraceSourceName(uint8_t source, uint16_t id) {
@@ -1670,17 +1644,7 @@ static bool wifiApActivate(const String &requestedSsid, const String &requestedP
 }
 
 static String wifiApJsonEscape(const String &in) {
-  String out;
-  out.reserve(in.length() + 8);
-  for (size_t i = 0; i < in.length(); i++) {
-    const char c = in[i];
-    if (c == '\\' || c == '"') { out += '\\'; out += c; }
-    else if (c == '\n') out += "\\n";
-    else if (c == '\r') out += "\\r";
-    else if (c == '\t') out += "\\t";
-    else out += c;
-  }
-  return out;
+  return escapedTextArduino(in.c_str(), in.length(), JsonTextPolicy::Wifi);
 }
 
 static String wifiApStatusJson() {
@@ -1909,11 +1873,7 @@ static void httpS3xyDeviceRename() {
     return;
   }
   if (name.length() > 24) name = name.substring(0, 24);
-  portENTER_CRITICAL(&s3xyMux);
-  strncpy(s3xyDevices[slot].name, name.c_str(), sizeof(s3xyDevices[slot].name) - 1);
-  s3xyDevices[slot].name[sizeof(s3xyDevices[slot].name) - 1] = '\0';
-  portEXIT_CRITICAL(&s3xyMux);
-  s3xyRegistrySaveSlot((uint8_t)slot);
+  s3xyRegistryRename((uint8_t)slot, name);
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -1936,18 +1896,11 @@ static void httpS3xyDeviceAction() {
     server.send(409, "application/json", msg);
     return;
   }
-  bool validGesture = true;
-  portENTER_CRITICAL(&s3xyMux);
-  if (gesture == "single") s3xyDevices[slot].singleAction = action;
-  else if (gesture == "double") s3xyDevices[slot].doubleAction = action;
-  else if (gesture == "long") s3xyDevices[slot].longAction = action;
-  else validGesture = false;
-  portEXIT_CRITICAL(&s3xyMux);
+  const bool validGesture = s3xyRegistrySetAction((uint8_t)slot, gesture, action);
   if (!validGesture) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid gesture\"}");
     return;
   }
-  s3xyRegistrySaveSlot((uint8_t)slot);
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -1957,20 +1910,8 @@ static void httpS3xyDeviceAuto() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"device/enabled required\"}");
     return;
   }
-  const bool enabled = server.arg("enabled") == "1" || server.arg("enabled") == "true" || server.arg("enabled") == "on";
-  const uint32_t now = millis();
-  portENTER_CRITICAL(&s3xyMux);
-  s3xyDevices[slot].autoConnect = enabled;
-  if (enabled) {
-    s3xyDevices[slot].manualPaused = false;
-    const bool schedule = s3xyBluetoothEnabled && s3xyAutoEnabled && !s3xyDevices[slot].connected;
-    s3xyDevices[slot].nextAttemptMs = schedule ? (now + 250U) : 0;
-  } else {
-    s3xyDevices[slot].nextAttemptMs = 0;
-  }
-  portEXIT_CRITICAL(&s3xyMux);
-  s3xyRegistrySaveSlot((uint8_t)slot);
-  s3xyLogPush(S3XY_LOG_INFO, enabled ? "device auto-connect enabled" : "device auto-connect disabled", nullptr, 0, -127, (int8_t)slot);
+  const bool enabled = httpBoolValue(server.arg("enabled"), HttpBoolPolicy::LegacyAliases);
+  s3xyRegistrySetAutoConnect((uint8_t)slot, enabled);
   server.send(200, "application/json", enabled ? "{\"ok\":true,\"autoConnect\":true}" : "{\"ok\":true,\"autoConnect\":false}");
 }
 
@@ -2188,18 +2129,7 @@ static uint8_t researchCaptureParseSlot(const String &raw) {
 }
 
 static String researchCaptureJsonEscape(const char *in) {
-  String out;
-  if (!in) return out;
-  out.reserve(strlen(in) + 8);
-  for (const uint8_t *p = (const uint8_t *)in; *p; ++p) {
-    const uint8_t c = *p;
-    if (c == '"' || c == '\\') { out += '\\'; out += (char)c; }
-    else if (c == '\n') out += "\\n";
-    else if (c == '\r') out += "\\r";
-    else if (c == '\t') out += "\\t";
-    else if (c >= 0x20) out += (char)c;
-  }
-  return out;
+  return escapedTextArduino(in, in ? strlen(in) : 0, JsonTextPolicy::Research);
 }
 
 static const char *researchCapturePhysicalBusName(uint8_t bus) {
@@ -2345,7 +2275,12 @@ static String researchCaptureStatsToJson() {
     else fullReason = rawMode ? "ARCHIVE" : "SAMPLES";
   }
 
-  String j; j.reserve(1440);
+  // Fixed keys, scalar values and built-in descriptions fit in 3072 bytes.
+  // User labels may double in size when escaped; reserve them separately.
+  size_t jsonCapacity = 3072u + 2u * (strlen(currentLabel) + strlen(lastLabel));
+  for (uint8_t i = 0; i < RESEARCH_CAPTURE_LABEL_SLOTS; ++i)
+    jsonCapacity += 2u * strlen(labels[i]);
+  String j; j.reserve(jsonCapacity);
   j = "{\"diagnosticOnly\":true,\"captureGeneratesTx\":false,\"recordsExisting3f8Tx\":true,\"recordsExisting399Tx\":true";
   JsonWriterArduino jw(j, true);
   jw.string("state", researchCaptureStateName(state));
@@ -2364,8 +2299,7 @@ static String researchCaptureStatsToJson() {
   jw.string("lastLabel", researchCaptureJsonEscape(lastLabel));
   jw.beginObject("labels");
   for (uint8_t i = 0; i < RESEARCH_CAPTURE_LABEL_SLOTS; i++) {
-    if (i) j += ',';
-    j += "\"" + String(researchCaptureLabelSlotName(i)) + "\":\"" + researchCaptureJsonEscape(labels[i]) + "\"";
+    jw.string(researchCaptureLabelSlotName(i), researchCaptureJsonEscape(labels[i]));
   }
   jw.endObject();
   jw.u32("samples", (uint32_t)(count));
@@ -2536,15 +2470,11 @@ static void httpResearchCaptureReset() {
 }
 
 static void researchCaptureCsvHex(const uint8_t *data, uint8_t dlc, char *out, size_t outLen) {
-  if (!out || outLen == 0) return;
-  out[0] = '\0';
-  const uint8_t n = dlc > 8 ? 8 : dlc;
-  size_t pos = 0;
-  for (uint8_t i = 0; i < n && pos + 4 < outLen; i++) {
-    const int w = snprintf(out + pos, outLen - pos, "%s%02X", i ? " " : "", data[i]);
-    if (w <= 0) break;
-    pos += (size_t)w;
-  }
+  // Preserve the existing CSV formatter's conservative small-buffer limit.
+  const size_t fitting = outLen > 4u ? (outLen - 4u) / 3u + 1u : 0u;
+  size_t count = dlc > 8u ? 8u : dlc;
+  if (count > fitting) count = fitting;
+  formatHexBytesPure(data, count, out, outLen);
 }
 
 static void researchCaptureCsvQuote(const char *in, char *out, size_t outLen) {
@@ -2647,7 +2577,7 @@ static void httpResearchCaptureCsv() {
   server.sendContent("segment_id,label_slot,label,phase,relative_ms,trigger_uptime_ms,snapshot_uptime_ms,frame_age_ms,physical_bus,bus_role,source,tx_ok,id,dlc,raw\n");
 
   String chunk;
-  chunk.reserve(RESEARCH_CAPTURE_CSV_CHUNK_BYTES + 384U);
+  chunk.reserve(RESEARCH_CAPTURE_CSV_CHUNK_BYTES);
   char line[640];
 
   if (researchCaptureModeIsRaw(mode)) {
@@ -2910,10 +2840,8 @@ static String v3FeaturePolicyJson() {
 
 static bool httpBoolArg(const char *name, bool &out) {
   if (!server.hasArg(name)) return false;
-  const String a = server.arg(name);
-  if (a == "1" || a == "true" || a == "on") { out = true; return true; }
-  if (a == "0" || a == "false" || a == "off") { out = false; return true; }
-  return false;
+  const String value = server.arg(name);
+  return parseHttpBoolPure(value.c_str(), value.length(), out, HttpBoolPolicy::StrictAliases);
 }
 
 static bool httpDecimalU16InRange(const String &raw, uint16_t minimum,
@@ -3030,14 +2958,14 @@ static String continuousApControlJson(){
   jw.boolean("effectiveEnabled",cfg.enabled&&route!=ContApRoute::None);
   jw.boolean("supported",stalk||single||doubleClick);
   jw.boolean("stalkSupported",stalk);jw.boolean("scrollSingleSupported",single);jw.boolean("scrollDoubleSupported",doubleClick);
-  jw.string("supportReason",stalk||single||doubleClick?"Select a supported method that matches your vehicle's Autopilot setting.":"Unavailable for this vehicle connection. Standard Model 3/Y with Chassis CAN is required.");
+  jw.string("supportReason",stalk||single||doubleClick?"Select a supported method that matches your vehicle's Autopilot setting.":"Unavailable for this vehicle connection. Body + Chassis is required for Continuous AP.");
   jw.string("route",route==ContApRoute::BodyA?"Body CAN A":route==ContApRoute::ChassisB?"Chassis CAN B":"Unavailable");
   jw.string("state",continuousApStateName(status.state));jw.string("blockedReason",continuousApReasonName(status.reason));
   jw.string("lastCancelReason",status.lastCancelReason==ContApReason::None?"None":continuousApReasonName(status.lastCancelReason));
   jw.string("signalReadiness",continuousApSignalReadinessPure(inputs));
   const ContApObservation observations[]={inputs.ap,inputs.turn,inputs.brake,inputs.gear,inputs.torque,inputs.control};
   const char *prefixes[]={"rxAp","rxTurn","rxBrake","rxGear","rxTorque","rxControl"};
-  const uint32_t limits[]={1000,350,250,1000,250,cfg.method==ContApMethod::StalkDouble?500u:250u};
+  const uint32_t limits[]={1000,350,250,1000,250,continuousApInputFreshLimitPure(cfg.method)};
   for(unsigned n=0;n<6;++n){
     const auto &sample=observations[n];char key[32],value[48];
     snprintf(key,sizeof(key),"%sStatus",prefixes[n]);jw.string(key,continuousApRxStatusPure(sample,now,epoch,limits[n]));
@@ -3049,10 +2977,10 @@ static String continuousApControlJson(){
     else snprintf(value,sizeof(value),"%ld",(long)sample.value);
     jw.string(key,value);
     snprintf(key,sizeof(key),"%sId",prefixes[n]);
-    const uint16_t expected[]={0x399,0x3f5,0x39d,0x118,uint16_t(inputs.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS?0x372:0x370),uint16_t(cfg.method==ContApMethod::StalkDouble?0x229:0x3c2)};
+    const uint16_t expected[]={0x399,0x3f5,0x145,0x118,uint16_t(inputs.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS?0x372:0x370),uint16_t(cfg.method==ContApMethod::StalkDouble?0x229:0x3c2)};
     snprintf(value,sizeof(value),"0x%03X",sample.sourceId?sample.sourceId:expected[n]);jw.string(key,value);
     snprintf(key,sizeof(key),"%sBus",prefixes[n]);
-    jw.string(key,n==4?(inputs.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS?"Body CAN A":"Party CAN A"):n==5?(route==ContApRoute::BodyA?"Body CAN A":route==ContApRoute::ChassisB?"Chassis CAN B":"Unavailable"):"Chassis CAN B");
+    jw.string(key,n==2?(sample.sourceRoute==ContApRoute::BodyA?"Body CAN A":sample.sourceRoute==ContApRoute::PartyA?"Party CAN A":sample.sourceRoute==ContApRoute::ChassisB?"Chassis CAN B":"CAN A / CAN B"):n==4?(inputs.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS?"Body CAN A":"Party CAN A"):n==5?(route==ContApRoute::BodyA?"Body CAN A":route==ContApRoute::ChassisB?"Chassis CAN B":"Unavailable"):"Chassis CAN B");
   }
   jw.u32("attempts",status.attempts);jw.u32("txOk",status.txOk);jw.u32("txFail",status.txFail);jw.u32("cleanupSends",status.cleanupSends);
   jw.boolean("releasePending",status.releaseOwed);jw.boolean("cleanupUnconfirmed",status.cleanupUnconfirmed);jw.finish();return json;
@@ -3624,7 +3552,7 @@ static void httpNagUpdate() {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid torqueRightScrollEnabled\"}");
       return;
     }
-    torqueRightScrollEnabled = raw == "1" || raw == "true";
+    torqueRightScrollEnabled = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
   }
   if (server.hasArg("torqueRightScrollIntervalSeconds")) {
     uint16_t value;
@@ -3651,7 +3579,7 @@ static void httpNagUpdate() {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid tsl9RightPeriodicEnabled\"}");
       return;
     }
-    tsl9RightPeriodicEnabled = raw == "1" || raw == "true";
+    tsl9RightPeriodicEnabled = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
   }
   if (server.hasArg("tsl9RightPeriodicIntervalSeconds")) {
     uint16_t value;
@@ -3799,7 +3727,7 @@ static void httpNagReset() {
   const NagScrollStoredSnapshot defaultScroll = {false,
       AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE, NAG_RIGHT_SCROLL_PATTERN_DEFAULT,
       false, AP_RIGHT_SCROLL_DEFAULT_INTERVAL_S_PURE};
-  if (!nagCfgPersistSnapshot(nc, nagHumanV4DefaultConfigPure(),
+  if (!nagCfgPersistSnapshot(nc, modeHDefaultConfigPure(),
           nagModeHDefaultVariantPure(), defaultScroll)) {
     setCanTxAdministrativeHold(false);
     server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
@@ -4063,7 +3991,7 @@ static void httpSummonHeartbeatOverrideUpdate() {
 }
 
 static void writeNagHumanV1ConfigJson(JsonWriterArduino &jw,
-                                      const NagHumanV1ConfigPure &config) {
+                                      const ModeHBaseConfigPure &config) {
   jw.raw("tuningEditable", "true");
   jw.fixed("peakMinNm", (int32_t)config.peakMinRaw, 2u);
   jw.fixed("peakMaxNm", (int32_t)config.peakMaxRaw, 2u);
@@ -4074,18 +4002,18 @@ static void writeNagHumanV1ConfigJson(JsonWriterArduino &jw,
 }
 
 static void writeNagHumanV1StateJson(JsonWriterArduino &jw,
-                                     const NagHumanV1StatePure &state,
+                                     const ModeHBaseStatePure &state,
                                      uint16_t outputRaw,
                                      uint8_t stopBehavior) {
-  jw.string("phase", nagHumanV1PhaseNamePure(state.phase));
-  jw.string("motion", nagHumanV1MotionNamePure(state.motion));
-  jw.string("eventType", nagHumanV1EventTypeNamePure(state.event.type));
+  jw.string("phase", modeHBasePhaseNamePure(state.phase));
+  jw.string("motion", modeHBaseMotionNamePure(state.motion));
+  jw.string("eventType", modeHBaseEventTypeNamePure(state.event.type));
   jw.fixed("activeEventPeakNm", (int32_t)state.event.peakRaw, 2u);
   jw.u32("eventCount", (uint32_t)state.eventCount);
   jw.fixed("outputNm", (int32_t)outputRaw - 2050, 2u);
   jw.boolean("carrier", state.carrier);
   jw.boolean("stopCarrierActive",
-             state.phase == H1_PAUSED_STOPPED &&
+             state.phase == MH_PAUSED_STOPPED &&
                  stopBehavior == H_STOP_STOCK_CARRIER);
 }
 
@@ -4110,18 +4038,18 @@ static String nagHumanProfileStatsToJson() {
   jw.string("stopBehaviorName", nagModeHStopBehaviorNamePure(stopBehavior));
   jw.u32("stopCarrierTxOk", stopCarrierTxOk);
 {
-    const NagHumanV4ConfigPure c = nagHumanV4RuntimeConfigSnapshot();
-    const NagHumanV4StatePure state = nagHumanV4RuntimeSnapshot();
-    const uint16_t outputRaw = state.base.outputRaw != 0u ? state.base.outputRaw : NAG_HUMAN_V1_TORQUE_CENTER_RAW;
+    const ModeHConfigPure c = modeHRuntimeConfigSnapshot();
+    const ModeHStatePure state = modeHRuntimeSnapshot();
+    const uint16_t outputRaw = state.base.outputRaw != 0u ? state.base.outputRaw : MODE_H_BASE_TORQUE_CENTER_RAW;
     writeNagHumanV1ConfigJson(jw, c.base);
     jw.fixed("carrierMinNm", (int32_t)c.carrierMinRaw, 2u);
     jw.fixed("carrierMaxNm", (int32_t)c.carrierMaxRaw, 2u);
     jw.u32("hoPolicy", (uint32_t)c.hoPolicy);
-    jw.string("hoPolicyName", nagHumanV3HoPolicyNamePure(c.hoPolicy));
+    jw.string("hoPolicyName", modeHHandsOnHoPolicyNamePure(c.hoPolicy));
     jw.fixed("ho1ThresholdNm", (int32_t)c.ho1ThresholdRaw, 2u);
     jw.fixed("ho2ThresholdNm", (int32_t)c.ho2ThresholdRaw, 2u);
     jw.raw("negativeBiasPct", "80");
-    jw.fixed("stockDeadbandNm", (int32_t)NAG_HUMAN_V4_STOCK_DEADBAND_RAW, 2u);
+    jw.fixed("stockDeadbandNm", (int32_t)MODE_H_STOCK_DEADBAND_RAW, 2u);
     jw.string("carrierMode", "OPPOSITE_STOCK_PER_RX");
     jw.boolean("visualRescueEnabled", c.visualRescueEnabled);
     jw.u32("visualRescueDelayMs", (uint32_t)c.visualRescueDelayMs);
@@ -4164,7 +4092,7 @@ static void httpNagHumanProfileUpdate() {
   };
 
 {
-    NagHumanV4ConfigPure c = nagHumanV4RuntimeConfigSnapshot();
+    ModeHConfigPure c = modeHRuntimeConfigSnapshot();
     uint16_t peakMinRaw=c.base.peakMinRaw, peakMaxRaw=c.base.peakMaxRaw;
     uint16_t waitMinMs=c.base.waitMinMs, waitMaxMs=c.base.waitMaxMs;
     uint16_t refMinMs=c.base.refractoryMinMs, refMaxMs=c.base.refractoryMaxMs;
@@ -4180,7 +4108,7 @@ static void httpNagHumanProfileUpdate() {
     if (server.hasArg("ho1ThresholdNm") && !httpParseHumanNm(server.arg("ho1ThresholdNm"), ho1Raw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid ho1ThresholdNm\"}"); return; }
     if (server.hasArg("ho2ThresholdNm") && !httpParseHumanNm(server.arg("ho2ThresholdNm"), ho2Raw)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid ho2ThresholdNm\"}"); return; }
     if (!parse16("waitMinMs",waitMinMs)||!parse16("waitMaxMs",waitMaxMs)||!parse16("refractoryMinMs",refMinMs)||!parse16("refractoryMaxMs",refMaxMs)||!parse16("visualRescueDelayMs",visualRescueDelayMs)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid Mode H timing\"}"); return; }
-    if (server.hasArg("hoPolicy")) { int v=server.arg("hoPolicy").toInt(); if(v<0||v>255||!nagHumanV3HoPolicyValidPure((uint8_t)v)){server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid hoPolicy\"}");return;} hoPolicy=(uint8_t)v; }
+    if (server.hasArg("hoPolicy")) { int v=server.arg("hoPolicy").toInt(); if(v<0||v>255||!modeHHandsOnHoPolicyValidPure((uint8_t)v)){server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid hoPolicy\"}");return;} hoPolicy=(uint8_t)v; }
     if (server.hasArg("visualRescueEnabled") && !httpBoolArg("visualRescueEnabled", visualRescueEnabled)) { server.send(400,"application/json","{\"ok\":false,\"error\":\"invalid visualRescueEnabled\"}"); return; }
     c.base.peakMinRaw=peakMinRaw; c.base.peakMaxRaw=peakMaxRaw;
     c.base.waitMinMs=waitMinMs; c.base.waitMaxMs=waitMaxMs;
@@ -4188,7 +4116,7 @@ static void httpNagHumanProfileUpdate() {
     c.base.hoOverridePct=0u; c.carrierMinRaw=carrierMinRaw; c.carrierMaxRaw=carrierMaxRaw;
     c.hoPolicy=hoPolicy; c.ho1ThresholdRaw=ho1Raw; c.ho2ThresholdRaw=ho2Raw;
     c.visualRescueEnabled=visualRescueEnabled; c.visualRescueDelayMs=visualRescueDelayMs;
-    if (!nagHumanV4ConfigValidPure(c)) {
+    if (!modeHConfigValidPure(c)) {
       server.send(400,"application/json","{\"ok\":false,\"error\":\"Rev.4 ranges invalid: peak 1.00..3.00 Nm, carrier 0.10..0.80 Nm, HO thresholds 0.10..3.00 Nm with HO1 <= HO2, wait 0.3..5.0 s, refractory 0.3..2.5 s, rescue delay 0..2.0 s\"}");
       return;
     }
@@ -4197,7 +4125,7 @@ static void httpNagHumanProfileUpdate() {
     if (!nagCfgPersist(config, c, nagHumanVariant)) {
       server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
     }
-    (void)nagHumanV4RuntimeSetLabTuning(peakMinRaw,peakMaxRaw,waitMinMs,waitMaxMs,refMinMs,refMaxMs,
+    (void)modeHRuntimeSetLabTuning(peakMinRaw,peakMaxRaw,waitMinMs,waitMaxMs,refMinMs,refMaxMs,
         carrierMinRaw,carrierMaxRaw,hoPolicy,ho1Raw,ho2Raw,visualRescueEnabled,visualRescueDelayMs);
   }
   server.send(200,"application/json",nagHumanProfileStatsToJson());
@@ -4209,13 +4137,13 @@ static void httpNagHumanProfileReset() {
     return;
   }
 {
-    const NagHumanV4ConfigPure d = nagHumanV4DefaultConfigPure();
+    const ModeHConfigPure d = modeHDefaultConfigPure();
     NagConfig config;
     portENTER_CRITICAL(&nagCfgMux); config = nagCfg; portEXIT_CRITICAL(&nagCfgMux);
     if (!nagCfgPersist(config, d, nagHumanVariant)) {
       server.send(500, "application/json", "{\"ok\":false,\"error\":\"Settings could not be saved\"}"); return;
     }
-    (void)nagHumanV4RuntimeSetLabTuning(d.base.peakMinRaw,d.base.peakMaxRaw,
+    (void)modeHRuntimeSetLabTuning(d.base.peakMinRaw,d.base.peakMaxRaw,
         d.base.waitMinMs,d.base.waitMaxMs,d.base.refractoryMinMs,d.base.refractoryMaxMs,
         d.carrierMinRaw,d.carrierMaxRaw,d.hoPolicy,d.ho1ThresholdRaw,d.ho2ThresholdRaw,
         d.visualRescueEnabled,d.visualRescueDelayMs);
@@ -4338,7 +4266,7 @@ static void httpR79Update() {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid-mode1Reinject\"}");
       return;
     }
-    nextMode1Reinject = raw == "1" || raw == "true";
+    nextMode1Reinject = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
   }
   if (hasMode1Delay) {
     const String rawText = server.arg("mode1DelayMs");
@@ -4356,7 +4284,7 @@ static void httpR79Update() {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid-mode2Reinject\"}");
       return;
     }
-    nextMode2Reinject = raw == "1" || raw == "true";
+    nextMode2Reinject = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
   }
   if (hasMode2Delay) {
     const String rawText = server.arg("mode2DelayMs");
@@ -4525,7 +4453,7 @@ static void httpVisionControlUpdate() {
     if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
       server.send(400, "application/json", "{\"error\":\"invalid-disabled\"}"); return;
     }
-    disabled = raw == "1" || raw == "true";
+    disabled = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
   }
   if (hasBus) {
     const String raw = server.arg("bus");
@@ -4839,7 +4767,7 @@ static String homeFastSnapshotToJson() {
   const bool nagSpeedFresh = nagHomeCtx.vehicleSpeedValid && nagHomeCtx.lastVehicleSpeedMs != 0 && nagSpeedAge <= NAG_SPEED_FRESH_MS;
   bool nagHumanPaused = false;
   if (nagModeHome == MODE_H) {
-    nagHumanPaused = nagHumanV4RuntimeSnapshot().base.phase == H1_PAUSED_STOPPED;
+    nagHumanPaused = modeHRuntimeSnapshot().base.phase == MH_PAUSED_STOPPED;
   }
   const bool nagStoppedGate = nagPauseAtZeroBlocksPure(nagPauseZero, nagHomeCtx.vehicleSpeedValid, nagSpeedFresh, nagHomeCtx.vehicleSpeedRaw) || nagHumanPaused;
   const bool nagStopCarrierActive = nagModeHome == MODE_H && nagHumanPaused && nagStopBehaviorHome == H_STOP_STOCK_CARRIER;
@@ -5153,7 +5081,7 @@ static String homeSnapshotToJson() {
   const bool nagSpeedFresh = nagHomeCtx.vehicleSpeedValid && nagHomeCtx.lastVehicleSpeedMs != 0 && nagSpeedAge <= NAG_SPEED_FRESH_MS;
   bool nagHumanPaused = false;
   if (nagModeHome == MODE_H) {
-    nagHumanPaused = nagHumanV4RuntimeSnapshot().base.phase == H1_PAUSED_STOPPED;
+    nagHumanPaused = modeHRuntimeSnapshot().base.phase == MH_PAUSED_STOPPED;
   }
   const bool nagStoppedGate = nagPauseAtZeroBlocksPure(nagPauseZero, nagHomeCtx.vehicleSpeedValid, nagSpeedFresh, nagHomeCtx.vehicleSpeedRaw) || nagHumanPaused;
   const bool nagStopCarrierActive = nagModeHome == MODE_H && nagHumanPaused && nagStopBehaviorHome == H_STOP_STOCK_CARRIER;
