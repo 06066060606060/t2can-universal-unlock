@@ -1,3 +1,66 @@
+# T2CAN Universal v3.29.1
+
+## Continuous AP brake reception compatibility — 2026-10-11
+
+- Observe ESP_status 0x145 driverBrakeApply from either physical CAN port: Body/Party CAN A or Chassis CAN B. Decode byte 3 bits 5..6 only from an eight-byte standard data frame; 1 means released, 2 means applied, and 0/3 remain invalid.
+- Retain Chassis CAN B IBST_status 0x39D as an independent brake source. Prefer the newest released observation only when no current-epoch source reports applied or invalid. A source's applied/invalid observation cannot be cleared by another source; it must report release itself or reset with the CAN epoch. A stale blocking source stays fail-closed.
+- Preserve the 250 ms brake freshness limit. Display the selected brake's actual source ID and bus in the existing RX diagnostics without changing the dashboard layout or API field names.
+- Preserve v3.29.0 Body + Chassis-only Continuous AP support and 500 ms scroll input lifetime. Do not change torque/gear decoding, other features, gesture timing, retries, or saved settings.
+
+# T2CAN Universal v3.29.0
+
+## Continuous AP Body connection requirement — 2026-10-11
+
+- Require Body + Chassis for every Continuous AP activation method. Party + Chassis cannot enable or execute Continuous AP, including previously saved enabled settings; supported Body profiles retain their existing stalk/click methods.
+- Extend only Continuous AP scroll input freshness from 250 to 500 ms, including stock reconstruction, final transmission admission, shared input protection, and diagnostic status. Keep 500 ms inclusive and reject 501 ms, including clock wrap.
+- Explain the Body + Chassis requirement in the existing dashboard support message. Preserve the dashboard layout, NVS settings representation, gesture waveform, other signal freshness limits, retries, and independent AP Scroll/NAG support.
+- Do not change torque, brake, or gear decoders. Flipper uses 0x370 torque for HW3 Continuous AP; its HW4 path is unimplemented. Body torque identity and Juniper brake availability still require vehicle-specific raw evidence. The known 0x186 fallback gear mapping discrepancy remains outside this change.
+
+# T2CAN Universal v3.28.7
+
+## Continuous AP ordering and NAG cleanup repair — 2026-10-10
+
+- Preserve witnessed AP-active plus single-indicator intent if indicator OFF is serviced before AP loss, within the existing 1,000 ms evidence lifetime. OFF alone cannot arm or refresh intent; unsafe, stale and physical cancellation inputs remain blocking.
+- Retain fully validated indicated-active intent while draining RX, so AP loss later in the same batch is not missed. Keep command preparation in service and preserve same-batch cancellation events.
+- Let an actual pending NAG CENTER cleanup drain while Continuous AP waits on the same route, breaking the circular ownership wait. Require fresh neutral stock and final TX admission; new NAG steps, forged cleanup and cleanup over prepared/accepted AP presses remain blocked.
+- Extend existing lane-change and NAG integration regressions, including both protected routes, time wrap and negative safety boundaries. Preserve the dashboard, profile support matrix, NVS layout, gesture timing and retry limits.
+- The original ordering and cleanup defects reproduce in field-reported v3.28.3 and completed v3.28.6. The reported vehicle model, diagnostics and failed stage are unavailable; on-vehicle cause and acceptance remain unverified.
+
+# T2CAN Universal v3.28.6
+
+## Source package and regression suite consolidation — 2026-10-10
+
+- Consolidate 13 small production headers into existing feature owners: Continuous AP, blinker, ULC, R79, powertrain, formatting and runtime policy. Preserve pure/runtime boundaries, function bodies, CAN timing, locks, gates and NVS behavior.
+- Move only the used scroll interval definitions into the current scheduler; retain the historical engine and its regressions inside one legacy test suite.
+- Consolidate 103 Python contracts into 17 feature suites and three Country host files into one suite. Give 31 remaining version-named host files feature names.
+- Centralize 61 repeated firmware/package identity assertions using the numeric version in the package directory. Preserve unique feature checks and record original-to-current coverage in tests/COVERAGE.md.
+- Combine 48 C++ test files into 14 feature suites and seven browser test files into three suites. Keep independent helper scopes, browser routes and all unique scenarios.
+- Omit build caches, an obsolete generated preview and four historical planning documents from this new package. These remain preserved in v3.28.5.
+- Keep dashboard source, generated header and historical Mode H oracle bytes unchanged.
+- Add the workspace source-preparation tool and adapt host runner names/scopes to prevent old build output and version-specific test fragmentation from recurring.
+
+# T2CAN Universal v3.28.5
+
+## Shared implementation cleanup and settings recovery — 2026-10-10
+
+- Fix unconfirmed DMS saves: restore the last confirmed display after failed POST/reconciliation, show an unavailable state and require a successful GET before another save.
+- Share save/reconcile/epoch state across DMS, ISA, Country and Continuous AP while preserving feature-specific validation and support rules.
+- Consolidate TSL9 receive/service and NAG/ISA transform bookkeeping across CAN routes without changing route-specific transmission or generation guards.
+- Move shared input arbitration out of Continuous AP and share Tesla checksum/AP-state helpers; remove unused CAN receive-budget arguments.
+- Move BLE registry mutations, legacy-key cleanup and scoped pending resets into BLE-owned helpers; scan notification tokens once while preserving ACK and gesture semantics.
+- Share JSON escaping with explicit legacy character policies, bounded hexadecimal formatting, HTTP boolean parsing and feature-flag persistence.
+- Reserve Research JSON for its current fields and labels, use the shared writer for nested labels, and remove 384 unnecessary bytes from CSV chunk reservation.
+- Remove stale declarations and keep the unused historical DMS lab helper only as a test fixture.
+- Preserve the completed v3.28.4 package. No vehicle policies, routes or NVS keys are changed.
+
+# T2CAN Universal v3.28.4
+
+## Mode H Rev4 consolidation — 2026-10-10
+- Consolidates the current Mode H pure engine and runtime ownership without changing CAN behavior, persisted settings or public APIs.
+- Moves four active pure headers (1,282 lines) into mode_h_pure.h (859 lines), with one runtime owner in mode_h_runtime.h.
+- Keeps historical engines only as hash-pinned test fixtures; current Rev4 regressions target the consolidated engine.
+- Preserves completed v3.28.3. Fresh completion covers 154 Python/static files, 69 C++ binaries and 25 JavaScript/browser files.
+
 # T2CAN Universal v3.28.3
 
 ## OTA receive and diagnostics hotfix — 2026-10-10

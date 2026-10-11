@@ -1,11 +1,11 @@
 #pragma once
 #include "continuous_ap_fsm_pure.h"
-#include "continuous_ap_frames_pure.h"
 static portMUX_TYPE continuousApMux=portMUX_INITIALIZER_UNLOCKED;
 static ContApConfig continuousApConfig;
 static uint32_t continuousApGeneration=1;
 static ContinuousApFsmPure continuousApFsm;
 static ContApObservation continuousApAp,continuousApTurn,continuousApBrake,continuousApGear118,continuousApGear186;
+static ContApObservation continuousApBrakeEspA,continuousApBrakeEspB;
 static ContApObservation continuousApTorqueS,continuousApTorqueP,continuousApTorqueParty,continuousApStalkControl,continuousApScrollControl;
 static ContApStockFrame continuousApStalkStock,continuousApScrollStock,continuousApLastTx;
 static bool continuousApManualSeen=false,continuousApCancelLatched=false,continuousApEchoAmbiguous=false;
@@ -22,7 +22,8 @@ static inline ContApConfig continuousApControlSnapshot(){portENTER_CRITICAL(&con
 static inline ContApStatus continuousApSnapshot(){portENTER_CRITICAL(&continuousApMux);auto s=continuousApFsm.status();portEXIT_CRITICAL(&continuousApMux);return s;}
 static inline ContApInputs continuousApInputsLocked(uint32_t now,uint32_t e,bool nagBusy){
   ContApInputs i;i.nowMs=now;i.epoch=e;i.generation=continuousApGeneration;i.profile=activeVehicleProfile;i.topology=activeVehicleTopology;i.config=continuousApConfig;
-  i.ap=continuousApAp;i.turn=continuousApTurn;i.brake=continuousApBrake;
+  i.ap=continuousApAp;i.turn=continuousApTurn;
+  i.brake=continuousApSelectBrakePure(continuousApBrake,continuousApBrakeEspA,continuousApBrakeEspB,now,e);
   i.gear=continuousApFreshPure(continuousApGear118,i,1000)?continuousApGear118:continuousApGear186;
   if(i.topology==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS){
     const bool s=continuousApFreshPure(continuousApTorqueS,i,250),p=continuousApFreshPure(continuousApTorqueP,i,250);
@@ -34,7 +35,7 @@ static inline ContApInputs continuousApInputsLocked(uint32_t now,uint32_t e,bool
   const auto method=status.releaseOwed?continuousApFsm.inputMethod():i.config.method;
   const auto &stock=method==ContApMethod::StalkDouble?continuousApStalkStock:continuousApScrollStock;
   i.control=method==ContApMethod::StalkDouble?continuousApStalkControl:continuousApScrollControl;
-  i.templateFresh=stock.valid&&stock.epoch==e&&(uint32_t)(now-stock.rxMs)<=(method==ContApMethod::StalkDouble?500u:250u);
+  i.templateFresh=stock.valid&&stock.epoch==e&&(uint32_t)(now-stock.rxMs)<=continuousApInputFreshLimitPure(method);
   i.transportAllowed=!canTxAdministrativeHold&&!canUsbTxHeld()&&mcpReady&&twaiReady;
   i.ownershipAllowed=!nagBusy;
   i.ambiguous=continuousApEchoAmbiguous;
@@ -54,16 +55,25 @@ static inline void continuousApObserveStock(uint8_t bus,uint16_t id,const uint8_
     if(!d.idle)continuousApEchoAmbiguous=true;
     portEXIT_CRITICAL(&continuousApMux);return;
   }
-  ContApObservation sample{true,d.valid,d.value,now,e,id};
+  ContApObservation sample{true,d.valid,d.value,now,e,id,f.route};
   switch(d.signal){
     case ContApSignal::Ap:continuousApAp=sample;break;
     case ContApSignal::Turn:continuousApTurn=sample;break;
-    case ContApSignal::Brake:continuousApBrake=sample;break;
+    case ContApSignal::Brake:
+      if(id==0x39d)continuousApBrake=sample;
+      else if(f.route==ContApRoute::ChassisB)continuousApBrakeEspB=sample;
+      else continuousApBrakeEspA=sample;
+      break;
     case ContApSignal::Gear:if(id==0x118)continuousApGear118=sample;else continuousApGear186=sample;break;
     case ContApSignal::Torque:if(f.route==ContApRoute::PartyA)continuousApTorqueParty=sample;else if(id==0x372)continuousApTorqueS=sample;else continuousApTorqueP=sample;break;
     case ContApSignal::Stalk:sample.value=d.idle?0:2;continuousApStalkControl=sample;continuousApStalkStock=f;continuousApStalkStock.valid=d.valid&&d.idle;continuousApEchoAmbiguous=false;break;
     case ContApSignal::Scroll:sample.value=d.idle?0:(((data[1]>>4)&3)==2||((data[0]>>5)&3)==2||(data[5]&6)!=0?2:1);continuousApScrollControl=sample;continuousApScrollStock=f;continuousApScrollStock.valid=d.valid&&d.idle;continuousApEchoAmbiguous=false;break;
     default:break;
+  }
+  if(!continuousApCancelLatched){
+    auto intent=continuousApInputsLocked(now,e,false);
+    if(continuousApManualSeen&&(uint32_t)(now-continuousApManualMs)<=750)intent.ambiguous=true;
+    continuousApFsm.observeActiveIntent(intent);
   }
   const bool manual=(d.signal==ContApSignal::Brake&&(!d.valid||d.value!=1))||((d.signal==ContApSignal::Stalk||d.signal==ContApSignal::Scroll)&&(!d.valid||sample.value>=2||(sample.value==1&&(continuousApFsm.status().releaseOwed||continuousApFsm.hasPendingPress()))));
   const auto state=continuousApFsm.status().state;
@@ -88,7 +98,7 @@ static inline void continuousApObserveStock(uint8_t bus,uint16_t id,const uint8_
 static inline void continuousApResetForEpoch(uint32_t e){
   portENTER_CRITICAL(&continuousApMux);
   ++continuousApGeneration;continuousApFsm.reset(e);
-  continuousApAp={};continuousApTurn={};continuousApBrake={};continuousApGear118={};continuousApGear186={};
+  continuousApAp={};continuousApTurn={};continuousApBrake={};continuousApBrakeEspA={};continuousApBrakeEspB={};continuousApGear118={};continuousApGear186={};
   continuousApTorqueS={};continuousApTorqueP={};continuousApTorqueParty={};continuousApStalkControl={};continuousApScrollControl={};
   continuousApStalkStock={};continuousApScrollStock={};continuousApLastTx={};continuousApCancelReason=ContApReason::None;continuousApCancelLatched=continuousApEchoAmbiguous=continuousApManualSeen=false;
   portEXIT_CRITICAL(&continuousApMux);
@@ -108,30 +118,7 @@ static inline bool continuousApComposeValidated(ContinuousApTxContext &ctx){
 }
 static inline bool continuousApValidateMcp(struct can_frame *out,void *arg){auto &ctx=*(ContinuousApTxContext*)arg;if(!continuousApComposeValidated(ctx))return false;out->can_id=ctx.frame.id;out->can_dlc=ctx.frame.dlc;memcpy(out->data,ctx.frame.data,8);return true;}
 static inline bool continuousApValidateTwai(twai_message_t *out,void *arg){auto &ctx=*(ContinuousApTxContext*)arg;if(!continuousApComposeValidated(ctx))return false;out->identifier=ctx.frame.id;out->data_length_code=ctx.frame.dlc;out->flags=0;memcpy(out->data,ctx.frame.data,8);return true;}
-static inline bool continuousApOwnsInputRoute(ContApRoute route){
-  if(continuousApNagBusy())return false;
-  portENTER_CRITICAL(&continuousApMux);const bool owns=continuousApFsm.ownedRoute()==route;portEXIT_CRITICAL(&continuousApMux);return owns;
-}
-// Shared 0x3C2 composition runs under the TX barrier. Once Continuous AP has
-// used this route, Nag cannot replay an independently cached click payload.
-static inline bool continuousApComposeNag(ContApRoute route,uint8_t *data,void *arg){
-  const uint32_t now=(uint32_t)millis(),e=canTxBarrierState.epoch;
-  portENTER_CRITICAL(&continuousApMux);
-  const bool selected=continuousApGestureRoutePure(activeVehicleProfile,activeVehicleTopology,ContApMethod::ScrollSingle)==route;
-  const bool protectedInput=selected&&((continuousApConfig.enabled&&continuousApConfig.method!=ContApMethod::StalkDouble)||
-      (continuousApLastTx.valid&&continuousApLastTx.route==route&&continuousApLastTx.id==0x3c2));
-  bool ok=true;
-  if(protectedInput){
-    const auto &stock=continuousApScrollStock;const auto &control=continuousApScrollControl;
-    ok=continuousApFsm.ownedRoute()==ContApRoute::None&&!continuousApEchoAmbiguous&&stock.valid&&stock.route==route&&stock.epoch==e&&
-       (uint32_t)(now-stock.rxMs)<=250&&control.seen&&control.valid&&control.value==0&&control.epoch==e&&
-       (!continuousApLastTx.valid||(int32_t)(control.rxMs-continuousApLastTxMs)>0)&&!canTxAdministrativeHold&&!canUsbTxHeld()&&mcpReady&&twaiReady;
-    if(ok){memcpy(data,stock.data,8);tsl9InputApplyCommandPure(*(Tsl9InputCommandPure*)arg,data);}
-  }
-  portEXIT_CRITICAL(&continuousApMux);return ok;
-}
-static inline bool continuousApValidateNagCanA(struct can_frame *out,void *arg){return continuousApComposeNag(ContApRoute::BodyA,out->data,arg);}
-static inline bool continuousApValidateNagCanB(twai_message_t *out,void *arg){return continuousApComposeNag(ContApRoute::ChassisB,out->data,arg);}
+
 
 // Publish physical cancellation under the same barrier as enqueue admission.
 static inline bool continuousApCommitCancel(uint32_t now){
@@ -184,3 +171,5 @@ static inline void continuousApControlLoad(){
   if(prefs.begin("features",true)){continuousApConfigDecodePure(prefs.getUInt("contApCfg",0x100u),loaded);prefs.end();}
   portENTER_CRITICAL(&continuousApMux);continuousApConfig=loaded;++continuousApGeneration;portEXIT_CRITICAL(&continuousApMux);
 }
+
+#include "can_input_arbitration.h"

@@ -1,4 +1,5 @@
 #pragma once
+#include "tesla_can_fields_pure.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -50,9 +51,7 @@ static inline uint16_t countryOverrideRead238CountryPure(const uint8_t *data, ui
 
 static inline uint8_t countryOverride238ChecksumPure(const uint8_t *data) {
   if (data == nullptr) return 0u;
-  uint16_t sum = 0x38u + 0x02u;
-  for (uint8_t i = 0; i < 7u; ++i) sum += data[i];
-  return (uint8_t)sum;
+  return teslaAdditiveChecksumPure(0x238u, data);
 }
 
 static inline bool countryOverrideApply238Pure(uint8_t *data, uint8_t len,

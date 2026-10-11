@@ -1,4 +1,5 @@
 #pragma once
+#include "tesla_can_fields_pure.h"
 
 #include <stdint.h>
 #include "isa_suppression_pure.h"
@@ -94,15 +95,12 @@ static inline const char *tsl9DowngradeWindowNamePure(uint8_t window) {
 }
 
 static inline bool tsl9ApActivePure(uint8_t apState) {
-  return apState >= 3u && apState <= 6u;
+  return teslaApStateActivePure(apState);
 }
 
 static inline uint8_t tsl9ChecksumForCanIdPure(
     uint16_t canId, const uint8_t data[8]) {
-  uint16_t sum = (uint16_t)((canId >> 8) & 0x07u) +
-                 (uint16_t)(canId & 0xFFu);
-  for (uint8_t i = 0; i < 7u; ++i) sum += data[i];
-  return (uint8_t)sum;
+  return teslaAdditiveChecksumPure((uint16_t)(canId & 0x7FFu), data);
 }
 
 static inline uint8_t tsl9Checksum399Pure(const uint8_t data[8]) {

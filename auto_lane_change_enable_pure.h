@@ -1,4 +1,5 @@
 #pragma once
+#include "tesla_can_fields_pure.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -33,16 +34,13 @@ static inline uint8_t uiAutoLaneChangeReadRawPure(const uint8_t *data, uint8_t d
 static inline bool uiAutoLaneChangeGateOpenPure(bool labEnabled, bool featureEnabled,
                                                  bool dasStateValid, uint8_t dasState4) {
   if (!labEnabled || !featureEnabled || !dasStateValid) return false;
-  return dasState4 == 3 || dasState4 == 4 || dasState4 == 5 || dasState4 == 6;
+  return teslaApStateActivePure(dasState4);
 }
 
 // Tesla 0x293 checksum: low CAN-ID byte + high CAN-ID byte + data[0..6], modulo 256.
 static inline uint8_t ui293ChecksumPure(const uint8_t *data) {
   if (!data) return 0;
-  uint16_t sum = (uint16_t)(UI_CHASSIS_CONTROL_ID_PURE & 0xFFu) +
-                 (uint16_t)(UI_CHASSIS_CONTROL_ID_PURE >> 8);
-  for (uint8_t i = 0; i < 7; ++i) sum = (uint16_t)(sum + data[i]);
-  return (uint8_t)(sum & 0xFFu);
+  return teslaAdditiveChecksumPure(UI_CHASSIS_CONTROL_ID_PURE, data);
 }
 
 // Force UI_autoLaneChangeEnable (bits 24..25 = byte[3] bits 0..1) to ON,

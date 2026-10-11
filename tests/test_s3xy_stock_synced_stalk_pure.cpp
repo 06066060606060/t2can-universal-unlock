@@ -1,7 +1,7 @@
 #include <cassert>
 #include <cstdint>
 
-#include "../blinker_tx_policy_pure.h"
+#include "../auto_blinker_pure.h"
 
 static void one_button_press_is_consumed_by_exactly_one_idle_stock_frame() {
   BlinkerTxRequestStatePure request = {};

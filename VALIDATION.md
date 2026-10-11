@@ -1,3 +1,90 @@
+# T2CAN Universal v3.29.1 — Validation
+
+## Continuous AP brake reception compatibility — 2026-10-11
+
+- Scope: 0x145 ESP brake reception on both physical ports, independent arbitration with existing Chassis 0x39D, and actual brake source diagnostics. Torque and gear mapping are outside this change.
+- Behavioral RED: pure decoder rejects ESP0x145 before the change; the production runtime cannot issue a gesture when 0x145 is the only brake source; API diagnostics fail to report actual0x145 bus/address. All RED checks compile/start successfully and reach assertions.
+- Brake freshness stays at 250 ms inclusive. Applied/invalid current-epoch sources remain blocking even when stale until their own valid release or epoch reset. One source cannot erase another source's unsafe state.
+- The reported Juniper's0x145 availability and pedal transitions remain unverified. Supporting reception does not prove that this frame is present on its connected ports or resolve the separate Body torque issue.
+- Focused validation passes 9/9 Python suites and 1/1 pure C++ suite; API/diagnostics and source/embedded brake-provenance browser checks also pass. Runtime coverage includes 0x145-only gestures on each physical port, invalid DLC and values, cross-source conflicting releases, stale unsafe retention, same-batch cancellation, final TX brake injection, 250/251 ms and clock wrap, and epoch reset.
+- Independent selection/runtime/FSM review found no actionable defect. Stale unsafe retention is intentional and requires that source's own valid release or a CAN epoch reset; a fresh release elsewhere cannot override it.
+- Final fresh completion passes 70/70 Python suites, 38/38 C++ binaries, and 22/22 JavaScript/browser suites in 157.558 seconds. Report: /var/folders/8l/h7xy4zp54zzcy1tbk6hx87b80000gn/T/tesla-unlock-host-h9g4531l.json.
+- Dashboard source and header remain byte-identical to v3.29.0: 364,643 source / 354,220 minified / 77,947 gzip bytes. Header SHA-256: 94a58709f45d615e7410374121f2077996ced4f9252ff1df2fcd1d53bb83a93f. No layout/style change; the API supplies actual selected brake provenance.
+- ESP32-S3 target and deterministic paired BIN/source ZIP evidence is recorded separately in releases/T2CAN-Universal-v3.29.1-LP_YL/build-evidence.json when the build succeeds. This source document is frozen before packaging; host success alone is not target success.
+- No physical flash, boot, serial/CAN access, live transmission, vehicle or road testing. No full release ZIP, publication, or Git commit.
+
+# T2CAN Universal v3.29.0 — Validation
+
+## Continuous AP Body connection and 500 ms scroll freshness — 2026-10-11
+
+- Scope: Body + Chassis-only Continuous AP support and a shared 500 ms scroll input lifetime. Existing saved enabled settings on Party + Chassis remain inactive; enabling unsupported methods is rejected. Other features keep their existing route policy.
+- Behavioral RED: the pure profile capability matrix and production runtime Party activation regression fail with assertions before the route change. A separate pure final-admission/readiness regression fails for a 251 ms scroll observation before the freshness change.
+- Regression boundaries include 250/251/316/499/500/501 ms, unsigned clock wrap, unchanged brake freshness, unsupported saved settings, API enable rejection, and source/embedded dashboard capability behavior.
+- Torque/brake/gear parsing, NVS schema, gesture timing, retry limits, and dashboard design are unchanged. Torque identity and brake availability on the reported 2026 Juniper remain unverified. This build does not claim to resolve those separate blockers.
+- Independent production review found no actionable defect in route rejection, final TX admission, NAG compatibility, or stale/invalid input handling.
+- Final fresh completion passes 70/70 Python suites, 38/38 C++ binaries, and 22/22 JavaScript/browser suites in 157.692 seconds. Report: /var/folders/8l/h7xy4zp54zzcy1tbk6hx87b80000gn/T/tesla-unlock-host-rbojz74u.json. The existing source/embedded browser suite verifies unsupported saved-enabled Party settings and rejected updates.
+- Dashboard remains byte-identical to v3.28.7: 364,643 source / 354,220 minified / 77,947 gzip bytes. No layout or control design change. index_html.h SHA-256: 94a58709f45d615e7410374121f2077996ced4f9252ff1df2fcd1d53bb83a93f.
+- ESP32-S3 target and deterministic paired BIN/source ZIP evidence is recorded separately in releases/T2CAN-Universal-v3.29.0-LP_YL/build-evidence.json when the build succeeds. This source document is frozen before packaging; host success alone is not target success.
+- No physical flash, boot, serial/CAN access, live transmission, vehicle or road testing. No full release ZIP, publication, or Git commit.
+
+# T2CAN Universal v3.28.7 — Validation
+
+## Continuous AP precision review — 2026-10-10
+
+- Field report: v3.28.3, unspecified vehicle/topology/method and failure stage. Review confirms the OFF-ordering and NAG cleanup defects in that version and v3.28.6, plus a same-batch intent loss path in the latest implementation, without claiming the field cause is proven.
+- Behavioral RED: indicator OFF before AP loss fails the production lane-change regression; pending real NAG scheduler CENTER cleanup fails the production route/transport integration regression. Both compile and reach runtime assertions. Prior v3.28.3 focused baseline passed 8 Python and 3 C++ tests that omitted these sequences.
+- Repair retains already observed lane-change intent only inside the existing 1,000 ms indicated AP evidence deadline. OFF cannot establish/refresh intent. Regression covers inclusive/exclusive lifetime, isolated OFF RX, uint32 wrap, hazards, invalid control/turn and physical clicks with same-batch recovery.
+- NAG regression uses the actual scheduler with production Continuous AP observers and both transport validators. It verifies protected Body A and Chassis B CENTER cleanup, neutral stock reconstruction, subsequent AP press, and rejection of new STEP, forged CENTER, mode/tick mismatch, stale stock, transport holds, physical press and prepared/accepted AP press preemption.
+- Batch behavioral RED: indicated-active and AP loss drained before a service call fail the production lane-change regression. The observer now records only fully validated intent without issuing commands. Tests cover both sides of uint32 wrap, same-batch brake/gear/hazard/AP-fault/click cancellation, missing torque and manual quiet time.
+- Production changes are limited to continuous_ap_fsm_pure.h, continuous_ap_runtime.h and can_input_arbitration.h. The shared host fixture adds the existing production snapshot mode field. Dashboard source/header, profile capabilities, NVS schema, timings and retry limits remain unchanged.
+- Independent FSM/runtime/arbitration review found no remaining actionable issue. Final focused tests pass 11 Python and 4 C++ files. Final fresh completion passes 70/70 Python, 38/38 C++ and 22/22 JavaScript/browser suites in 156.777 seconds; report: /var/folders/8l/h7xy4zp54zzcy1tbk6hx87b80000gn/T/tesla-unlock-host-2yklv7dr.json. Dashboard remains 364,643 source / 354,220 minified / 77,947 gzip bytes, byte-identical to v3.28.6. No new test file is added. ESP32-S3 compilation and deterministic paired BIN/source ZIP evidence will be stored in releases/T2CAN-Universal-v3.28.7-LP_YL/build-evidence.json.
+- No physical flash, boot, live OTA, serial/CAN access, vehicle or road testing. Original completed packages remain immutable; no full release ZIP, publication or Git commit.
+
+# T2CAN Universal v3.28.6 — Validation
+
+## Source package consolidation — 2026-10-10
+
+- Scope is source organization and regression consolidation only. No CAN behavior, NVS schema/defaults, dashboard design or endpoint behavior is intentionally changed.
+- Production root headers: 67 to 54. Twelve complete removed-header bodies and eight destination bodies preserve definitions after include/pragma normalization; old scroll runtime remains test-only and current interval helpers are preserved. Local include graph has no cycles or dangling old-header references.
+- Python entrypoints: 158 to 70 (including support files, 161 to 74). 103 contracts become 17 suites, three Country host files become one suite and 31 other files gain feature names. For all 106 merged sources, retained assertion AST plus the 61 centralized identity ledger entries matches the original assertion AST multiset. Existing 55 unittest methods remain explicitly executed. Import isolation passes 18/18 modules.
+- C++ entrypoints: 72 to 38. 48 original bodies become 14 suites with all 973 original assertion sites preserved; each case is dispatched and namespace-isolated. Historical Mode H fixture bytes and the legacy scroll engine body are unchanged. Current/legacy scroll interval checks cover all 65,536 uint16 values.
+- JavaScript entrypoints: 26 to 22. Seven browser case bodies are preserved within three suites. Production and embedded dashboard bytes match v3.28.5 exactly.
+- Focused verification: Python feature suites 17/17, host fixtures 48/48, C++ 38/38 and merged browser suites 3/3 pass. Workflow/preparation tool contract suite passes 122/122. Independent reviews cover headers, C++ assertions, Python AST/dispatch, browser isolation and source preparation safety.
+- tests/COVERAGE.md records the consolidated ownership and individual verification mapping. The permanent manifest checks mapped callables without freezing assertion counts or preventing new regression methods.
+- Completed v3.28.5 remains unchanged across all 385 files in the starting manifest. The new package omits its build cache, obsolete generated preview and historical plans; original copies are retained.
+- Final fresh completion passes 70/70 Python/static files, 38/38 C++ host binaries and 22/22 JavaScript/browser suites in 160.001 seconds. Report: /var/folders/8l/h7xy4zp54zzcy1tbk6hx87b80000gn/T/tesla-unlock-host-zwnjjnn1.json. Distributable source files decrease from 362 to 220. Dashboard sizes remain 364,643 source / 354,220 minified / 77,947 gzip bytes. ESP32-S3 compile/link and deterministic paired BIN/source ZIP generation follow; authoritative target/artifact evidence is stored in releases/T2CAN-Universal-v3.28.6-LP_YL/build-evidence.json. This document is frozen before packaging.
+- No physical flash, boot, live OTA, serial/CAN access, vehicle or road testing. No commit, push, full release ZIP or publication.
+
+# T2CAN Universal v3.28.5 — Validation
+
+## Shared implementation cleanup and settings recovery — 2026-10-10
+
+- Scope: shared CAN route mechanics, input arbitration ownership, BLE ownership/notification scan, formatting/parsing/persistence helpers, Research buffer allocation and confirmed settings transactions.
+- Completed v3.28.4 remains byte-identical across all 364 files in the starting manifest.
+- DMS POST+GET double failure was reproduced in Chromium as EXPECTED-RED before the behavior fix. Independent review found sustained slow-GET polling starvation; it was reproduced as EXPECTED-RED and corrected with epoch-scoped GET coalescing.
+- Settings source and generated dashboard pass 100 new cases in total, including sustained 800/1500 ms polling with slower GET responses. Related JavaScript files pass 7/7. Both artifacts pass 320/390/430 px light/dark checks; CSS blocks are unchanged. Representative screenshots were inspected.
+- TSL9 original/current route comparison passes 256 scenarios including lock, clock, RNG, transmit, cleanup and counter traces. Additive checksums pass 524,288 combinations; all 256 AP-state inputs are checked. Previous Mode H differential coverage is retained.
+- BLE notification parser matches the original on 237,273 payloads. Host-only microbenchmarks showed reduced scan time; no ESP32 timing improvement is claimed. BLE owner tests cover 96 auto-connect cases and 64 cleanup/readback cases.
+- Text tests compare 196,608 byte-pair escape cases and 198,147 length/capacity hex cases; BLE escaping uses the original replacement order as its oracle. Adapter tests cover embedded NUL, null input, nested JSON labels and 8191/8192/8193-byte CSV boundaries.
+- Independent cross-review is complete. Its slow-poll finding is fixed and independently rechecked. CRC lookup/prefilter changes without measured benefit are not included.
+- Final fresh firmware_workflow.py completion passes **158/158 original Python/static files in 157 execution units, 72/72 C++ host binaries and 26/26 JavaScript/browser files** in 167.393 seconds. Report: /var/folders/8l/h7xy4zp54zzcy1tbk6hx87b80000gn/T/tesla-unlock-host-d5hlr8u3.json. Log: /private/tmp/t2can-v3285-completion.log.
+- Dashboard generation: **364,643 source / 354,220 minified / 77,947 Zopfli gzip bytes**. Source/embedded functional checks and generated-header host compilation pass.
+- ESP32-S3 compile/link and deterministic paired BIN/source ZIP generation follow completion using tools/build_ota.py. Their authoritative results, tool versions, flash/RAM figures, artifact hashes and byte-exact source verification are recorded externally in releases/T2CAN-Universal-v3.28.5-LP_YL/build-evidence.json; this source document is frozen before that packaging step. No target success is inferred from host tests.
+- No physical flash, boot, live OTA, serial/CAN access, vehicle or road test is performed. No commit, push, full release ZIP or publication is performed.
+
+# T2CAN Universal v3.28.4 — Validation
+
+## Mode H Rev4 consolidation — 2026-10-10
+- Scope: internal Mode H pure/runtime ownership and naming only. Pure V1/V3 dependencies required by Rev4 are consolidated into mode_h_pure.h; inactive old engines are retained only in test fixtures. mode_h_runtime.h is included at the original declaration position in can_core.h.
+- No CAN timing, gates, output arithmetic, random draw sequence, NVS schema/defaults, persisted variant 1, API strings or dashboard behavior changed. Dashboard source and embedded header are byte-identical to completed v3.28.3.
+- Structural RED reached the assertion that the production sketch still included the legacy chain. This is architectural evidence, not a claim of a pre-existing behavior failure. The final ownership test also pins independent oracle hashes and rejects legacy production includes.
+- Differential oracle: 1,536 timelines / 3,072,000 steps, 4,096 carrier inputs, 16,384 Hands-On decisions, 8 migrations, 81 validity cases and 64 visual edges. Every named state/config/output member is compared; 32 compile-time size/alignment/offset assertions cover persisted configuration layout on the host compiler. Covers 64 seeds, all 3 Hands-On policies, time rollover, motion/freshness gates, torque limits, resets/reseeds and visual rescue.
+- Independent read-only review found no actionable defect. Retained pure definitions match the prior version after exact identifier mapping; expanded core/runtime matches after removing extraction comments/whitespace. web_api.h and forward declarations match after identifier mapping, preserving API strings.
+- Final fresh firmware_workflow.py completion passes **154/154 original Python/static files in 153 execution units, 69/69 C++ host binaries and 25/25 JavaScript/browser files**. Elapsed 169.362 seconds. Log: /private/tmp/t2can-v3284-completion.log. Report: /var/folders/8l/h7xy4zp54zzcy1tbk6hx87b80000gn/T/tesla-unlock-host-ao5r3_6p.json.
+- Dashboard baseline: **364,256 source / 354,094 minified / 77,649 Zopfli gzip bytes**; unchanged source/header hashes and binary content are checked during packaging. Host tests verify generated-header compilation and asset budgets.
+- ESP32-S3 compile/link and paired deterministic BIN/source ZIP generation follow completion using tools/build_ota.py. Their authoritative results, compiler/core versions, memory figures, hashes and source-byte verification are recorded externally in releases/T2CAN-Universal-v3.28.4-LP_YL/build-evidence.json; this source document is frozen before that atomic packaging step. No target success is inferred from host tests.
+- Original v3.28.3 remains byte-identical across all 353 files in the starting manifest. No device flash, boot, real OTA, serial/CAN access, vehicle or road tests were performed. No commit, push, full release ZIP or publication was performed.
+
 # T2CAN Universal v3.28.3 — Validation
 
 ## OTA receive and diagnostics hotfix — 2026-10-10

@@ -27,4 +27,4 @@ const row = html.indexOf('id="driverWindowLabRow"');
 const panel = html.indexOf('id="panelLabDriverWindow"');
 assert(row >= 0 && panel > row, 'LAB row must open a later detail panel');
 
-console.log('PASS v3.28.3 driver-window LAB dashboard contract');
+console.log('PASS v3.29.1 driver-window LAB dashboard contract');

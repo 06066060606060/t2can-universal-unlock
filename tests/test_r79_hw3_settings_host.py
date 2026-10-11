@@ -30,9 +30,9 @@ code = r'''
 #include <vector>
 #include <string>
 #include <map>
-#include "r79_ap_gate_pure.h"
 #include "r79_fixed_policy_pure.h"
-#include "r79_mode2_pure.h"
+#include "r79_fixed_policy_pure.h"
+#include "r79_fixed_policy_pure.h"
 #include "vehicle_profile.h"
 struct String:std::string {
  using std::string::string;
@@ -93,6 +93,7 @@ constexpr uint8_t R79LAB_TX_NONE=0,R79LAB_TX_PERIODIC=3;
 void setCanTxAdministrativeHold(bool){}
 void canTxCancellationGenerationAdvance(volatile uint32_t*g){++*g;}
 String r79StatsToJson(){return "{}";}
+#include "text_format_arduino.h"
 struct Server {
  std::map<String,String> args;int status=0;String body;
  bool hasArg(const char*k){return args.count(k);}

@@ -1,3 +1,4 @@
+#include "tesla_can_fields_pure.h"
 #include "vision_speed_control_pure.h"
 #pragma once
 
@@ -1610,9 +1611,7 @@ static bool manualDrivingGateOpen(uint32_t now) {
 }
 
 static uint8_t ui334Checksum(const uint8_t *data) {
-  uint8_t sum = (uint8_t)(0x34 + 0x03); // low byte 0x34 + high-ID nibble 0x3
-  for (uint8_t i=0;i<7;i++) sum = (uint8_t)(sum + data[i]);
-  return sum;
+  return teslaAdditiveChecksumPure(0x334u, data);
 }
 
 // Mode changes get one best-effort immediate 0x334 TX from the newest real
@@ -2334,35 +2333,34 @@ static void tsl9InputResetCounters() {
   portEXIT_CRITICAL(&tsl9InputMux);
 }
 
-static void tsl9InputObserveCanA(const struct can_frame &incoming) {
-  if (!activeProfileTsl9InputOnBodyCanA() || incoming.can_dlc < 8 ||
-      tsl9InputMuxPure(incoming.data) != TSL9_INPUT_MUX1_PURE) return;
+template <typename Frame>
+static void tsl9InputObserveRoute(const Frame &incoming, Frame &cached,
+                                  volatile bool &valid, volatile uint32_t &lastMs) {
   const uint32_t now = (uint32_t)millis();
   const int8_t left = tsl9InputDecodeSignedSixBitPure(incoming.data[2]);
   const int8_t right = tsl9InputDecodeSignedSixBitPure(incoming.data[3]);
   portENTER_CRITICAL(&tsl9InputMux);
-  tsl9InputCanATemplate = incoming;
-  tsl9InputCanATemplateValid = true;
-  tsl9InputCanATemplateMs = now;
+  cached = incoming;
+  valid = true;
+  lastMs = now;
   tsl9InputMux1Rx++;
   tsl9InputScheduler.observeManualTicks(left, right, now);
   portEXIT_CRITICAL(&tsl9InputMux);
+}
+
+static void tsl9InputObserveCanA(const struct can_frame &incoming) {
+  if (!activeProfileTsl9InputOnBodyCanA() || incoming.can_dlc < 8 ||
+      tsl9InputMuxPure(incoming.data) != TSL9_INPUT_MUX1_PURE) return;
+  tsl9InputObserveRoute(incoming, tsl9InputCanATemplate,
+      tsl9InputCanATemplateValid, tsl9InputCanATemplateMs);
 }
 
 static void tsl9InputObserveCanB(const twai_message_t &incoming) {
   if (activeProfileTsl9InputOnBodyCanA() ||
       !activeProfileTsl9InputSupported() || incoming.data_length_code < 8 ||
       tsl9InputMuxPure(incoming.data) != TSL9_INPUT_MUX1_PURE) return;
-  const uint32_t now = (uint32_t)millis();
-  const int8_t left = tsl9InputDecodeSignedSixBitPure(incoming.data[2]);
-  const int8_t right = tsl9InputDecodeSignedSixBitPure(incoming.data[3]);
-  portENTER_CRITICAL(&tsl9InputMux);
-  tsl9InputCanBTemplate = incoming;
-  tsl9InputCanBTemplateValid = true;
-  tsl9InputCanBTemplateMs = now;
-  tsl9InputMux1Rx++;
-  tsl9InputScheduler.observeManualTicks(left, right, now);
-  portEXIT_CRITICAL(&tsl9InputMux);
+  tsl9InputObserveRoute(incoming, tsl9InputCanBTemplate,
+      tsl9InputCanBTemplateValid, tsl9InputCanBTemplateMs);
 }
 
 static Tsl9InputInputsPure tsl9InputInputsSnapshot(uint32_t now,
@@ -2451,25 +2449,26 @@ static bool tsl9InputSendCanB(const twai_message_t &stock,
   return err == ESP_OK;
 }
 
-static void tsl9InputServiceCanA() {
-  if (continuousApOwnsInputRoute(ContApRoute::BodyA)) return;
-  if (!activeProfileTsl9InputOnBodyCanA()) return;
+template <typename Frame>
+static void tsl9InputServiceRoute(bool onBodyCanA, const Frame &cached,
+    const volatile bool &templateValid, const volatile uint32_t &templateMs,
+    bool (*send)(const Frame &, const Tsl9InputCommandPure &)) {
   const uint32_t now = (uint32_t)millis();
-  Tsl9InputInputsPure in = tsl9InputInputsSnapshot(now, true);
+  Tsl9InputInputsPure in = tsl9InputInputsSnapshot(now, onBodyCanA);
   Tsl9InputCommandPure command = {};
-  struct can_frame stock = {};
+  Frame stock = {};
   bool haveTemplate = false;
   portENTER_CRITICAL(&tsl9InputMux);
-  haveTemplate = tsl9InputCanATemplateValid;
+  haveTemplate = templateValid;
   in.templateFresh = haveTemplate &&
-      (uint32_t)(now - tsl9InputCanATemplateMs) <=
+      (uint32_t)(now - templateMs) <=
           tsl9InputTemplateMaxAgeMsPure(in.mode);
   command = tsl9InputScheduler.service(in);
-  if (haveTemplate) stock = tsl9InputCanATemplate;
+  if (haveTemplate) stock = cached;
   portEXIT_CRITICAL(&tsl9InputMux);
   if (command.kind == TSL9_INPUT_COMMAND_NONE_PURE) return;
   const bool ok = haveTemplate && in.templateFresh &&
-      tsl9InputSendCanA(stock, command);
+      send(stock, command);
   Tsl9InputCommandPure cleanup = {};
   const uint32_t randomValue = command.kind == TSL9_INPUT_COMMAND_STEP_PURE
       ? esp_random() : 0u;
@@ -2481,7 +2480,7 @@ static void tsl9InputServiceCanA() {
   portEXIT_CRITICAL(&tsl9InputMux);
   if (cleanup.kind != TSL9_INPUT_COMMAND_NONE_PURE) {
     const bool cleanupOk = haveTemplate && in.templateFresh &&
-        tsl9InputSendCanA(stock, cleanup);
+        send(stock, cleanup);
     portENTER_CRITICAL(&tsl9InputMux);
     if (cleanupOk) tsl9InputTxOk++; else tsl9InputTxFail++;
     tsl9InputCleanupTx++;
@@ -2491,45 +2490,19 @@ static void tsl9InputServiceCanA() {
   }
 }
 
+static void tsl9InputServiceCanA() {
+  if (continuousApOwnsInputRoute(ContApRoute::BodyA)) return;
+  if (!activeProfileTsl9InputOnBodyCanA()) return;
+  tsl9InputServiceRoute(true, tsl9InputCanATemplate, tsl9InputCanATemplateValid,
+      tsl9InputCanATemplateMs, tsl9InputSendCanA);
+}
+
 static void tsl9InputServiceCanB() {
   if (continuousApOwnsInputRoute(ContApRoute::ChassisB)) return;
   if (activeProfileTsl9InputOnBodyCanA() ||
       !activeProfileTsl9InputSupported()) return;
-  const uint32_t now = (uint32_t)millis();
-  Tsl9InputInputsPure in = tsl9InputInputsSnapshot(now, false);
-  Tsl9InputCommandPure command = {};
-  twai_message_t stock = {};
-  bool haveTemplate = false;
-  portENTER_CRITICAL(&tsl9InputMux);
-  haveTemplate = tsl9InputCanBTemplateValid;
-  in.templateFresh = haveTemplate &&
-      (uint32_t)(now - tsl9InputCanBTemplateMs) <=
-          tsl9InputTemplateMaxAgeMsPure(in.mode);
-  command = tsl9InputScheduler.service(in);
-  if (haveTemplate) stock = tsl9InputCanBTemplate;
-  portEXIT_CRITICAL(&tsl9InputMux);
-  if (command.kind == TSL9_INPUT_COMMAND_NONE_PURE) return;
-  const bool ok = haveTemplate && in.templateFresh &&
-      tsl9InputSendCanB(stock, command);
-  Tsl9InputCommandPure cleanup = {};
-  const uint32_t randomValue = command.kind == TSL9_INPUT_COMMAND_STEP_PURE
-      ? esp_random() : 0u;
-  portENTER_CRITICAL(&tsl9InputMux);
-  if (ok) tsl9InputTxOk++; else tsl9InputTxFail++;
-  if (command.kind == TSL9_INPUT_COMMAND_CENTER_PURE) tsl9InputCleanupTx++;
-  cleanup = tsl9InputScheduler.onCommandResult(
-      command, ok, (uint32_t)millis(), randomValue);
-  portEXIT_CRITICAL(&tsl9InputMux);
-  if (cleanup.kind != TSL9_INPUT_COMMAND_NONE_PURE) {
-    const bool cleanupOk = haveTemplate && in.templateFresh &&
-        tsl9InputSendCanB(stock, cleanup);
-    portENTER_CRITICAL(&tsl9InputMux);
-    if (cleanupOk) tsl9InputTxOk++; else tsl9InputTxFail++;
-    tsl9InputCleanupTx++;
-    (void)tsl9InputScheduler.onCommandResult(
-        cleanup, cleanupOk, (uint32_t)millis(), 0u);
-    portEXIT_CRITICAL(&tsl9InputMux);
-  }
+  tsl9InputServiceRoute(false, tsl9InputCanBTemplate, tsl9InputCanBTemplateValid,
+      tsl9InputCanBTemplateMs, tsl9InputSendCanB);
 }
 
 static bool tsl9InputQuiesceForConfig() {
@@ -4787,31 +4760,7 @@ static void nvsSchemaFinalize() {
     ok = false;
   }
 
-  // s3xy/addr is a legacy single-device target. s3xyAutoLoadConfig() runs
-  // before this finalizer and migrates it into the registry when needed.
-  if (p.begin("s3xy", false)) {
-    if (s3xyRegisteredCount() > 0) p.remove("addr");
-    p.end();
-  } else {
-    ok = false;
-  }
-
-  // Raw bN is the canonical persisted 3D49 identity. Remove the legacy iN
-  // string only after the raw bytes can be read back from NVS successfully.
-  if (p.begin("s3xyreg", false)) {
-    for (uint8_t i = 0; i < S3XY_MAX_DEVICES; i++) {
-      String sb = "b" + String(i);
-      String si = "i" + String(i);
-      const size_t rawLen = p.getBytesLength(sb.c_str());
-      if (rawLen == 0 || rawLen > S3XY_PEER_ID_MAX) continue;
-      uint8_t raw[S3XY_PEER_ID_MAX] = {};
-      const size_t got = p.getBytes(sb.c_str(), raw, sizeof(raw));
-      if (got == rawLen) p.remove(si.c_str());
-    }
-    p.end();
-  } else {
-    ok = false;
-  }
+  if (!s3xyFinalizeLegacyKeys()) ok = false;
 
   if (!ok) {
     T2CAN_SERIAL_PRINTLN("NVS schema migration incomplete; will retry next boot");
@@ -4837,19 +4786,23 @@ static void nvsSchemaFinalize() {
   T2CAN_SERIAL_PRINTLN("NVS schema marker write failed; will retry next boot");
 }
 
+// Call under canTxBarrierMutex; publish runtime state only after success.
+static bool featureBoolPersist(const char *key, bool enabled) {
+    Preferences p;
+    if (!p.begin("features", false)) return false;
+    const bool saved = p.putBool(key, enabled) > 0u;
+    p.end();
+    return saved;
+}
+
 static bool driverMonitoringControlApply(bool enabled) {
     if (!canTxBarrierMutex ||
         xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
-    Preferences p;
-    bool saved = false;
-    if (p.begin("features", false)) {
-      saved = p.putBool("dmsDisable", enabled) > 0u;
-      p.end();
-      if (saved) {
+    const bool saved = featureBoolPersist("dmsDisable", enabled);
+    if (saved) {
         portENTER_CRITICAL(&driverMonitoringControlMux);
         driverMonitoringDisableEnabled = enabled;
         portEXIT_CRITICAL(&driverMonitoringControlMux);
-      }
     }
     xSemaphoreGive(canTxBarrierMutex);
     return saved;
@@ -4858,12 +4811,8 @@ static bool driverMonitoringControlApply(bool enabled) {
 static bool isaSuppressionControlApply(bool enabled) {
     if (!canTxBarrierMutex ||
         xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
-    Preferences p;
-    bool saved = false;
-    if (p.begin("features", false)) {
-      saved = p.putBool("isaSuppress", enabled) > 0u;
-      p.end();
-      if (saved) {
+    const bool saved = featureBoolPersist("isaSuppress", enabled);
+    if (saved) {
         portENTER_CRITICAL(&isaSuppressionControlMux);
         if (isaSuppressionEnabled != enabled) {
           isaSuppressionEnabled = enabled;
@@ -4871,7 +4820,6 @@ static bool isaSuppressionControlApply(bool enabled) {
               &isaSuppressionGeneration, 1u, __ATOMIC_ACQ_REL);
         }
         portEXIT_CRITICAL(&isaSuppressionControlMux);
-      }
     }
     xSemaphoreGive(canTxBarrierMutex);
     return saved;

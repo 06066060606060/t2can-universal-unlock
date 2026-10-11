@@ -16,7 +16,7 @@ code = r'''
 #include <cstdint>
 #include "summon_state_pure.h"
 #include "runtime_gate_pure.h"
-#include "r79_ap_gate_pure.h"
+#include "r79_fixed_policy_pure.h"
 int stateMux = 0;
 void portENTER_CRITICAL(int*) {}
 void portEXIT_CRITICAL(int*) {}

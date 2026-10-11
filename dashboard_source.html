@@ -573,8 +573,8 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="sectionhead"><div class="sectiontitle">Features</div><div class="sectionnote">Vehicle functions</div></div>
 <section class="card">
 <div class="listrow clickable" data-panel="panelNag" id="nagSettingsRow"><div><div class="listkey">Nag Killer</div><div class="listdesc" id="setNagDesc">Reduce steering-wheel reminders during Autopilot.</div></div><span class="chev">›</span></div>
-<div class="listrow" id="isaSuppressionRow"><div><div class="listkey">ISA Suppression</div><div class="listdesc" id="isaSuppressionDesc">Reduce ISA warning chimes during Autopilot.</div></div><label class="toggle"><input id="isaSuppressionToggle" type="checkbox" disabled/><span class="track"></span></label></div>
-<div class="listrow" id="driverMonitoringRow"><div><div class="listkey">Disable Driver Monitoring</div><div class="listdesc" id="driverMonitoringDesc">Request cabin-camera monitoring off during Autopilot.</div></div><label class="toggle"><input id="driverMonitoringToggle" type="checkbox" disabled/><span class="track"></span></label></div>
+<div class="listrow" id="isaSuppressionRow"><div><div class="listkey">ISA Suppression</div><div class="listdesc" id="isaSuppressionDesc">Reduce ISA warning chimes during Autopilot.</div><div class="listdesc" id="isaSuppressionSaveState" aria-live="polite"></div></div><label class="toggle"><input id="isaSuppressionToggle" type="checkbox" disabled/><span class="track"></span></label></div>
+<div class="listrow" id="driverMonitoringRow"><div><div class="listkey">Disable Driver Monitoring</div><div class="listdesc" id="driverMonitoringDesc">Request cabin-camera monitoring off during Autopilot.</div><div class="listdesc" id="driverMonitoringSaveState" aria-live="polite"></div></div><label class="toggle"><input id="driverMonitoringToggle" type="checkbox" disabled/><span class="track"></span></label></div>
 <div class="listrow clickable" data-panel="panelVisionControl"><div><div class="listkey">Visual Speed Control</div><div class="listdesc">Request visual speed control off.</div></div><div class="rowRight"><span class="value" id="visionControlRowState">OFF</span><span class="chev">›</span></div></div>
 <div class="listrow clickable" data-panel="panelBlink" id="blinkSettingsRow"><div><div class="listkey">Auto Blinker</div><div class="listdesc" id="setBlinkDesc">Signal automatically for NOA lane changes.</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelSummon"><div><div class="listkey">Summon Status</div><div class="listdesc" id="setSumDesc">View the current Summon session and status.</div></div><span class="chev">›</span></div>
@@ -1146,40 +1146,73 @@ async function fetchLab(prefetched=null){try{const s=prefetched||await jget('/ap
   if($('labUlcTx'))$('labUlcTx').textContent=s.txOk+' / '+s.txFail;
   if($('labUlcBlocked'))$('labUlcBlocked').textContent=s.gateBlocked;
 }catch(e){}}
-let countryOverrideSaved=null,countryOverrideSaving=false,countryOverrideEpoch=0;
-function renderCountryOverrideLab(s){s=s||{};if(!countryOverrideSaving)countryOverrideSaved=s;const raw=Number(s.countryMode),mode=raw===1||raw===2||raw===3?raw:0,mapRaw=Number(s.mapMode),map=mapRaw===1||mapRaw===2?mapRaw:0,name=['STOCK','US','KOREA','NEW ZEALAND'][mode],supported=s.countrySupported===true,gate=supported&&(mode!==0||map!==0)&&(s.gateAllowed===true||s.countryGateOpen===true),sel=$('countryOverrideMode'),mapSel=$('countryMapMode');if(!countryOverrideSaving){if(sel&&document.activeElement!==sel)sel.value=String(mode);if(mapSel&&document.activeElement!==mapSel)mapSel.value=String(map)}if(sel)sel.disabled=countryOverrideSaving||!supported;if(mapSel)mapSel.disabled=countryOverrideSaving||!supported;$('countryOverrideRowState').textContent=(mode===3?'NZ':name)+' / '+['STOCK','US 0','KR 7'][map];$('countryOverrideGate').textContent=!supported?'UNSUPPORTED':mode===0&&map===0?'OFF · STOCK':gate?'OPEN · R79 ACTIVE':'BLOCKED';$('countryOverrideGate').className='labValueV '+(gate?'good':mode||map?'warn':'');$('countryOverrideRx').textContent=(s.countryRx238||0)+' / '+(s.countryRx7ffA||0)+' / '+(s.countryRx7ffB||0);$('countryOverrideBlocked').textContent=s.countryBlocked||0;$('countryOverrideTx').textContent=(s.countryTxOk||0)+' / '+(s.countryTxFail||0);const bus=Number(s.countryLastBus)===1?'CAN A'+(s.countryCanAName?' · '+s.countryCanAName:''):Number(s.countryLastBus)===2?'CAN B'+(s.countryCanBName?' · '+s.countryCanBName:''):'UNKNOWN BUS',id=Number(s.countryLastId)===0x238?'0x238':'0x7FF',page=Number(s.countryLastPage)>=0?(' · PAGE '+s.countryLastPage):'',result=s.countryLastResult||'NONE';$('countryOverrideLast').textContent=s.countryLastValid?(result+' · '+bus+' · '+id+page+' · '+(s.countryLastRaw||'—')+' · '+fmtMs(s.countryLastAgeMs)):'—';const stock=!!s.r79StockValid;$('countryR79StockBit19').textContent=stock?String(Number(s.r79StockBit19)?1:0):'—';$('countryR79StockBit47').textContent=stock?String(Number(s.r79StockBit47)?1:0):'—';$('countryR79StockMeta').textContent=stock?('VALID · '+fmtMs(s.r79StockAgeMs)+' · RX '+(s.r79StockRx||0)):'WAITING FOR 0x3FD MUX1';$('countryR79StockRaw').textContent=stock?(s.r79StockRaw||'—'):'—'}
-async function fetchCountryOverrideLab(){const epoch=countryOverrideEpoch;try{const s=await jget('/api/country/stats');if(epoch!==countryOverrideEpoch||countryOverrideSaving)return;renderCountryOverrideLab(s);$('countryOverrideSaveState').textContent='Settings ready'}catch(e){if(!countryOverrideSaved)$('countryOverrideSaveState').textContent='Settings unavailable · retrying'}}
+// Confirmed settings are published only after validated GET/POST responses.
+// A write invalidates older polls; an unknown result requires a fresh GET.
+function createSettingsController({url,validate,render,status,settle=()=>{}}){
+  const state={saved:null,saving:false,uncertain:true,epoch:0};
+  const show=message=>{render(state.saved);if(message)status(message)};
+  let refreshOwner=null;
+  state.refresh=()=>{
+    if(state.saving)return Promise.resolve();
+    if(refreshOwner&&refreshOwner.epoch===state.epoch)return refreshOwner.promise;
+    const owner={epoch:++state.epoch,promise:null};refreshOwner=owner;
+    owner.promise=(async()=>{
+      try{const saved=validate(await jget(url));if(owner.epoch!==state.epoch||state.saving)return;state.saved=saved;state.uncertain=false;show('Settings ready')}
+      catch(e){if(owner.epoch!==state.epoch||state.saving)return;state.uncertain=true;show('Settings unavailable · retrying')}
+      finally{if(refreshOwner===owner)refreshOwner=null}
+    })();
+    return owner.promise;
+  };
+  state.save=async writeUrl=>{
+    if(state.saving||state.uncertain||!state.saved){show();return}
+    state.saving=true;++state.epoch;show('Saving…');let message='Settings ready';
+    try{state.saved=validate(await featurePostJson(writeUrl));state.uncertain=false}
+    catch(e){
+      try{state.saved=validate(await jget(url));state.uncertain=false;message='Saved settings reloaded'}
+      catch(x){state.uncertain=true;message='Save result unknown · checking saved settings'}
+    }
+    finally{state.saving=false;++state.epoch;settle();show(message)}
+  };
+  return state;
+}
+function enabledSettingsResponse(s){if(!s||typeof s.enabled!=='boolean'||typeof s.supported!=='boolean')throw new Error('Settings unavailable');return s}
+function toggleSettingsStatus(id,message){$(id).textContent=message==='Settings ready'||message==='Saved settings reloaded'?'':message}
+function countrySettingsResponse(s){if(!s||typeof s.countrySupported!=='boolean'||!Number.isInteger(s.countryMode)||s.countryMode<0||s.countryMode>3||!Number.isInteger(s.mapMode)||s.mapMode<0||s.mapMode>2)throw new Error('Settings unavailable');return s}
+const countryOverrideControl=createSettingsController({url:'/api/country/stats',validate:countrySettingsResponse,render:renderCountryOverrideLab,status:message=>$('countryOverrideSaveState').textContent=message,settle:()=>{$('countryOverrideMode').blur();$('countryMapMode').blur()}});
+function renderCountryOverrideLab(s){s=s||{};const raw=Number(s.countryMode),mode=raw===1||raw===2||raw===3?raw:0,mapRaw=Number(s.mapMode),map=mapRaw===1||mapRaw===2?mapRaw:0,name=['STOCK','US','KOREA','NEW ZEALAND'][mode],supported=s.countrySupported===true,gate=!countryOverrideControl.uncertain&&supported&&(mode!==0||map!==0)&&(s.gateAllowed===true||s.countryGateOpen===true),sel=$('countryOverrideMode'),mapSel=$('countryMapMode');if(!countryOverrideControl.saving){if(sel&&document.activeElement!==sel)sel.value=String(mode);if(mapSel&&document.activeElement!==mapSel)mapSel.value=String(map)}if(sel)sel.disabled=countryOverrideControl.saving||countryOverrideControl.uncertain||!supported;if(mapSel)mapSel.disabled=countryOverrideControl.saving||countryOverrideControl.uncertain||!supported;$('countryOverrideRowState').textContent=(mode===3?'NZ':name)+' / '+['STOCK','US 0','KR 7'][map];$('countryOverrideGate').textContent=countryOverrideControl.uncertain?'UNAVAILABLE':!supported?'UNSUPPORTED':mode===0&&map===0?'OFF · STOCK':gate?'OPEN · R79 ACTIVE':'BLOCKED';$('countryOverrideGate').className='labValueV '+(gate?'good':mode||map?'warn':'');$('countryOverrideRx').textContent=(s.countryRx238||0)+' / '+(s.countryRx7ffA||0)+' / '+(s.countryRx7ffB||0);$('countryOverrideBlocked').textContent=s.countryBlocked||0;$('countryOverrideTx').textContent=(s.countryTxOk||0)+' / '+(s.countryTxFail||0);const bus=Number(s.countryLastBus)===1?'CAN A'+(s.countryCanAName?' · '+s.countryCanAName:''):Number(s.countryLastBus)===2?'CAN B'+(s.countryCanBName?' · '+s.countryCanBName:''):'UNKNOWN BUS',id=Number(s.countryLastId)===0x238?'0x238':'0x7FF',page=Number(s.countryLastPage)>=0?(' · PAGE '+s.countryLastPage):'',result=s.countryLastResult||'NONE';$('countryOverrideLast').textContent=s.countryLastValid?(result+' · '+bus+' · '+id+page+' · '+(s.countryLastRaw||'—')+' · '+fmtMs(s.countryLastAgeMs)):'—';const stock=!!s.r79StockValid;$('countryR79StockBit19').textContent=stock?String(Number(s.r79StockBit19)?1:0):'—';$('countryR79StockBit47').textContent=stock?String(Number(s.r79StockBit47)?1:0):'—';$('countryR79StockMeta').textContent=stock?('VALID · '+fmtMs(s.r79StockAgeMs)+' · RX '+(s.r79StockRx||0)):'WAITING FOR 0x3FD MUX1';$('countryR79StockRaw').textContent=stock?(s.r79StockRaw||'—'):'—'}
+async function fetchCountryOverrideLab(){await countryOverrideControl.refresh()}
 async function updateCountryOverrideMode(key='countryMode'){
-  if(countryOverrideSaving||!countryOverrideSaved||countryOverrideSaved.countrySupported!==true)return;
+  const state=countryOverrideControl;
+  if(state.saving||state.uncertain||!state.saved||state.saved.countrySupported!==true){renderCountryOverrideLab(state.saved);return}
+  if(key!=='countryMode'&&key!=='mapMode')return;
   const sel=$(key==='mapMode'?'countryMapMode':'countryOverrideMode'),value=Number(sel.value);
   if(!Number.isInteger(value)||value<0||value>(key==='mapMode'?2:3))return;
-  countryOverrideSaving=true;countryOverrideEpoch++;renderCountryOverrideLab(countryOverrideSaved);$('countryOverrideSaveState').textContent='Saving…';
-  try{countryOverrideSaved=await featurePostJson('/api/country/update?'+key+'='+value);$('countryOverrideSaveState').textContent='Settings ready'}
-  catch(e){try{countryOverrideSaved=await jget('/api/country/stats')}catch(x){}$('countryOverrideSaveState').textContent='Save failed · restored saved settings'}
-  finally{countryOverrideSaving=false;countryOverrideEpoch++;$('countryOverrideMode').blur();$('countryMapMode').blur();renderCountryOverrideLab(countryOverrideSaved)}
+  await state.save('/api/country/update?'+key+'='+value);
 }
-let driverMonitoringControlSaved=null,driverMonitoringControlSaving=false;
+const driverMonitoringControl=createSettingsController({url:'/api/driver-monitoring/config',validate:enabledSettingsResponse,render:renderDriverMonitoringControl,status:message=>toggleSettingsStatus('driverMonitoringSaveState',message)});
 function renderDriverMonitoringControl(s){
-  if(!s)return;driverMonitoringControlSaved=s;const supported=s.supported===true,enabled=s.enabled===true,toggle=$('driverMonitoringToggle');toggle.checked=enabled;toggle.disabled=driverMonitoringControlSaving||!supported;$('driverMonitoringDesc').textContent="Request cabin-camera monitoring off during Autopilot.";
+  const toggle=$('driverMonitoringToggle');toggle.checked=s?.enabled===true;toggle.disabled=driverMonitoringControl.saving||driverMonitoringControl.uncertain||s?.supported!==true;
+  $('driverMonitoringDesc').textContent="Request cabin-camera monitoring off during Autopilot.";
 }
-async function fetchDriverMonitoringControl(){try{renderDriverMonitoringControl(await jget('/api/driver-monitoring/config'))}catch(e){if(!driverMonitoringControlSaved){$('driverMonitoringToggle').disabled=true;$('driverMonitoringDesc').textContent="Request cabin-camera monitoring off during Autopilot."}}}
+async function fetchDriverMonitoringControl(){await driverMonitoringControl.refresh()}
 async function updateDriverMonitoringControl(){
-  if(driverMonitoringControlSaving||!driverMonitoringControlSaved||driverMonitoringControlSaved.supported!==true){renderDriverMonitoringControl(driverMonitoringControlSaved);return}
-  const enabled=$('driverMonitoringToggle').checked;driverMonitoringControlSaving=true;renderDriverMonitoringControl({...driverMonitoringControlSaved,enabled});
-  try{const s=await featurePostJson('/api/driver-monitoring/config?enabled='+(enabled?1:0));renderDriverMonitoringControl(s)}catch(e){await fetchDriverMonitoringControl()}finally{driverMonitoringControlSaving=false;renderDriverMonitoringControl(driverMonitoringControlSaved)}
+  const state=driverMonitoringControl;
+  if(state.saving||state.uncertain||state.saved?.supported!==true){renderDriverMonitoringControl(state.saved);return}
+  const enabled=$('driverMonitoringToggle').checked;
+  await state.save('/api/driver-monitoring/config?enabled='+(enabled?1:0));
 }
 $('driverMonitoringToggle').onchange=updateDriverMonitoringControl;
-let continuousApSaved=null,continuousApSaving=false,continuousApUncertain=true,continuousApEditEpoch=0;
+const continuousApControl=createSettingsController({url:'/api/continuous-ap/config',validate:continuousApResponse,render:renderContinuousAp,status:message=>$('continuousApSaveState').textContent=message});
 function continuousApMethodSupported(s,m){return Number(m)===1?s?.stalkSupported===true:Number(m)===2?s?.scrollSingleSupported===true:Number(m)===3?s?.scrollDoubleSupported===true:false}
 function continuousApResponse(s){if(!s||typeof s.enabled!=='boolean'||!Number.isInteger(s.method)||s.method<0||s.method>3||typeof s.supported!=='boolean')throw new Error('Settings unavailable');return s}
 function renderContinuousAp(){
- const s=continuousApSaved,toggle=$('continuousApToggle'),select=$('continuousApMethod'),locked=continuousApSaving||continuousApUncertain||!s;
+ const s=continuousApControl.saved,toggle=$('continuousApToggle'),select=$('continuousApMethod'),locked=continuousApControl.saving||continuousApControl.uncertain||!s;
  toggle.checked=s?.enabled===true;toggle.disabled=locked||(!s?.enabled&&!continuousApMethodSupported(s,s?.method));
  select.value=String(s?.method??0);select.disabled=locked||s?.supported!==true;
  for(const option of select.options){const m=Number(option.value);option.disabled=m===0?s?.enabled===true:!continuousApMethodSupported(s,m)}
- $('continuousApState').textContent=s?(s.effectiveEnabled?s.state||'Waiting':s.enabled?'Unavailable':'Disabled'):'Loading…';
+ $('continuousApState').textContent=continuousApControl.uncertain?'Unavailable':s?(s.effectiveEnabled?s.state||'Waiting':s.enabled?'Unavailable':'Disabled'):'Loading…';
  $('continuousApReason').textContent=s?.cleanupUnconfirmed?'Release unconfirmed':s?.blockedReason||'—';
- const rx=$('continuousApSignalReadiness'),live=!!s&&!continuousApUncertain&&!continuousApSaving;
+ const rx=$('continuousApSignalReadiness'),live=!!s&&!continuousApControl.uncertain&&!continuousApControl.saving;
  rx.textContent=live?s.signalReadiness||'Waiting for signals':'Unavailable';
  rx.classList.toggle('good',live&&s.signalReadiness==='Available');
  $('continuousApLastCancel').textContent=s?.lastCancelReason||'None';
@@ -1191,33 +1224,24 @@ function renderContinuousAp(){
  $('continuousApSupport').textContent=s?.supportReason||'Vehicle capabilities unavailable.';
  $('continuousApDesc').textContent='Re-engage AP after a signaled lane change.';
 }
-async function fetchContinuousAp(){
- if(continuousApSaving)return;const epoch=continuousApEditEpoch;
- try{const s=continuousApResponse(await jget('/api/continuous-ap/config'));if(epoch!==continuousApEditEpoch||continuousApSaving)return;continuousApSaved=s;continuousApUncertain=false;$('continuousApSaveState').textContent='Settings ready'}
- catch(e){if(epoch!==continuousApEditEpoch||continuousApSaving)return;continuousApUncertain=true;$('continuousApSaveState').textContent='Settings unavailable · retrying'}
- renderContinuousAp();
-}
+async function fetchContinuousAp(){await continuousApControl.refresh()}
 async function updateContinuousAp(key){
- const s=continuousApSaved,enabled=key==='enabled'?$('continuousApToggle').checked:s?.enabled,method=key==='method'?Number($('continuousApMethod').value):s?.method;
- if(!s||continuousApSaving||continuousApUncertain||enabled&&!continuousApMethodSupported(s,method)){renderContinuousAp();return}
- continuousApSaving=true;++continuousApEditEpoch;renderContinuousAp();$('continuousApSaveState').textContent='Saving…';
- try{continuousApSaved=continuousApResponse(await featurePostJson('/api/continuous-ap/config?enabled='+(enabled?1:0)+'&method='+method));continuousApUncertain=false;$('continuousApSaveState').textContent='Settings ready'}
- catch(e){
-  try{continuousApSaved=continuousApResponse(await jget('/api/continuous-ap/config'));continuousApUncertain=false;$('continuousApSaveState').textContent='Saved settings reloaded'}
-  catch(x){continuousApUncertain=true;$('continuousApSaveState').textContent='Save result unknown · checking saved settings'}
- }
- finally{continuousApSaving=false;++continuousApEditEpoch;renderContinuousAp()}
+ const state=continuousApControl,s=state.saved,enabled=key==='enabled'?$('continuousApToggle').checked:s?.enabled,method=key==='method'?Number($('continuousApMethod').value):s?.method;
+ if(key!=='enabled'&&key!=='method'||!s||state.saving||state.uncertain||!Number.isInteger(method)||method<0||method>3||enabled&&!continuousApMethodSupported(s,method)){renderContinuousAp();return}
+ await state.save('/api/continuous-ap/config?enabled='+(enabled?1:0)+'&method='+method);
 }
 $('continuousApToggle').onchange=()=>updateContinuousAp('enabled');$('continuousApMethod').onchange=()=>updateContinuousAp('method');
-let isaSuppressionControlSaved=null,isaSuppressionControlSaving=false;
+const isaSuppressionControl=createSettingsController({url:'/api/isa-suppression/config',validate:enabledSettingsResponse,render:renderIsaSuppressionControl,status:message=>toggleSettingsStatus('isaSuppressionSaveState',message)});
 function renderIsaSuppressionControl(s){
-  if(!s)return;const supported=s.supported===true,enabled=s.enabled===true,toggle=$('isaSuppressionToggle');toggle.checked=enabled;toggle.disabled=isaSuppressionControlSaving||!supported;$('isaSuppressionDesc').textContent="Reduce ISA warning chimes during Autopilot.";
+  const toggle=$('isaSuppressionToggle');toggle.checked=s?.enabled===true;toggle.disabled=isaSuppressionControl.saving||isaSuppressionControl.uncertain||s?.supported!==true;
+  $('isaSuppressionDesc').textContent="Reduce ISA warning chimes during Autopilot.";
 }
-async function fetchIsaSuppressionControl(){try{isaSuppressionControlSaved=await jget('/api/isa-suppression/config');renderIsaSuppressionControl(isaSuppressionControlSaved)}catch(e){if(!isaSuppressionControlSaved){$('isaSuppressionToggle').disabled=true;$('isaSuppressionDesc').textContent="Reduce ISA warning chimes during Autopilot."}}}
+async function fetchIsaSuppressionControl(){await isaSuppressionControl.refresh()}
 async function updateIsaSuppressionControl(){
-  if(isaSuppressionControlSaving||!isaSuppressionControlSaved||isaSuppressionControlSaved.supported!==true){renderIsaSuppressionControl(isaSuppressionControlSaved);return}
-  const previous=isaSuppressionControlSaved,enabled=$('isaSuppressionToggle').checked;isaSuppressionControlSaving=true;renderIsaSuppressionControl({...previous,enabled});
-  try{isaSuppressionControlSaved=await featurePostJson('/api/isa-suppression/config?enabled='+(enabled?1:0))}catch(e){try{isaSuppressionControlSaved=await jget('/api/isa-suppression/config')}catch(x){isaSuppressionControlSaved=previous}}finally{isaSuppressionControlSaving=false;renderIsaSuppressionControl(isaSuppressionControlSaved)}
+  const state=isaSuppressionControl;
+  if(state.saving||state.uncertain||state.saved?.supported!==true){renderIsaSuppressionControl(state.saved);return}
+  const enabled=$('isaSuppressionToggle').checked;
+  await state.save('/api/isa-suppression/config?enabled='+(enabled?1:0));
 }
 $('isaSuppressionToggle').onchange=updateIsaSuppressionControl;
 let visionControlSaved=null,visionControlSaving=false,visionControlEpoch=0;
@@ -1619,7 +1643,7 @@ async function fetchLabSnapshot(){const s=await fetchPageSnapshot('lab-lite');if
 async function fetchSettingsSnapshot(){const s=await fetchPageSnapshot('settings-lite');if(s){renderSettingsLite(s);settingsLiteValid=true}}
 async function fetchHeartbeat(){await fetchPageSnapshot('heartbeat')}
 if($('countryOverrideMode'))$('countryOverrideMode').onchange=()=>updateCountryOverrideMode('countryMode');if($('countryMapMode'))$('countryMapMode').onchange=()=>updateCountryOverrideMode('mapMode');
-const pollLast={nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,driverMon:0,summonHeartbeat:0,homeSnap:0,labSnap:0,settingsSnap:0,heartbeat:0};
+const pollLast={driverMonitoringRecovery:0,isaSuppressionRecovery:0,nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,driverMon:0,summonHeartbeat:0,homeSnap:0,labSnap:0,settingsSnap:0,heartbeat:0};
 function activePanelId(){return document.querySelector('.panel.show')?.id||''}
 function pollDue(k,ms,fn,now,force=false){if(force||now-pollLast[k]>=ms){pollLast[k]=now;fn()}}
 function pollTick(force=false){
@@ -1659,6 +1683,8 @@ function pollTick(force=false){
   }else{
     if(force||!settingsLiteValid)pollDue('settingsSnap',500,fetchSettingsSnapshot,now,force);
     else pollDue('heartbeat',3000,fetchHeartbeat,now,false);
+    if(driverMonitoringControl.uncertain)pollDue('driverMonitoringRecovery',1500,fetchDriverMonitoringControl,now,false);
+    if(isaSuppressionControl.uncertain)pollDue('isaSuppressionRecovery',1500,fetchIsaSuppressionControl,now,false);
   }
 }
 function forcePoll(){Object.keys(pollLast).forEach(k=>pollLast[k]=0);pollTick(true)}
