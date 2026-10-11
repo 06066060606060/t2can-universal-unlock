@@ -11,7 +11,7 @@
 # T2CAN Universal Unlock v3.28.3
 
 **Major Universal Release**  
-**Release date:** 9 October 2026  
+**Release date:** 10 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
