@@ -17,7 +17,7 @@
 
 
 **v3.28.3** 
-- Continuous AP  
+- Continuous AP (experimental)  
 - Independent ISA chime Suppression 
 - Increased OTA receive idle timeout from 5 to 30 seconds.
 - Added detailed upload errors and improved retry handling.
