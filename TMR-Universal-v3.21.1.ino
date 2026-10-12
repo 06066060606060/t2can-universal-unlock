@@ -21,7 +21,7 @@
 #include <host/ble_gap.h>
 #include <host/ble_store.h>
 #endif
-#include "pin_config.h"
+#include <pin_config.h>
 #include <mcp2515.h>
 #include <SPI.h>
 
