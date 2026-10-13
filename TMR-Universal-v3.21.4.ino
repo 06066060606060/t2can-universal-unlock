@@ -1,4 +1,4 @@
-// TMR Universal v3.21.3 - Model 3/Y / Model YL firmware
+// TMR Universal v3.21.4 - Model 3/Y / Model YL firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -70,7 +70,7 @@
 #include "fixed_point_arduino.h"
 #include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.21.3-TMR"
+#define FW_VERSION "v3.21.4-TMR"
 
 #include "tmr_core_state.h"
 #include "tmr_forward.h"
@@ -287,15 +287,8 @@ void setup() {
   bootCaptureMarkOnce(&bootCapCanInitDoneMs);
 
   // Start CAN tasks after all three TMR controllers are ready/running.
-  BaseType_t retMcp = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskBodyHandle, 1);
-  if (retMcp != pdPASS) {
-    TMR_SERIAL_PRINTF("CAN A task creation failed: %d\n", retMcp);
-    restartTmrCanSafely();
-  }
-
-  BaseType_t retChassis = xTaskCreatePinnedToCore(canTaskChassis, "canB", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskChassisHandle, 1);
-  if (retChassis != pdPASS) {
-    TMR_SERIAL_PRINTF("CAN B task creation failed: %d\n", retChassis);
+  if (!startCanReceiveTasks()) {
+    TMR_SERIAL_PRINTLN("CAN RX task creation failed (BODY / CHASSIS / PARTY)");
     restartTmrCanSafely();
   }
   bootCaptureMarkOnce(&bootCapCanTasksStartedMs);

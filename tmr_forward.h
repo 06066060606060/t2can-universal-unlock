@@ -325,13 +325,14 @@ static bool mcpInitChecked();
 static bool mcpReinit();
 static void canTaskMcp(void* arg);
 static void canTaskChassis(void* arg);
+static void canTaskParty(void* arg);
 static inline bool recoveryFresh(uint32_t now, uint32_t ts, uint32_t timeoutMs);
 static void requestCanSubsystemRestart(uint8_t reason, uint8_t diagReason);
 static bool recoveryMcpColdInit();
 static bool recoveryChassisInstallFresh();
 static bool recoveryChassisFullReinit();
 static void recoveryStopCanTasks();
-static bool recoveryStartCanTasks();
+static bool startCanReceiveTasks();
 static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason);
 static void canSupervisorTask(void* arg);
 

@@ -170,6 +170,9 @@ static volatile bool tlsscRestoreEnabled = false;
 static volatile bool doorOpenCancelEnabled = false;
 static SemaphoreHandle_t canTxBarrierMutex = nullptr;
 static CanTxBarrierState canTxBarrierState = {1, 0};
+// Published atomically by recovery while holding the TX barrier. RX may read
+// this snapshot without waiting behind another controller's SPI submission.
+static uint32_t canTxEpochFast = 1;
 
 enum CanRxBus : uint8_t {
   CAN_RX_BUS_BODY = 0,

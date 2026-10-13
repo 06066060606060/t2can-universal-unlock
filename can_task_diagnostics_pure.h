@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "can_time_pure.h"
 
 enum CanTaskStagePure : uint8_t {
   CAN_TASK_STAGE_NEVER_STARTED = 0,
@@ -123,9 +124,9 @@ static inline CanTaskTimeoutSnapshotPure canTaskDiagnosticsSnapshotPure(
   out.stage = d.stage;
   out.taskState = taskState;
   out.heartbeatAgeMs = d.heartbeatCount != 0
-      ? nowMs - d.lastHeartbeatMs : UINT32_MAX;
+      ? canAgeMsPure(nowMs, d.lastHeartbeatMs) : UINT32_MAX;
   out.stageAgeMs = d.stage != CAN_TASK_STAGE_NEVER_STARTED
-      ? nowMs - d.stageEnteredMs : UINT32_MAX;
+      ? canAgeMsPure(nowMs, d.stageEnteredMs) : UINT32_MAX;
   out.heartbeatCount = d.heartbeatCount;
   out.maxHeartbeatGapMs = d.maxHeartbeatGapMs;
   out.loopCount = d.loopCount;

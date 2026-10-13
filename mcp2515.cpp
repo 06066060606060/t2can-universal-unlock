@@ -52,6 +52,7 @@ void MCP2515::transferSPI(uint8_t *buffer, const uint8_t n) {
 
 MCP2515::ERROR MCP2515::reset(void)
 {
+    preferRx1 = false;
     startSPI();
     SPIn->transfer(INSTRUCTION_RESET);
     endSPI();
@@ -69,8 +70,8 @@ MCP2515::ERROR MCP2515::reset(void)
 
     setRegister(MCP_CANINTE, CANINTF_RX0IF | CANINTF_RX1IF | CANINTF_ERRIF | CANINTF_MERRF);
 
-    // receives all valid messages using either Standard or Extended Identifiers that
-    // meet filter criteria. RXF0 is applied for RXB0, RXF1 is applied for RXB1
+    // Accept valid standard/extended frames matching the filters. RXB0 uses
+    // RXF0/RXF1; RXB1 uses RXF2..RXF5. BUKT lets RXB0 spill into RXB1.
     modifyRegister(MCP_RXB0CTRL,
                    RXBnCTRL_RXM_MASK | RXB0CTRL_BUKT | RXB0CTRL_FILHIT_MASK,
                    RXBnCTRL_RXM_STDEXT | RXB0CTRL_BUKT | RXB0CTRL_FILHIT);
@@ -79,8 +80,8 @@ MCP2515::ERROR MCP2515::reset(void)
                    RXBnCTRL_RXM_STDEXT | RXB1CTRL_FILHIT);
 
     // clear filters and masks
-    // do not filter any standard frames for RXF0 used by RXB0
-    // do not filter any extended frames for RXF1 used by RXB1
+    // RXF1 accepts extended frames on RXB0; the other filters accept standard
+    // frames. Zero masks accept every identifier of the matching frame type.
     RXF filters[] = {RXF0, RXF1, RXF2, RXF3, RXF4, RXF5};
     for (int i=0; i<6; i++) {
         bool ext = (i == 1);
@@ -98,6 +99,12 @@ MCP2515::ERROR MCP2515::reset(void)
         }
     }
 
+    uint8_t rx0Ctrl, rx1Ctrl;
+    getRxBufferConfiguration(rx0Ctrl, rx1Ctrl);
+    if ((rx0Ctrl & (RXBnCTRL_RXM_MASK | RXB0CTRL_BUKT)) != RXB0CTRL_BUKT ||
+        (rx1Ctrl & RXBnCTRL_RXM_MASK) != RXBnCTRL_RXM_STDEXT) {
+        return ERROR_FAIL;
+    }
     return ERROR_OK;
 }
 
@@ -733,18 +740,27 @@ MCP2515::ERROR MCP2515::readMessage(const RXBn rxbn, struct can_frame *frame)
 
 MCP2515::ERROR MCP2515::readMessage(struct can_frame *frame)
 {
-    ERROR rc;
-    uint8_t stat = getStatus();
+    return readMessage(frame, nullptr);
+}
 
-    if ( stat & STAT_RX0IF ) {
-        rc = readMessage(RXB0, frame);
-    } else if ( stat & STAT_RX1IF ) {
-        rc = readMessage(RXB1, frame);
-    } else {
-        rc = ERROR_NOMSG;
-    }
+MCP2515::ERROR MCP2515::readMessage(struct can_frame *frame, RXBn *bufferRead)
+{
+    const uint8_t stat = getStatus();
+    if (!(stat & STAT_RXIF_MASK)) return ERROR_NOMSG;
+    // When RX0 refills continuously, fixed RX0 priority starves RX1. Rotate
+    // priority per controller, while always reading the sole pending buffer.
+    const RXBn selected = (stat & STAT_RX1IF) &&
+        (!(stat & STAT_RX0IF) || preferRx1) ? RXB1 : RXB0;
+    const ERROR result = readMessage(selected, frame);
+    preferRx1 = selected == RXB0;
+    if (result == ERROR_OK && bufferRead) *bufferRead = selected;
+    return result;
+}
 
-    return rc;
+void MCP2515::getRxBufferConfiguration(uint8_t &rx0Ctrl, uint8_t &rx1Ctrl)
+{
+    rx0Ctrl = readRegister(MCP_RXB0CTRL);
+    rx1Ctrl = readRegister(MCP_RXB1CTRL);
 }
 
 bool MCP2515::checkReceive(void)

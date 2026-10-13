@@ -42,6 +42,12 @@ struct CanPerfBusPure {
   uint32_t lastPollUs;
   CanPerfTimingPure pollGap;
   uint32_t rxFrames;
+  uint32_t rx0Frames;
+  uint32_t rx1Frames;
+  uint32_t rxConfigSamples;
+  uint32_t rxConfigLastUs;
+  uint8_t rx0Ctrl;
+  uint8_t rx1Ctrl;
   uint32_t rxErrors;
   uint32_t rxOverflowEvents;
   uint32_t rx0OverflowEvents;

@@ -451,6 +451,7 @@ class MCP2515
         uint8_t SPICS;
         uint32_t SPI_CLOCK;
         SPIClass * SPIn;
+        bool preferRx1 = false;
 
     private:
 
@@ -490,6 +491,8 @@ class MCP2515
         ERROR sendMessage(const struct can_frame *frame);
         ERROR readMessage(const RXBn rxbn, struct can_frame *frame);
         ERROR readMessage(struct can_frame *frame);
+        ERROR readMessage(struct can_frame *frame, RXBn *bufferRead);
+        void getRxBufferConfiguration(uint8_t &rx0Ctrl, uint8_t &rx1Ctrl);
         bool checkReceive(void);
         bool checkError(void);
         uint8_t getErrorFlags(void);

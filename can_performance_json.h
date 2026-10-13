@@ -25,6 +25,16 @@ static void canPerfBusJson(JsonWriterArduino &jw, const char *key, CanPerfBus bu
   jw.beginObject(key);
   jw.u32("polls", s.polls);
   jw.u32("rxFrames", s.rxFrames);
+  jw.u32("rx0Frames", s.rx0Frames);
+  jw.u32("rx1Frames", s.rx1Frames);
+  jw.u32("rxConfigSamples", s.rxConfigSamples);
+  jw.u32("rx0Ctrl", s.rx0Ctrl);
+  jw.u32("rx1Ctrl", s.rx1Ctrl);
+  jw.boolean("rxConfigValid", s.rxConfigSamples != 0 &&
+      (s.rx0Ctrl & 0x64u) == 0x04u && (s.rx1Ctrl & 0x60u) == 0);
+  jw.boolean("rxRolloverEnabled", s.rxConfigSamples != 0 && (s.rx0Ctrl & 0x04u));
+  jw.boolean("rxFilterModeEnabled", s.rxConfigSamples != 0 &&
+      (s.rx0Ctrl & 0x60u) == 0 && (s.rx1Ctrl & 0x60u) == 0);
   jw.u32("rxErrors", s.rxErrors);
   // Latched overflow events, not an exact number of lost frames.
   jw.u32("rxOverflowEvents", s.rxOverflowEvents);
@@ -71,6 +81,9 @@ static void canPerformanceJson(JsonWriterArduino &jw) {
   jw.u32("rxSliceFrames", CAN_RX_SLICE_FRAMES);
   jw.u32("rxSliceUs", CAN_RX_SLICE_US);
   jw.u32("maxBurstUs", CAN_RX_MAX_BURST_US);
+  jw.u32("idleRetryUs", CAN_RX_IDLE_RETRY_US);
+  jw.u32("rxBuffersPerController", 2);
+  jw.u32("rxBuffersTotal", 6);
   jw.u32("rxTaskPriority", CAN_RX_TASK_PRIORITY);
   canPerfBusJson(jw, "body", CAN_PERF_BODY);
   canPerfBusJson(jw, "chassis", CAN_PERF_CHASSIS);

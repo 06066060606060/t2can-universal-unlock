@@ -307,10 +307,23 @@ static esp_err_t mcpChassisClearTxQueue(void) {
 
 
 static uint32_t canTxEpochSnapshot() {
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return 0;
-  const uint32_t epoch = canTxBarrierState.epoch;
-  xSemaphoreGive(canTxBarrierMutex);
-  return epoch;
+  return canTxBarrierMutex
+      ? __atomic_load_n(&canTxEpochFast, __ATOMIC_ACQUIRE)
+      : 0u;
+}
+
+// Caller holds canTxBarrierMutex. Admission still checks the authoritative
+// epoch/freshness under that mutex after any wait.
+static void canTxEpochPublishLocked() {
+  __atomic_store_n(&canTxEpochFast, canTxBarrierState.epoch, __ATOMIC_RELEASE);
+}
+
+static bool canTxBarrierTakeForSend() {
+  // Block the requesting task briefly so the current SPI owner can finish.
+  // Never wait indefinitely: RX servicing must resume on prolonged contention.
+  const TickType_t waitTicks = pdMS_TO_TICKS(1);
+  return canTxBarrierMutex &&
+      xSemaphoreTake(canTxBarrierMutex, waitTicks > 0 ? waitTicks : 1) == pdTRUE;
 }
 
 static void canTxMarkFresh(uint8_t busBit) {
@@ -476,7 +489,7 @@ static esp_err_t canTxChassisTransmitWithMaskTagged(
     canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE, traceSource);
     return ESP_ERR_INVALID_STATE;
   }
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+  if (!canTxBarrierTakeForSend()) {
     canBTraceRecordTx(msg, ESP_ERR_TIMEOUT, traceSource);
     return ESP_ERR_TIMEOUT;
   }
@@ -519,7 +532,7 @@ static esp_err_t canTxChassisTransmitWithMaskTaggedGuarded(
     canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE, traceSource);
     return ESP_ERR_INVALID_STATE;
   }
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+  if (!canTxBarrierTakeForSend()) {
     canBTraceRecordTx(msg, ESP_ERR_TIMEOUT, traceSource);
     return ESP_ERR_TIMEOUT;
   }
@@ -556,7 +569,7 @@ static esp_err_t canTxChassisTransmitValidated(
     struct can_frame *msg, uint32_t expectedEpoch, uint8_t requiredFreshMask,
     bool (*validate)(struct can_frame *, void *), void *context) {
   if (!msg || !validate) return ESP_ERR_INVALID_ARG;
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+  if (!canTxBarrierTakeForSend()) {
     canBTraceRecordTx(msg, ESP_ERR_TIMEOUT, CAN_TX_TRACE_SOURCE_DEFAULT);
     return ESP_ERR_TIMEOUT;
   }
@@ -582,7 +595,7 @@ static bool canTxMcpSendTagged(const struct can_frame *msg,
                       traceSource);
     return false;
   }
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+  if (!canTxBarrierTakeForSend()) {
     if (reasonOut) *reasonOut = MCP_TX_MUTEX_BUSY;
     canATraceRecordTx(msg, MCP_TX_MUTEX_BUSY, MCP2515::ERROR_FAIL,
                       traceSource);
@@ -625,12 +638,12 @@ static bool canTxPartyMcpSendTagged(const struct can_frame *msg,
     if (reasonOut) *reasonOut = MCP_TX_EPOCH_MISMATCH;
     return false;
   }
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+  if (!canTxBarrierTakeForSend()) {
     if (reasonOut) *reasonOut = MCP_TX_MUTEX_BUSY;
     return false;
   }
 
-  McpTxResultReason reason = mcpTxResultReasonMaskedPure(
+  McpTxResultReason reason = canTxAdministrativeHold ? MCP_TX_EPOCH_MISMATCH : mcpTxResultReasonMaskedPure(
       true, true, mcpPartyReady, canTxBarrierState.epoch,
       canTxBarrierState.freshMask, expectedEpoch, CAN_TX_FRESH_PARTY, true);
   const bool allowed = reason == MCP_TX_OK;
@@ -666,7 +679,7 @@ static bool canTxMcpSendTaggedGuarded(
                       traceSource);
     return false;
   }
-  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
+  if (!canTxBarrierTakeForSend()) {
     if (reasonOut) *reasonOut = MCP_TX_MUTEX_BUSY;
     canATraceRecordTx(msg, MCP_TX_MUTEX_BUSY, MCP2515::ERROR_FAIL,
                       traceSource);
@@ -758,37 +771,52 @@ static volatile bool canSubsystemBusy = false;
 static volatile bool canTasksStopping = false;
 static volatile bool canTaskMcpQuiesced = false;
 static volatile bool canTaskChassisQuiesced = false;
+static volatile bool canTaskPartyQuiesced = false;
 static TaskHandle_t canTaskBodyHandle = nullptr;
 static TaskHandle_t canTaskChassisHandle = nullptr;
+static TaskHandle_t canTaskPartyHandle = nullptr;
 static TaskHandle_t canSupervisorHandle = nullptr;
 static TaskHandle_t webTaskHandle = nullptr;
 
 static volatile uint32_t canTaskMcpHeartbeatMs = 0;
 static volatile uint32_t canTaskChassisHeartbeatMs = 0;
+static volatile uint32_t canTaskPartyHeartbeatMs = 0;
 enum CanTaskHeartbeatTimeoutCause : uint8_t {
   CAN_TASK_HEARTBEAT_NONE = 0,
   CAN_TASK_HEARTBEAT_A = 1,
   CAN_TASK_HEARTBEAT_B = 2,
-  CAN_TASK_HEARTBEAT_BOTH = 3
+  CAN_TASK_HEARTBEAT_BOTH = 3,
+  CAN_TASK_HEARTBEAT_C = 4,
+  CAN_TASK_HEARTBEAT_AC = 5,
+  CAN_TASK_HEARTBEAT_BC = 6,
+  CAN_TASK_HEARTBEAT_ALL = 7
 };
 static inline const char *canTaskHeartbeatTimeoutCauseName(uint8_t cause) {
   switch (cause) {
     case CAN_TASK_HEARTBEAT_A: return "CAN_A";
     case CAN_TASK_HEARTBEAT_B: return "CAN_B";
     case CAN_TASK_HEARTBEAT_BOTH: return "BOTH";
+    case CAN_TASK_HEARTBEAT_C: return "CAN_C";
+    case CAN_TASK_HEARTBEAT_AC: return "CAN_A_C";
+    case CAN_TASK_HEARTBEAT_BC: return "CAN_B_C";
+    case CAN_TASK_HEARTBEAT_ALL: return "ALL";
     default: return "NONE";
   }
 }
 static volatile uint8_t canTaskHeartbeatLastCause = CAN_TASK_HEARTBEAT_NONE;
 static volatile uint32_t canTaskHeartbeatLastAgeAms = 0;
 static volatile uint32_t canTaskHeartbeatLastAgeBms = 0;
+static volatile uint32_t canTaskHeartbeatLastAgeCms = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountA = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountB = 0;
 static volatile uint32_t canTaskHeartbeatTimeoutCountBoth = 0;
+static volatile uint32_t canTaskHeartbeatTimeoutCountC = 0;
 static volatile CanTaskLiveDiagnosticsPure canTaskMcpDiagnostics = {};
 static volatile CanTaskLiveDiagnosticsPure canTaskChassisDiagnostics = {};
+static volatile CanTaskLiveDiagnosticsPure canTaskPartyDiagnostics = {};
 static CanTaskTimeoutSnapshotPure canTaskHeartbeatLastSnapshotA = {};
 static CanTaskTimeoutSnapshotPure canTaskHeartbeatLastSnapshotB = {};
+static CanTaskTimeoutSnapshotPure canTaskHeartbeatLastSnapshotC = {};
 static volatile CanARxDiagnosticsPure canARxDiagnostics = {};
 static inline uint8_t canTaskStateCode(TaskHandle_t handle) {
   return handle ? (uint8_t)eTaskGetState(handle) : (uint8_t)eInvalid;

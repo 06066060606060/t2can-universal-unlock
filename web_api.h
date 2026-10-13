@@ -1107,17 +1107,17 @@ struct CanTrafficUiSnapshot {
 };
 
 static CanTrafficUiSnapshot canTrafficUiSnapshot() {
-  const uint32_t now = (uint32_t)millis();
   const uint32_t lastBody = lastCanAFrameMs;
   const uint32_t lastChassis = lastCanBFrameMs;
   const uint32_t lastParty = lastCanCFrameMs;
+  const uint32_t now = (uint32_t)millis();
   CanTrafficUiSnapshot t = {};
   t.bodySeen = lastBody != 0;
   t.chassisSeen = lastChassis != 0;
   t.partySeen = lastParty != 0;
-  t.bodyAgeMs = t.bodySeen ? (uint32_t)(now - lastBody) : 0;
-  t.chassisAgeMs = t.chassisSeen ? (uint32_t)(now - lastChassis) : 0;
-  t.partyAgeMs = t.partySeen ? (uint32_t)(now - lastParty) : 0;
+  t.bodyAgeMs = t.bodySeen ? canAgeMsPure(now, lastBody) : 0;
+  t.chassisAgeMs = t.chassisSeen ? canAgeMsPure(now, lastChassis) : 0;
+  t.partyAgeMs = t.partySeen ? canAgeMsPure(now, lastParty) : 0;
   t.bodyOnline = t.bodySeen && t.bodyAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
   t.chassisOnline = t.chassisSeen && t.chassisAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
   t.partyOnline = t.partySeen && t.partyAgeMs <= CAN_TRAFFIC_UI_FRESH_MS;
@@ -1174,6 +1174,7 @@ static String systemStatsToJson() {
   const uint32_t largestHeapBlock = ESP.getMaxAllocHeap();
   const uint32_t stackCanA = canTaskBodyHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskBodyHandle) : 0;
   const uint32_t stackCanB = canTaskChassisHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskChassisHandle) : 0;
+  const uint32_t stackCanC = canTaskPartyHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskPartyHandle) : 0;
   const uint32_t stackCanSup = canSupervisorHandle ? (uint32_t)uxTaskGetStackHighWaterMark(canSupervisorHandle) : 0;
   const uint32_t stackWeb = webTaskHandle ? (uint32_t)uxTaskGetStackHighWaterMark(webTaskHandle) : 0;
   const uint32_t stackS3xy = s3xyTaskHandle ? (uint32_t)uxTaskGetStackHighWaterMark(s3xyTaskHandle) : 0;
@@ -1185,10 +1186,11 @@ static String systemStatsToJson() {
   uint32_t chassisLastEventMs, lastRxGapMs, maxRxGapMs;
   uint8_t chassisLastEventReason, lastHardDiagReason;
   uint8_t taskHeartbeatLastCause;
-  uint32_t taskHeartbeatLastAgeAms, taskHeartbeatLastAgeBms;
-  uint32_t taskHeartbeatTimeoutCountA, taskHeartbeatTimeoutCountB, taskHeartbeatTimeoutCountBoth;
+  uint32_t taskHeartbeatLastAgeAms, taskHeartbeatLastAgeBms, taskHeartbeatLastAgeCms;
+  uint32_t taskHeartbeatTimeoutCountA, taskHeartbeatTimeoutCountB, taskHeartbeatTimeoutCountBoth, taskHeartbeatTimeoutCountC;
   CanTaskTimeoutSnapshotPure taskSnapshotA = {};
   CanTaskTimeoutSnapshotPure taskSnapshotB = {};
+  CanTaskTimeoutSnapshotPure taskSnapshotC = {};
   portENTER_CRITICAL(&canRecoveryMux);
   busOffSnap = canChassisLastBusOffSnapshot;
   chassisBusOffCount = canChassisBusOffCount;
@@ -1205,11 +1207,14 @@ static String systemStatsToJson() {
   taskHeartbeatLastCause = canTaskHeartbeatLastCause;
   taskHeartbeatLastAgeAms = canTaskHeartbeatLastAgeAms;
   taskHeartbeatLastAgeBms = canTaskHeartbeatLastAgeBms;
+  taskHeartbeatLastAgeCms = canTaskHeartbeatLastAgeCms;
   taskHeartbeatTimeoutCountA = canTaskHeartbeatTimeoutCountA;
   taskHeartbeatTimeoutCountB = canTaskHeartbeatTimeoutCountB;
   taskHeartbeatTimeoutCountBoth = canTaskHeartbeatTimeoutCountBoth;
+  taskHeartbeatTimeoutCountC = canTaskHeartbeatTimeoutCountC;
   taskSnapshotA = canTaskHeartbeatLastSnapshotA;
   taskSnapshotB = canTaskHeartbeatLastSnapshotB;
+  taskSnapshotC = canTaskHeartbeatLastSnapshotC;
   portEXIT_CRITICAL(&canRecoveryMux);
   const uint32_t statsNow = (uint32_t)millis();
   const bool canARecordCurrent =
@@ -1223,6 +1228,7 @@ static String systemStatsToJson() {
   jw.u32("largestHeapBlock", largestHeapBlock);
   jw.u32("stackCanA", stackCanA);
   jw.u32("stackCanB", stackCanB);
+  jw.u32("stackCanC", stackCanC);
   jw.u32("stackCanSup", stackCanSup);
   jw.u32("stackWeb", stackWeb);
   jw.u32("stackS3xy", stackS3xy);
@@ -1263,14 +1269,14 @@ static String systemStatsToJson() {
   canATraceBusOffOrdinalLocal = canATxTraceFrozenBusOffOrdinal;
   portEXIT_CRITICAL(&canATxTraceMux);
   jw.u32("mcpErrorFlags", (uint32_t)(mcpLastErrorFlags));
-  jw.u32("mcpErrorFlagsAgeMs", (uint32_t)((mcpLastErrorFlagsMs ? statsNow - mcpLastErrorFlagsMs : 999999UL)));
+  jw.u32("mcpErrorFlagsAgeMs", (uint32_t)((mcpLastErrorFlagsMs ? canAgeMsPure(statsNow, mcpLastErrorFlagsMs) : 999999UL)));
   jw.u32("mcpTxFailConsecutive", (uint32_t)(mcpTxFailConsecutive));
   jw.u32("mcpTxOk", (uint32_t)(mcpTxOk));
   jw.u32("mcpTxFail", (uint32_t)(mcpTxFail));
-  jw.u32("mcpLastRecoverAgeMs", (uint32_t)((lastMcpRecoverMs ? statsNow - lastMcpRecoverMs : 999999UL)));
+  jw.u32("mcpLastRecoverAgeMs", (uint32_t)((lastMcpRecoverMs ? canAgeMsPure(statsNow, lastMcpRecoverMs) : 999999UL)));
   jw.u32("mcpBusOffCount", (uint32_t)(canAMcpBusOffCount));
   jw.boolean("mcpBusOffSnapshotValid", canASnap.valid);
-  jw.u32("mcpBusOffSnapshotAgeMs", (uint32_t)((canASnap.valid && canARecordCurrent ? statsNow - canASnap.capturedMs : 999999UL)));
+  jw.u32("mcpBusOffSnapshotAgeMs", (uint32_t)((canASnap.valid && canARecordCurrent ? canAgeMsPure(statsNow, canASnap.capturedMs) : 999999UL)));
   jw.u32("mcpBusOffSnapshotEflg", (uint32_t)(canASnap.eflg));
   jw.u32("mcpBusOffSnapshotTxFailSeq", (uint32_t)(canASnap.txFailConsecutive));
   jw.u32("mcpBusOffSnapshotRxAgeMs", (uint32_t)(canASnap.rxAgeMs));
@@ -1278,7 +1284,7 @@ static String systemStatsToJson() {
   jw.u32("mcpBusOffSnapshotTxOk", (uint32_t)(canASnap.txOk));
   jw.u32("mcpBusOffSnapshotTxFail", (uint32_t)(canASnap.txFail));
   jw.u32("canATxTraceCount", (uint32_t)(canATraceFrozenCountLocal));
-  jw.u32("canATxTraceAgeMs", (uint32_t)((canATraceFrozenMsLocal && canARecordCurrent ? statsNow - canATraceFrozenMsLocal : 999999UL)));
+  jw.u32("canATxTraceAgeMs", (uint32_t)((canATraceFrozenMsLocal && canARecordCurrent ? canAgeMsPure(statsNow, canATraceFrozenMsLocal) : 999999UL)));
   jw.u32("canATxTraceBusOffOrdinal", (uint32_t)(canATraceBusOffOrdinalLocal));
   jw.beginObject("canABusOffRecord");
   jw.string("busOffRecordBoot", canBusOffRecordBootName(CAN_BUS_OFF_BUS_A_PURE));
@@ -1298,9 +1304,11 @@ static String systemStatsToJson() {
   jw.string("canTaskHeartbeatLastCauseName", canTaskHeartbeatTimeoutCauseName(taskHeartbeatLastCause));
   jw.u32("canTaskHeartbeatLastAgeAms", (uint32_t)taskHeartbeatLastAgeAms);
   jw.u32("canTaskHeartbeatLastAgeBms", (uint32_t)taskHeartbeatLastAgeBms);
+  jw.u32("canTaskHeartbeatLastAgeCms", (uint32_t)taskHeartbeatLastAgeCms);
   jw.u32("canTaskHeartbeatTimeoutCountA", (uint32_t)taskHeartbeatTimeoutCountA);
   jw.u32("canTaskHeartbeatTimeoutCountB", (uint32_t)taskHeartbeatTimeoutCountB);
   jw.u32("canTaskHeartbeatTimeoutCountBoth", (uint32_t)taskHeartbeatTimeoutCountBoth);
+  jw.u32("canTaskHeartbeatTimeoutCountC", (uint32_t)taskHeartbeatTimeoutCountC);
   jw.string("canTaskSnapshotAStateName", taskHeartbeatLastCause
       ? canTaskStateName(taskSnapshotA.taskState) : "NONE");
   jw.string("canTaskSnapshotAStageName", canTaskStageNamePure(taskSnapshotA.stage));
@@ -1321,6 +1329,16 @@ static String systemStatsToJson() {
   jw.u32("canTaskSnapshotBLastLoopUs", (uint32_t)taskSnapshotB.lastLoopDurationUs);
   jw.u32("canTaskSnapshotBMaxLoopUs", (uint32_t)taskSnapshotB.maxLoopDurationUs);
   jw.u32("canTaskSnapshotBStackHighWater", (uint32_t)taskSnapshotB.stackHighWater);
+  jw.string("canTaskSnapshotCStateName", taskHeartbeatLastCause
+      ? canTaskStateName(taskSnapshotC.taskState) : "NONE");
+  jw.string("canTaskSnapshotCStageName", canTaskStageNamePure(taskSnapshotC.stage));
+  jw.u32("canTaskSnapshotCStageAgeMs", taskSnapshotC.stageAgeMs);
+  jw.u32("canTaskSnapshotCHeartbeatCount", taskSnapshotC.heartbeatCount);
+  jw.u32("canTaskSnapshotCMaxHeartbeatGapMs", taskSnapshotC.maxHeartbeatGapMs);
+  jw.u32("canTaskSnapshotCLoopCount", taskSnapshotC.loopCount);
+  jw.u32("canTaskSnapshotCLastLoopUs", taskSnapshotC.lastLoopDurationUs);
+  jw.u32("canTaskSnapshotCMaxLoopUs", taskSnapshotC.maxLoopDurationUs);
+  jw.u32("canTaskSnapshotCStackHighWater", taskSnapshotC.stackHighWater);
   jw.boolean("canRecoverySleeping", recoverySleeping);
   jw.i32("chassisState", chassisStatusOk ? (int32_t)chassisNow.state : -1);
   jw.string("mcpChassisStateName", chassisStatusOk ? mcpChassisStateName(chassisNow.state) : "UNAVAILABLE");
@@ -1329,7 +1347,7 @@ static String systemStatsToJson() {
   jw.u32("mcpPartyTxOk", (uint32_t)mcpPartyTxOk);
   jw.u32("mcpPartyTxFail", (uint32_t)mcpPartyTxFail);
   jw.u32("mcpPartyRxCount", (uint32_t)mcpPartyRxCount);
-  jw.u32("mcpPartyTrafficAgeMs", (uint32_t)((lastCanCFrameMs ? statsNow - lastCanCFrameMs : 999999UL)));
+  jw.u32("mcpPartyTrafficAgeMs", traffic.partySeen ? traffic.partyAgeMs : 999999UL);
   jw.u32("chassisBusOffCount", (uint32_t)(chassisBusOffCount));
   jw.u32("chassisStoppedCount", (uint32_t)(chassisStoppedCount));
   jw.u32("chassisLocalRecoveryStartCount", (uint32_t)(chassisLocalRecoveryStartCount));
@@ -1338,7 +1356,7 @@ static String systemStatsToJson() {
   jw.u32("chassisRestartFailCount", (uint32_t)(chassisRestartFailCount));
   jw.i32("chassisLastEventReason", (int32_t)(chassisLastEventReason));
   jw.string("chassisLastEventReasonName", canRecoveryDiagnosticReasonName(chassisLastEventReason));
-  jw.u32("chassisLastEventAgeMs", (uint32_t)((chassisLastEventMs ? statsNow - chassisLastEventMs : 999999UL)));
+  jw.u32("chassisLastEventAgeMs", (uint32_t)((chassisLastEventMs ? canAgeMsPure(statsNow, chassisLastEventMs) : 999999UL)));
   jw.u32("canBLastRxGapMs", (uint32_t)(lastRxGapMs));
   jw.u32("canBMaxRxGapMs", (uint32_t)(maxRxGapMs));
   jw.u32("chassisTxErrorCounter", (uint32_t)((chassisStatusOk ? chassisNow.tx_error_counter : 0)));
@@ -1349,7 +1367,7 @@ static String systemStatsToJson() {
   jw.u32("chassisArbLostCount", (uint32_t)((chassisStatusOk ? chassisNow.arb_lost_count : 0)));
   jw.u32("chassisBusErrorCount", (uint32_t)((chassisStatusOk ? chassisNow.bus_error_count : 0)));
   jw.boolean("chassisBusOffSnapshotValid", busOffSnap.valid);
-  jw.u32("chassisBusOffSnapshotAgeMs", (uint32_t)((busOffSnap.valid && canBRecordCurrent ? statsNow - busOffSnap.capturedMs : 999999UL)));
+  jw.u32("chassisBusOffSnapshotAgeMs", (uint32_t)((busOffSnap.valid && canBRecordCurrent ? canAgeMsPure(statsNow, busOffSnap.capturedMs) : 999999UL)));
   jw.u32("chassisBusOffSnapshotRxGapMs", (uint32_t)(busOffSnap.rxGapMs));
   jw.u32("chassisBusOffSnapshotTxQueue", (uint32_t)(busOffSnap.msgsToTx));
   jw.u32("chassisBusOffSnapshotRxQueue", (uint32_t)(busOffSnap.msgsToRx));
@@ -1368,7 +1386,7 @@ static String systemStatsToJson() {
   txTraceBusOffOrdinal = canBTxTraceFrozenBusOffOrdinal;
   portEXIT_CRITICAL(&canBTxTraceMux);
   jw.u32("canBTxTraceCount", (uint32_t)(txTraceFrozenCount));
-  jw.u32("canBTxTraceAgeMs", (uint32_t)((txTraceFrozenMs && canBRecordCurrent ? statsNow - txTraceFrozenMs : 999999UL)));
+  jw.u32("canBTxTraceAgeMs", (uint32_t)((txTraceFrozenMs && canBRecordCurrent ? canAgeMsPure(statsNow, txTraceFrozenMs) : 999999UL)));
   jw.u32("canBTxTraceBusOffOrdinal", (uint32_t)(txTraceBusOffOrdinal));
   jw.beginObject("canBBusOffRecord");
   jw.string("busOffRecordBoot", canBusOffRecordBootName(CAN_BUS_OFF_BUS_B_PURE));
@@ -5444,11 +5462,14 @@ static bool resetRuntimeStats() {
   canTaskHeartbeatLastCause = CAN_TASK_HEARTBEAT_NONE;
   canTaskHeartbeatLastAgeAms = 0;
   canTaskHeartbeatLastAgeBms = 0;
+  canTaskHeartbeatLastAgeCms = 0;
   canTaskHeartbeatTimeoutCountA = 0;
   canTaskHeartbeatTimeoutCountB = 0;
   canTaskHeartbeatTimeoutCountBoth = 0;
+  canTaskHeartbeatTimeoutCountC = 0;
   canTaskHeartbeatLastSnapshotA = {};
   canTaskHeartbeatLastSnapshotB = {};
+  canTaskHeartbeatLastSnapshotC = {};
   canChassisBusOffCount = 0;
   canChassisStoppedCount = 0;
   canChassisLocalRecoveryStartCount = 0;
@@ -5463,6 +5484,7 @@ static bool resetRuntimeStats() {
   portEXIT_CRITICAL(&canRecoveryMux);
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
   canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
+  canTaskDiagnosticsResetPure(canTaskPartyDiagnostics);
   canARxDiagnosticsResetPure(canARxDiagnostics);
   canPerfReset();
   canATraceReset();

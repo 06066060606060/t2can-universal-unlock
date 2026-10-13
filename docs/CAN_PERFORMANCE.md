@@ -10,20 +10,32 @@ CAN at 500 kbit/s, and controller oscillator configuration at 16 MHz.
 
 ## Scheduling
 
-The three existing tasks remain: `canA` receives BODY/J2 and PARTY/J4;
-`canB` receives CHASSIS/J3; `canSup` supervises recovery on core 0.
-Both receive tasks use priority 4 on core 1, including after recovery.
+Each physical bus now has its own receive task: `canA` receives BODY/J2,
+`canB` receives CHASSIS/J3, and `canC` receives PARTY/J4. `canSup` remains
+a separate recovery supervisor on core 0 (four CAN-related tasks total).
+All three receive tasks use priority 4 on core 1, including after recovery.
+The controllers still share a 10 MHz SPI bus; the Arduino SPI transaction lock
+serializes bus access. A dedicated task does not make SPI transfers parallel.
 
-- BODY and PARTY alternate first service each pass; neither gets a 32-frame
-  drain before the other is checked.
+- PARTY reads, processing, overflow checks, TX sampling and local bus-off
+  recovery belong to `canC`; no BODY loop services PARTY. All three tasks
+  participate in maintenance/OTA quiescence and full recovery stop/recreation.
+  Partial task creation is cleaned up before any receiver starts SPI traffic.
+  CHASSIS recovery wrappers explicitly compare their result to `ESP_OK`; a
+  successful zero-valued result must not be interpreted as boolean failure.
+- PARTY has an independent task heartbeat, including during quiet CAN periods.
+  `/api/system/stats` adds `stackCanC`, timeout count/age and snapshot C fields.
+  Existing A/B fields remain available. The historical `Both` timeout counter
+  still denotes events affecting A and B together; C counts any event involving C.
 - Each bus receives a slice of at most four frames. A 600 us cooperative time
   limit is checked between frames/batches. Already-prefetched BODY frames are
   all processed. A decoder, preemption, SPI operation or recovery can exceed
   this limit; it is not a hard real-time bound.
 - CHASSIS reads are nonblocking, removing the former extra 2 ms empty-read wait.
-- Receive tasks yield to their equal-priority peer between slices and continue
-  while traffic is being received. A one-tick pause occurs on an empty pass or
-  after 2 ms of elapsed burst time, allowing idle/watchdog tasks to execute.
+- Receive tasks yield to their equal-priority peers between slices and continue
+  while traffic is being received. After reception, empty passes yield and retry
+  for up to 250 us before a one-tick pause. A periodic one-tick pause remains
+  after 4 ms of elapsed burst time, allowing idle/watchdog tasks to execute.
   At the installed framework's 1 kHz tick rate one tick is nominally 1 ms;
   scheduler delays can be longer. Idle polling latency remains.
 - RX overflow flags are observed for all three controllers each pass. Only
@@ -32,6 +44,96 @@ Both receive tasks use priority 4 on core 1, including after recovery.
   remain in place. All existing production TX calls pass through measurement.
   CHASSIS controller saturation is reported as `ESP_ERR_TIMEOUT`, separately
   from controller send errors.
+
+## RX ages, buffer service and rollover
+
+Each XL2515/MCP2515 has two hardware receive buffers, RX0 and RX1. Three
+controllers provide six buffers total, with two dedicated to each bus; a busy
+BODY controller cannot use unused PARTY buffers. These are distinct from the
+three transmit buffers in each controller.
+
+The supervisor captures all three published heartbeat timestamps before
+refreshing its clock after recovery service. It no longer compares a newly
+published heartbeat to a clock sampled earlier on the other core. Diagnostic
+age calculation clamps future skews of up to 1000 ms to zero while retaining
+unsigned clock wraparound and genuinely old timestamps. Missing heartbeat
+sentinels and actual timeouts still trigger recovery. Dashboard traffic ages,
+timeout snapshots and controller event ages use the same correction.
+
+The driver now rotates RX0/RX1 priority when both receive flags are pending.
+A sole pending buffer is always read. A malformed frame still drains its
+selected buffer and rotates priority, preventing it from monopolizing reads.
+The choice is local to each controller; bus routing and payloads are unchanged.
+`reset()` reads back RXB0CTRL/RXB1CTRL and reports failure if BUKT is absent or
+the expected standard/extended filter mode was not written. All three checked
+initialization paths use this result before publishing readiness.
+
+The compact dashboard cards are retained. `/api/system/stats` adds, for each
+`canPerformance` bus, `rx0Frames`, `rx1Frames`, `rxConfigSamples`, `rx0Ctrl`,
+`rx1Ctrl`, `rxConfigValid`, `rxRolloverEnabled`, and `rxFilterModeEnabled`.
+Control registers are read by the bus's RX owner at most once per second,
+without clearing pending frames or error flags. `rxConfigValid` requires a
+sample, BUKT and the expected receive mode; filter masks are initialized to zero
+by reset, but are not reread by this diagnostic. A zero RX1 overflow count alone
+does not prove RX1 is unused: check the actual `rx1Frames` counter.
+
+The new retry window and burst limit are cooperative scheduling settings,
+not physical latency guarantees. They reduce immediate sleeps after short
+traffic gaps, while preserving bounded periodic pauses. SPI contention,
+processing/preemption and the two-frame capacity of each controller can still
+cause overflow. Compare overflow increments, RX rates and poll gaps over equal
+time intervals with the same bench traffic; cumulative counts do not show a
+before/after rate without their elapsed interval.
+
+Run `tests/run_can_rx_diagnostics_tests.py` under Linux/WSL. It exercises the
+actual driver against a synthetic SPI register model for three controllers,
+including continuous RX0 refill, RX1 service, malformed DLC, reset readback
+failure and preservation of interrupt/overflow flags. It also extracts the
+dashboard traffic snapshot and tests future publication, real stale/missing
+heartbeats, clock wraparound, quiet retry and periodic pause boundaries.
+These checks and existing task/lifecycle and TX-contention regressions pass
+under `-Os`/`-O2` with ASan/UBSan. Isolated driver and diagnostics ESP32-S3
+compilation results are saved in `.build/can-rx-diagnostics/target/results.json`.
+No complete application was linked or uploaded. Physical readback and any
+overflow reduction remain to be confirmed after loading the updated sources.
+
+## TX barrier contention
+
+The common BODY/PARTY/CHASSIS transport entry points now wait up to one
+FreeRTOS tick for the TX barrier instead of rejecting an occupied barrier
+immediately. At the configured 1 kHz tick rate this is nominally 1 ms;
+scheduler latency is additional. An uncontended take proceeds immediately.
+The wait yields execution to the current owner, including when it is finishing
+a SPI submission. A timeout still rejects the frame: there is no unbounded
+wait or backlog that could later send obsolete frames.
+
+`canTxEpochSnapshot()` reads an atomic mirror without taking the TX mutex,
+so BODY TX cannot turn an otherwise valid PARTY epoch snapshot into zero or
+delay the RX polling path. Recovery publishes every epoch change while holding
+the barrier. The authoritative epoch, bus readiness, freshness and applicable
+administrative hold, cancellation generation or validation callback are checked
+after taking the mutex. PARTY also rechecks administrative hold after waiting.
+Existing feature-local admission checks retain their own policies.
+
+`MUTEX_BUSY` from these transport entry points now denotes failure to acquire
+the barrier within the wait budget, or an unavailable mutex. Driver TX failure
+counts still exclude rejections before the controller is called.
+
+Run `tests/run_can_tx_contention_tests.py` under Linux/WSL. It extracts the
+transport functions, uses synthetic frames, and tests contention release,
+timeout, nonblocking epoch reads, recovery and epoch wrap, administrative hold,
+freshness/readiness changes, cancellation and final validation during the wait.
+It also checks unchanged controller busy/error accounting, with `-Os`/`-O2`,
+ASan/UBSan and 1 kHz/100 Hz tick configurations. These host checks do not
+measure physical CAN latency, RX overflow or throughput.
+
+For this correction, the TX contention, RX lifecycle and existing performance
+tests passed under `-Os` and `-O2` with ASan/UBSan. The extracted transport and
+unchanged local MCP2515 driver also compiled to ESP32-S3 objects with both
+optimization levels using Arduino-ESP32 3.3.12 and its real FreeRTOS/SPI headers.
+Results are in `.build/can-tx-contention/target/objects/results.json`.
+This isolated target check did not link a complete application or upload
+firmware. Dashboard measurements under bench traffic are still required.
 
 ## Dashboard measurement
 
@@ -155,3 +257,18 @@ comparison binaries above predate those fixes. The later simplified CAN cards
 and per-bus recovery / PARTY `0x370` counters are in the current source and
 `.build/dashboard-counters/Os/TMR_Dashboard.ino.bin`. The older
 `.build/dashboard-fix/` image contains only the earlier Home fixes.
+
+### Dedicated PARTY receive task validation
+
+Run `tests/run_can_receive_task_tests.py` under Linux/WSL with Python 3 and g++.
+The tests extract the current task/lifecycle functions and run them against
+synthetic CAN frames and FreeRTOS fakes, without vehicle feature handlers.
+They pass under `-Os` and `-O2` with ASan/UBSan: PARTY-only reception, bounded
+draining, quiet-task heartbeat, bus-off recovery success/failure, maintenance
+waiting for PARTY, all three allocation-failure positions, stop/recreation,
+all seven task-timeout masks, timestamp wraparound and CHASSIS return codes.
+Existing performance policy and runtime instrumentation tests also pass.
+
+No complete ESP32 firmware build or upload was performed for this task split.
+The binaries listed above predate it. Overflow reduction and physical CAN
+latency remain unmeasured and must be compared under equivalent bench traffic.

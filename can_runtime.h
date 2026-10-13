@@ -1,4 +1,5 @@
 #pragma once
+#include "can_time_pure.h"
 
 // CAN TASKS / RECOVERY SUPERVISOR
 // Kept in the same translation unit to preserve proven runtime behavior.
@@ -15,11 +16,11 @@ static uint8_t canPhysicalFreshMaskNow(uint32_t now) {
   const uint32_t lastA = lastCanAFrameMs;
   const uint32_t lastB = lastCanBFrameMs;
   const uint32_t lastC = lastCanCFrameMs;
-  if (lastC != 0 && (uint32_t)(now - lastC) <= RECOVERY_BUS_FRESH_MS)
+  if (lastC != 0 && canAgeMsPure(now, lastC) <= RECOVERY_BUS_FRESH_MS)
     mask = (uint8_t)(mask | CAN_TX_FRESH_PARTY);
-  if (lastB != 0 && (uint32_t)(now - lastB) <= RECOVERY_BUS_FRESH_MS)
+  if (lastB != 0 && canAgeMsPure(now, lastB) <= RECOVERY_BUS_FRESH_MS)
     mask = (uint8_t)(mask | CAN_TX_FRESH_CHASSIS);
-  if (lastA != 0 && (uint32_t)(now - lastA) <= RECOVERY_BUS_FRESH_MS)
+  if (lastA != 0 && canAgeMsPure(now, lastA) <= RECOVERY_BUS_FRESH_MS)
     mask = (uint8_t)(mask | CAN_TX_FRESH_BODY);
   return mask;
 }
@@ -33,6 +34,7 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
     const uint8_t preserved = canTxPreservedFreshMaskPure(
         canTxBarrierState.freshMask, invalidatedBusMask, physicalFreshMask);
     canTxBarrierInvalidatePreservePure(canTxBarrierState, preserved);
+    canTxEpochPublishLocked();
     __atomic_store_n(&canTxFreshMaskFast, preserved, __ATOMIC_RELEASE);
   }
 
@@ -230,7 +232,7 @@ static void recordChassisBusOffSnapshot(const McpChassisStatus &st, uint32_t now
   snap.state = (uint8_t)st.state;
   snap.capturedMs = now;
   const uint32_t lastB = lastCanBFrameMs;
-  snap.rxGapMs = lastB ? (uint32_t)(now - lastB) : 0;
+  snap.rxGapMs = lastB ? canAgeMsPure(now, lastB) : 0;
   snap.msgsToTx = st.msgs_to_tx;
   snap.msgsToRx = st.msgs_to_rx;
   snap.txErrorCounter = st.tx_error_counter;
@@ -280,7 +282,7 @@ static void canATraceFreezeBusOff(uint32_t now, uint8_t eflg, uint8_t txFailCons
   canALastBusOffSnapshot.capturedMs = now;
   canALastBusOffSnapshot.eflg = eflg;
   canALastBusOffSnapshot.txFailConsecutive = txFailConsecutive;
-  canALastBusOffSnapshot.rxAgeMs = lastA ? (uint32_t)(now - lastA) : 0;
+  canALastBusOffSnapshot.rxAgeMs = lastA ? canAgeMsPure(now, lastA) : 0;
   canALastBusOffSnapshot.rxOverflowCount = overflowCount;
   canALastBusOffSnapshot.txOk = mcpTxOk;
   canALastBusOffSnapshot.txFail = mcpTxFail;
@@ -424,12 +426,19 @@ static uint8_t canDrainPartySlice() {
   uint8_t processed = 0;
   struct can_frame frame = {};
   while (canRxSliceAvailablePure(processed, startedUs, (uint32_t)micros())) {
+    canTaskDiagnosticsEnterStagePure(canTaskPartyDiagnostics,
+                                     CAN_TASK_STAGE_RECEIVE, (uint32_t)millis());
     // Capture authorization epoch before reading, as on BODY/CHASSIS.
     const uint32_t epoch = canTxEpochSnapshot();
     uint32_t readUs = 0;
     if (canPerfRead(Can_C, CAN_PERF_PARTY, &frame, &readUs) != MCP2515::ERROR_OK) break;
+    const uint32_t frameNow = (uint32_t)millis();
+    canTaskPartyHeartbeatMs = frameNow;
+    canTaskDiagnosticsPulsePure(canTaskPartyDiagnostics, frameNow);
+    canTaskDiagnosticsEnterStagePure(canTaskPartyDiagnostics,
+                                     CAN_TASK_STAGE_PROCESS, frameNow);
     CanPerfRxScope scope(CAN_PERF_PARTY, readUs);
-    tmrProcessPartyFrame(frame, (uint32_t)millis(), epoch);
+    tmrProcessPartyFrame(frame, frameNow, epoch);
     ++processed;
   }
   return processed;
@@ -438,8 +447,7 @@ static uint8_t canDrainPartySlice() {
 static void canTaskMcp(void* arg) {
   TMR_SERIAL_PRINTLN("[CAN A] MCP2515 task started");
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
-  uint32_t burstStartedUs = (uint32_t)micros();
-  bool partyFirst = false;
+  CanRxPauseStatePure rxPause = {(uint32_t)micros(), (uint32_t)micros()};
   for (;;) {
     const uint32_t loopStartMs = (uint32_t)millis();
     canTaskMcpHeartbeatMs = loopStartMs;
@@ -452,16 +460,13 @@ static void canTaskMcp(void* arg) {
       canTaskMcpQuiesced = true;
       while (canTasksStopping || canMaintenanceActive()) vTaskDelay(pdMS_TO_TICKS(5));
       canTaskMcpQuiesced = false;
-      burstStartedUs = (uint32_t)micros();
+      rxPause = {(uint32_t)micros(), (uint32_t)micros()};
       continue;
     }
     // ── BOUNDED READ LOOP ──
     // The default d3 path prefetches up to four MCP2515 frames before decoding.
     // LAB can select the c7-style path, which processes each frame immediately.
-    // Alternate BODY/PARTY first service each pass. Both RX tasks have the
-    // same priority; yield between bounded slices so CHASSIS also gets served.
-    const uint8_t partyBefore = partyFirst ? canDrainPartySlice() : 0;
-    if (partyFirst) taskYIELD();
+    // BODY owns this task. PARTY and CHASSIS have independent RX tasks.
     const uint32_t bodySliceStartedUs = (uint32_t)micros();
     static constexpr uint8_t MCP_PREFETCH_CAPACITY = 4;
     const uint8_t readBatchBudget = canARxReadBatchBudgetPure(labMenuEnabled, canARxSavedMode);
@@ -493,7 +498,7 @@ static void canTaskMcp(void* arg) {
       processed++;
       const uint32_t frameNow = (uint32_t)millis();
       lastCanAFrameMs = frameNow;
-      mcpRxCount++;
+      __atomic_add_fetch(&mcpRxCount, 1U, __ATOMIC_RELAXED);
       canRxObserve(CAN_RX_BUS_BODY, frameNow);
       canTxMarkFresh(CAN_TX_FRESH_BODY);
       __atomic_add_fetch(&mcpBodyRxCount, 1U, __ATOMIC_RELAXED);
@@ -548,39 +553,6 @@ static void canTaskMcp(void* arg) {
       canTaskDiagnosticsEnterStagePure(canTaskMcpDiagnostics,
                                        CAN_TASK_STAGE_RECEIVE,
                                        (uint32_t)millis());
-    }
-
-    // ── J4 PARTY / MCP2515 ──
-    // No 32-frame BODY batch can delay PARTY. Already-prefetched BODY frames
-    // are all decoded, even if a decoder exceeds the cooperative time limit.
-    taskYIELD();
-    const uint8_t partyAfter = partyFirst ? 0 : canDrainPartySlice();
-    partyFirst = !partyFirst;
-    const uint8_t partyProcessed = partyBefore + partyAfter;
-    taskYIELD();
-    {
-      const uint8_t eflgParty = Can_C.getErrorFlags();
-      canPerfObserveOverflow(CAN_PERF_PARTY, eflgParty);
-      if (eflgParty & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR))
-        Can_C.clearRXnOVRFlags();
-      if (eflgParty & MCP2515::EFLG_TXBO) {
-        mcpPartyState = 2;
-        const unsigned long partyNowMs = millis();
-        if (partyNowMs - lastMcpPartyRecoverMs >= 3000UL) {
-          lastMcpPartyRecoverMs = partyNowMs;
-          mcpPartyReady = false;
-          if (mcpPartyReinit()) {
-            mcpPartyState = 0;
-            TMR_SERIAL_PRINTLN("[CAN C] PARTY BUS-OFF recovery complete -> RUNNING");
-          } else {
-            mcpPartyState = 2;
-            TMR_SERIAL_PRINTLN("[CAN C] PARTY BUS-OFF recovery FAILED -> hard CAN recovery requested");
-            requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_MCP_REINIT_FAIL);
-          }
-        }
-      } else if (mcpPartyReady) {
-        mcpPartyState = 0;
-      }
     }
 
     canARxDiagnosticsCompleteLoopPure(canARxDiagnostics, processed,
@@ -641,8 +613,62 @@ static void canTaskMcp(void* arg) {
     canTaskDiagnosticsFinishLoopPure(canTaskMcpDiagnostics,
                                      (uint32_t)micros());
     canPerfSampleTx(Can_A, CAN_PERF_BODY);
+    canPerfSampleRxConfig(Can_A, CAN_PERF_BODY);
+    canRxFinishBurst(processed != 0, rxPause);
+  }
+}
+
+static void canTaskParty(void* arg) {
+  TMR_SERIAL_PRINTLN("[CAN C] PARTY MCP2515 task started");
+  canTaskDiagnosticsResetPure(canTaskPartyDiagnostics);
+  CanRxPauseStatePure rxPause = {(uint32_t)micros(), (uint32_t)micros()};
+  for (;;) {
+    const uint32_t loopStartMs = (uint32_t)millis();
+    canTaskPartyHeartbeatMs = loopStartMs;
+    canTaskDiagnosticsHeartbeatPure(canTaskPartyDiagnostics, loopStartMs,
+                                    (uint32_t)micros());
+    if (canTasksStopping || canMaintenanceActive()) {
+      canTaskDiagnosticsEnterStagePure(canTaskPartyDiagnostics,
+                                       CAN_TASK_STAGE_QUIESCE,
+                                       (uint32_t)millis());
+      canTaskPartyQuiesced = true;
+      while (canTasksStopping || canMaintenanceActive()) vTaskDelay(pdMS_TO_TICKS(5));
+      canTaskPartyQuiesced = false;
+      rxPause = {(uint32_t)micros(), (uint32_t)micros()};
+      continue;
+    }
+
+    const uint8_t processed = canDrainPartySlice();
+    canTaskDiagnosticsEnterStagePure(canTaskPartyDiagnostics,
+                                     CAN_TASK_STAGE_STATUS, (uint32_t)millis());
+    const uint8_t eflgParty = Can_C.getErrorFlags();
+    canPerfObserveOverflow(CAN_PERF_PARTY, eflgParty);
+    if (eflgParty & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR))
+      Can_C.clearRXnOVRFlags();
+    if (eflgParty & MCP2515::EFLG_TXBO) {
+      mcpPartyState = 2;
+      const uint32_t partyNowMs = (uint32_t)millis();
+      if ((uint32_t)(partyNowMs - lastMcpPartyRecoverMs) >= 3000UL) {
+        lastMcpPartyRecoverMs = partyNowMs;
+        mcpPartyReady = false;
+        if (mcpPartyReinit()) {
+          mcpPartyState = 0;
+          TMR_SERIAL_PRINTLN("[CAN C] PARTY BUS-OFF recovery complete -> RUNNING");
+        } else {
+          mcpPartyState = 2;
+          TMR_SERIAL_PRINTLN("[CAN C] PARTY BUS-OFF recovery FAILED -> hard CAN recovery requested");
+          requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_MCP_REINIT_FAIL);
+        }
+      }
+    } else if (mcpPartyReady) {
+      mcpPartyState = 0;
+    }
     canPerfSampleTx(Can_C, CAN_PERF_PARTY);
-    canRxFinishBurst(processed != 0 || partyProcessed != 0, burstStartedUs);
+    canPerfSampleRxConfig(Can_C, CAN_PERF_PARTY);
+    canTaskDiagnosticsEnterStagePure(canTaskPartyDiagnostics,
+                                     CAN_TASK_STAGE_DELAY, (uint32_t)millis());
+    canTaskDiagnosticsFinishLoopPure(canTaskPartyDiagnostics, (uint32_t)micros());
+    canRxFinishBurst(processed != 0, rxPause);
   }
 }
 
@@ -653,7 +679,7 @@ static void canTaskChassis(void* arg) {
   uint32_t lastQueueStatusMs = 0;
 
   canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
-  uint32_t burstStartedUs = (uint32_t)micros();
+  CanRxPauseStatePure rxPause = {(uint32_t)micros(), (uint32_t)micros()};
   for (;;) {
     const uint32_t loopStartMs = (uint32_t)millis();
     canTaskChassisHeartbeatMs = loopStartMs;
@@ -666,7 +692,7 @@ static void canTaskChassis(void* arg) {
       canTaskChassisQuiesced = true;
       while (canTasksStopping || canMaintenanceActive()) vTaskDelay(pdMS_TO_TICKS(5));
       canTaskChassisQuiesced = false;
-      burstStartedUs = (uint32_t)micros();
+      rxPause = {(uint32_t)micros(), (uint32_t)micros()};
       continue;
     }
     // Drain completion/error alerts before the potentially busy RX batch so
@@ -928,7 +954,8 @@ static void canTaskChassis(void* arg) {
     canTaskDiagnosticsFinishLoopPure(canTaskChassisDiagnostics,
                                      (uint32_t)micros());
     canPerfSampleTx(Can_B, CAN_PERF_CHASSIS);
-    canRxFinishBurst(rxBudget != 0, burstStartedUs);
+    canPerfSampleRxConfig(Can_B, CAN_PERF_CHASSIS);
+    canRxFinishBurst(rxBudget != 0, rxPause);
   }
 }
 
@@ -938,24 +965,29 @@ static void canTaskChassis(void* arg) {
 // ═══════════════════════════════════════════════════════════════
 
 static inline bool recoveryFresh(uint32_t now, uint32_t ts, uint32_t timeoutMs) {
-  return ts != 0 && (uint32_t)(now - ts) <= timeoutMs;
+  return ts != 0 && canAgeMsPure(now, ts) <= timeoutMs;
 }
 
-static void recordCanTaskHeartbeatTimeout(uint32_t now, bool aDead, bool bDead) {
-  const uint8_t cause = aDead
-      ? (bDead ? CAN_TASK_HEARTBEAT_BOTH : CAN_TASK_HEARTBEAT_A)
-      : (bDead ? CAN_TASK_HEARTBEAT_B : CAN_TASK_HEARTBEAT_NONE);
+static void recordCanTaskHeartbeatTimeout(uint32_t now, bool aDead, bool bDead, bool cDead) {
+  const uint8_t cause = (aDead ? CAN_TASK_HEARTBEAT_A : CAN_TASK_HEARTBEAT_NONE) |
+                        (bDead ? CAN_TASK_HEARTBEAT_B : CAN_TASK_HEARTBEAT_NONE) |
+                        (cDead ? CAN_TASK_HEARTBEAT_C : CAN_TASK_HEARTBEAT_NONE);
   if (cause == CAN_TASK_HEARTBEAT_NONE) return;
   const uint8_t stateA = canTaskStateCode(canTaskBodyHandle);
   const uint8_t stateB = canTaskStateCode(canTaskChassisHandle);
+  const uint8_t stateC = canTaskStateCode(canTaskPartyHandle);
   const uint32_t stackA = canTaskBodyHandle
       ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskBodyHandle) : 0u;
   const uint32_t stackB = canTaskChassisHandle
       ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskChassisHandle) : 0u;
+  const uint32_t stackC = canTaskPartyHandle
+      ? (uint32_t)uxTaskGetStackHighWaterMark(canTaskPartyHandle) : 0u;
   const CanTaskTimeoutSnapshotPure snapshotA = canTaskDiagnosticsSnapshotPure(
       canTaskMcpDiagnostics, now, stateA, stackA);
   const CanTaskTimeoutSnapshotPure snapshotB = canTaskDiagnosticsSnapshotPure(
       canTaskChassisDiagnostics, now, stateB, stackB);
+  const CanTaskTimeoutSnapshotPure snapshotC = canTaskDiagnosticsSnapshotPure(
+      canTaskPartyDiagnostics, now, stateC, stackC);
   portENTER_CRITICAL(&canRecoveryMux);
   // Snapshot once for the restart request that is about to be queued. The
   // supervisor may loop again before reinitialization starts.
@@ -963,11 +995,16 @@ static void recordCanTaskHeartbeatTimeout(uint32_t now, bool aDead, bool bDead) 
     canTaskHeartbeatLastCause = cause;
     canTaskHeartbeatLastAgeAms = snapshotA.heartbeatAgeMs;
     canTaskHeartbeatLastAgeBms = snapshotB.heartbeatAgeMs;
+    canTaskHeartbeatLastAgeCms = snapshotC.heartbeatAgeMs;
     canTaskHeartbeatLastSnapshotA = snapshotA;
     canTaskHeartbeatLastSnapshotB = snapshotB;
-    if (cause == CAN_TASK_HEARTBEAT_A) canTaskHeartbeatTimeoutCountA++;
-    else if (cause == CAN_TASK_HEARTBEAT_B) canTaskHeartbeatTimeoutCountB++;
-    else canTaskHeartbeatTimeoutCountBoth++;
+    canTaskHeartbeatLastSnapshotC = snapshotC;
+    // A/B retain their historical exclusive-event counters. C counts any
+    // timeout involving PARTY; BOTH continues to mean A and B together.
+    if (aDead && !bDead) canTaskHeartbeatTimeoutCountA++;
+    else if (bDead && !aDead) canTaskHeartbeatTimeoutCountB++;
+    else if (aDead && bDead) canTaskHeartbeatTimeoutCountBoth++;
+    if (cDead) canTaskHeartbeatTimeoutCountC++;
   }
   portEXIT_CRITICAL(&canRecoveryMux);
 }
@@ -1023,11 +1060,11 @@ static bool recoveryMcpColdInit() {
 }
 
 static bool recoveryChassisInstallFresh() {
-  return tmrChassisRecoverChecked("hard install");
+  return tmrChassisRecoverChecked("hard install") == ESP_OK;
 }
 
 static bool recoveryChassisFullReinit() {
-  return tmrChassisRecoverChecked("hard reinit");
+  return tmrChassisRecoverChecked("hard reinit") == ESP_OK;
 }
 
 // Maintenance never deletes tasks while they may own SPI/state locks and never
@@ -1061,7 +1098,8 @@ static bool prepareCanForMaintenance() {
   }
   started = (uint32_t)millis();
   while ((canTaskBodyHandle && !canTaskMcpQuiesced) ||
-         (canTaskChassisHandle && !canTaskChassisQuiesced)) {
+         (canTaskChassisHandle && !canTaskChassisQuiesced) ||
+         (canTaskPartyHandle && !canTaskPartyQuiesced)) {
     if ((uint32_t)((uint32_t)millis() - started) >= 500u) return finish(false);
     vTaskDelay(pdMS_TO_TICKS(5));
   }
@@ -1088,21 +1126,24 @@ static void restartTmrCanSafely() {
 
 static void recoveryStopCanTasks() {
   canTasksStopping = true;
-  canTaskMcpQuiesced = false;
-  canTaskChassisQuiesced = false;
 
   uint32_t start = (uint32_t)millis();
-  while ((!canTaskMcpQuiesced || !canTaskChassisQuiesced) &&
+  while (((canTaskBodyHandle && !canTaskMcpQuiesced) ||
+          (canTaskChassisHandle && !canTaskChassisQuiesced) ||
+          (canTaskPartyHandle && !canTaskPartyQuiesced)) &&
          (uint32_t)((uint32_t)millis() - start) < 300) {
     vTaskDelay(pdMS_TO_TICKS(5));
   }
 
   TaskHandle_t a = canTaskBodyHandle;
   TaskHandle_t b = canTaskChassisHandle;
+  TaskHandle_t c = canTaskPartyHandle;
   canTaskBodyHandle = nullptr;
   canTaskChassisHandle = nullptr;
+  canTaskPartyHandle = nullptr;
   if (a) vTaskDelete(a);
   if (b) vTaskDelete(b);
+  if (c) vTaskDelete(c);
   // Forced deletion may not unwind a frame scope. Do not let a recreated
   // task with a reused handle inherit the previous task's RX timestamp.
   canPerfClearRxContexts();
@@ -1110,17 +1151,24 @@ static void recoveryStopCanTasks() {
   canTasksStopping = false;
   canTaskMcpQuiesced = false;
   canTaskChassisQuiesced = false;
+  canTaskPartyQuiesced = false;
   canTaskMcpHeartbeatMs = 0;
   canTaskChassisHeartbeatMs = 0;
+  canTaskPartyHeartbeatMs = 0;
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
   canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
+  canTaskDiagnosticsResetPure(canTaskPartyDiagnostics);
   vTaskDelay(pdMS_TO_TICKS(RECOVERY_TASK_STOP_SETTLE_MS));
 }
 
-static bool recoveryStartCanTasks() {
+static bool startCanReceiveTasks() {
+  // A partially-created set must not start SPI traffic before all owners exist.
+  // This also makes cleanup safe if the second or third allocation fails.
+  canTasksStopping = true;
   BaseType_t a = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskBodyHandle, 1);
   if (a != pdPASS) {
     canTaskBodyHandle = nullptr;
+    canTasksStopping = false;
     return false;
   }
   BaseType_t b = xTaskCreatePinnedToCore(canTaskChassis, "canB", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskChassisHandle, 1);
@@ -1128,8 +1176,23 @@ static bool recoveryStartCanTasks() {
     vTaskDelete(canTaskBodyHandle);
     canTaskBodyHandle = nullptr;
     canTaskChassisHandle = nullptr;
+    canTaskMcpQuiesced = false;
+    canTasksStopping = false;
     return false;
   }
+  BaseType_t c = xTaskCreatePinnedToCore(canTaskParty, "canC", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskPartyHandle, 1);
+  if (c != pdPASS) {
+    vTaskDelete(canTaskBodyHandle);
+    vTaskDelete(canTaskChassisHandle);
+    canTaskBodyHandle = nullptr;
+    canTaskChassisHandle = nullptr;
+    canTaskPartyHandle = nullptr;
+    canTaskMcpQuiesced = false;
+    canTaskChassisQuiesced = false;
+    canTasksStopping = false;
+    return false;
+  }
+  canTasksStopping = false;
   return true;
 }
 
@@ -1157,10 +1220,11 @@ static bool recoveryHardReinitialize(uint8_t reason, uint8_t diagReason) {
   if (aOk) mcpState = 0;
   if (bOk) mcpChassisReady = true;
   if (mcpPartyReady) mcpPartyState = 0;
-  bool tasksOk = aOk && bOk && recoveryStartCanTasks();
+  bool tasksOk = aOk && bOk && startCanReceiveTasks();
 
   lastCanAFrameMs = 0;
   lastCanBFrameMs = 0;
+  lastCanCFrameMs = 0;
   canInitTime = millis();
   recoveryOneBusStaleStartMs = 0;
   recoveryWakeAcquireStartMs = (reason == CAN_SUP_HARD_ACQUIRE || recoveryEverBothActive)
@@ -1195,18 +1259,26 @@ static void canSupervisorTask(void* arg) {
     canRecoverySupervisorTick(now);
 
     if (!canSubsystemBusy) {
+      // Capture published timestamps before sampling the clock. The RX tasks
+      // can advance while the supervisor services recovery on the other core.
+      const uint32_t heartbeatA = canTaskMcpHeartbeatMs;
+      const uint32_t heartbeatB = canTaskChassisHeartbeatMs;
+      const uint32_t heartbeatC = canTaskPartyHeartbeatMs;
+      const uint32_t initializedMs = canInitTime;
+      now = (uint32_t)millis();
       // Independent task heartbeat: still advances while the vehicle is asleep.
       // Therefore silence on the CAN wires is not confused with a wedged task.
-      bool graceDone = (uint32_t)(now - canInitTime) >= RECOVERY_TASK_START_GRACE_MS;
+      bool graceDone = canAgeMsPure(now, initializedMs) >= RECOVERY_TASK_START_GRACE_MS;
       bool aTaskDead = canTaskBodyHandle && graceDone &&
-                       (canTaskMcpHeartbeatMs == 0 ||
-                        (uint32_t)(now - canTaskMcpHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
+                       canHeartbeatExpiredPure(now, heartbeatA, RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
       bool bTaskDead = canTaskChassisHandle && graceDone &&
-                       (canTaskChassisHeartbeatMs == 0 ||
-                        (uint32_t)(now - canTaskChassisHeartbeatMs) > RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
-      if (aTaskDead || bTaskDead) {
-        TMR_SERIAL_PRINTF("[CAN SUP] task heartbeat stale A=%u B=%u\n", aTaskDead ? 1 : 0, bTaskDead ? 1 : 0);
-        recordCanTaskHeartbeatTimeout(now, aTaskDead, bTaskDead);
+                       canHeartbeatExpiredPure(now, heartbeatB, RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
+      bool cTaskDead = canTaskPartyHandle && graceDone &&
+                       canHeartbeatExpiredPure(now, heartbeatC, RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS);
+      if (aTaskDead || bTaskDead || cTaskDead) {
+        TMR_SERIAL_PRINTF("[CAN SUP] task heartbeat stale A=%u B=%u C=%u\n",
+                         aTaskDead ? 1 : 0, bTaskDead ? 1 : 0, cTaskDead ? 1 : 0);
+        recordCanTaskHeartbeatTimeout(now, aTaskDead, bTaskDead, cTaskDead);
         requestCanSubsystemRestart(CAN_SUP_HARD_STALE, CAN_REC_TASK_HEARTBEAT_TIMEOUT);
       }
 

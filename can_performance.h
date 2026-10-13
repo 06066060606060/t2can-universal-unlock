@@ -16,7 +16,8 @@ static CanPerfRxContext canPerfRxContexts[3] = {};
 static MCP2515::ERROR canPerfRead(MCP2515 &controller, CanPerfBus bus,
                                  can_frame *frame, uint32_t *readUs = nullptr) {
   const uint32_t started = (uint32_t)micros();
-  const MCP2515::ERROR result = controller.readMessage(frame);
+  MCP2515::RXBn buffer = MCP2515::RXB0;
+  const MCP2515::ERROR result = controller.readMessage(frame, &buffer);
   const uint32_t ended = (uint32_t)micros();
   if (readUs) *readUs = ended;
   portENTER_CRITICAL(&canPerfMux);
@@ -24,6 +25,8 @@ static MCP2515::ERROR canPerfRead(MCP2515 &controller, CanPerfBus bus,
   canPerfPollObservePure(s, started);
   if (result == MCP2515::ERROR_OK) {
     ++s.rxFrames;
+    if (buffer == MCP2515::RXB0) ++s.rx0Frames;
+    else ++s.rx1Frames;
     if (bus == CAN_PERF_PARTY && frame && frame->can_id == 0x370u && frame->can_dlc > 0)
       ++s.rx370;
     canPerfTimingObservePure(s.rxRead, ended - started);
@@ -106,6 +109,26 @@ static void canPerfSampleTx(MCP2515 &controller, CanPerfBus bus) {
   portEXIT_CRITICAL(&canPerfMux);
 }
 
+// Each RX owner reads its own controller, at most once per second. No RX
+// interrupt or overflow flag is cleared by this readback.
+static void canPerfSampleRxConfig(MCP2515 &controller, CanPerfBus bus) {
+  const uint32_t now = (uint32_t)micros();
+  portENTER_CRITICAL(&canPerfMux);
+  const bool due = canPerfBuses[bus].rxConfigSamples == 0 ||
+      (uint32_t)(now - canPerfBuses[bus].rxConfigLastUs) >= 1000000u;
+  portEXIT_CRITICAL(&canPerfMux);
+  if (!due) return;
+  uint8_t rx0, rx1;
+  controller.getRxBufferConfiguration(rx0, rx1);
+  portENTER_CRITICAL(&canPerfMux);
+  CanPerfBusPure &s = canPerfBuses[bus];
+  s.rx0Ctrl = rx0;
+  s.rx1Ctrl = rx1;
+  s.rxConfigLastUs = now;
+  ++s.rxConfigSamples;
+  portEXIT_CRITICAL(&canPerfMux);
+}
+
 static CanPerfBusPure canPerfSnapshot(CanPerfBus bus) {
   portENTER_CRITICAL(&canPerfMux);
   const CanPerfBusPure result = canPerfBuses[bus];
@@ -126,12 +149,12 @@ static void canPerfClearRxContexts() {
   portEXIT_CRITICAL(&canPerfMux);
 }
 
-static void canRxFinishBurst(bool received, uint32_t &burstStartedUs) {
+static void canRxFinishBurst(bool received, CanRxPauseStatePure &state) {
   const uint32_t now = (uint32_t)micros();
-  if (canRxShouldSleepPure(received, burstStartedUs, now)) {
+  if (canRxShouldSleepPure(received, state, now)) {
     // Allow idle/watchdog and lower-priority tasks to run periodically.
     vTaskDelay(1);
-    burstStartedUs = (uint32_t)micros();
+    state.burstStartedUs = (uint32_t)micros();
   } else {
     // Equal-priority RX peer on core 1 gets the next cooperative slice.
     taskYIELD();
