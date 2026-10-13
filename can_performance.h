@@ -24,6 +24,8 @@ static MCP2515::ERROR canPerfRead(MCP2515 &controller, CanPerfBus bus,
   canPerfPollObservePure(s, started);
   if (result == MCP2515::ERROR_OK) {
     ++s.rxFrames;
+    if (bus == CAN_PERF_PARTY && frame && frame->can_id == 0x370u && frame->can_dlc > 0)
+      ++s.rx370;
     canPerfTimingObservePure(s.rxRead, ended - started);
   } else if (result != MCP2515::ERROR_NOMSG) ++s.rxErrors;
   portEXIT_CRITICAL(&canPerfMux);
@@ -67,11 +69,16 @@ static MCP2515::ERROR canPerfSend(MCP2515 &controller, CanPerfBus bus,
   canPerfTimingObservePure(s.txCall, ended - started);
   if (result == MCP2515::ERROR_OK) {
     ++s.txQueued;
+    if (bus == CAN_PERF_PARTY && frame && frame->can_id == 0x370u && frame->can_dlc > 0)
+      ++s.tx370;
     const CanPerfRxContext &rx = canPerfRxContexts[bus];
     if (rx.active && rx.owner == owner)
       canPerfTimingObservePure(s.rxToEnqueue, ended - rx.readUs);
   } else if (result == MCP2515::ERROR_ALLTXBUSY) ++s.txBusy;
   else ++s.txErrors;
+  if (result != MCP2515::ERROR_OK && bus == CAN_PERF_PARTY &&
+      frame && frame->can_id == 0x370u && frame->can_dlc > 0)
+    ++s.tx370Errors;
   portEXIT_CRITICAL(&canPerfMux);
   return result;
 }
@@ -79,6 +86,16 @@ static MCP2515::ERROR canPerfSend(MCP2515 &controller, CanPerfBus bus,
 static void canPerfObserveOverflow(CanPerfBus bus, uint8_t flags) {
   portENTER_CRITICAL(&canPerfMux);
   canPerfOverflowObservePure(canPerfBuses[bus], flags);
+  portEXIT_CRITICAL(&canPerfMux);
+}
+
+// Only runtime recovery paths call this; initial boot setup is not a recovery.
+static void canPerfObserveRecovery(CanPerfBus bus, bool ok) {
+  portENTER_CRITICAL(&canPerfMux);
+  CanPerfBusPure &s = canPerfBuses[bus];
+  ++s.recoveryAttempts;
+  if (ok) ++s.recoveries;
+  else ++s.recoveryErrors;
   portEXIT_CRITICAL(&canPerfMux);
 }
 

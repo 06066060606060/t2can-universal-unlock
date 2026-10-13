@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cassert>
 #include <cstdio>
+#include <initializer_list>
 
 using TaskHandle_t = void *;
 using portMUX_TYPE = int;
@@ -14,7 +15,7 @@ static uint32_t micros() { return clockUs; }
 static TaskHandle_t xTaskGetCurrentTaskHandle() { return task; }
 static void vTaskDelay(int ticks) { clockUs += ticks * 1000; ++sleeps; }
 static void taskYIELD() { ++yields; }
-struct can_frame {};
+struct can_frame { uint32_t can_id = 0; uint8_t can_dlc = 8; };
 struct MCP2515 {
   enum ERROR { ERROR_OK, ERROR_FAIL, ERROR_ALLTXBUSY, ERROR_FAILTX, ERROR_NOMSG };
   ERROR readResult = ERROR_OK, sendResult = ERROR_OK;
@@ -71,6 +72,47 @@ int main() {
   assert(!canPerfRxContexts[CAN_PERF_BODY].active);
   { CanPerfRxScope scope(CAN_PERF_BODY, clockUs); canPerfReset(); assert(canPerfRxContexts[CAN_PERF_BODY].active); }
   assert(canPerfSnapshot(CAN_PERF_BODY).txAttempts == 0);
+
+  // Raw PARTY 0x370 reception must count even without a NAG/profile decision.
+  canPerfReset();
+  controller.readResult = MCP2515::ERROR_OK;
+  frame.can_id = 0x370;
+  canPerfRead(controller, CAN_PERF_PARTY, &frame);
+  canPerfRead(controller, CAN_PERF_BODY, &frame);
+  for (uint32_t id : {0x80000370u, 0x40000370u, 0x399u}) {
+    frame.can_id = id;
+    canPerfRead(controller, CAN_PERF_PARTY, &frame);
+  }
+  frame.can_id = 0x370;
+  frame.can_dlc = 0;
+  canPerfRead(controller, CAN_PERF_PARTY, &frame);
+  frame.can_dlc = 8;
+  controller.readResult = MCP2515::ERROR_NOMSG;
+  canPerfRead(controller, CAN_PERF_PARTY, &frame);
+  assert(canPerfSnapshot(CAN_PERF_PARTY).rx370 == 1);
+  assert(canPerfSnapshot(CAN_PERF_BODY).rx370 == 0);
+  controller.sendResult = MCP2515::ERROR_OK;
+  canPerfSend(controller, CAN_PERF_PARTY, &frame);
+  canPerfSend(controller, CAN_PERF_CHASSIS, &frame);
+  controller.sendResult = MCP2515::ERROR_ALLTXBUSY;
+  canPerfSend(controller, CAN_PERF_PARTY, &frame);
+  controller.sendResult = MCP2515::ERROR_FAILTX;
+  canPerfSend(controller, CAN_PERF_PARTY, &frame);
+  canPerfSend(controller, CAN_PERF_PARTY, nullptr);
+  assert(canPerfSnapshot(CAN_PERF_PARTY).tx370 == 1);
+  assert(canPerfSnapshot(CAN_PERF_PARTY).tx370Errors == 2);
+  assert(canPerfSnapshot(CAN_PERF_CHASSIS).tx370 == 0);
+  for (auto bus : {CAN_PERF_BODY, CAN_PERF_CHASSIS, CAN_PERF_PARTY}) {
+    canPerfObserveRecovery(bus, true);
+    canPerfObserveRecovery(bus, false);
+    const auto counters = canPerfSnapshot(bus);
+    assert(counters.recoveryAttempts == 2 && counters.recoveries == 1 && counters.recoveryErrors == 1);
+  }
+  canPerfReset();
+  assert(canPerfSnapshot(CAN_PERF_PARTY).rx370 == 0);
+  assert(canPerfSnapshot(CAN_PERF_PARTY).tx370 == 0);
+  assert(canPerfSnapshot(CAN_PERF_PARTY).recoveries == 0);
+  assert(canPerfSnapshot(CAN_PERF_BODY).recoveryAttempts == 0);
   uint32_t burst = clockUs;
   canRxFinishBurst(true, burst);
   assert(yields == 1 && sleeps == 0);

@@ -343,6 +343,7 @@ static esp_err_t tmrChassisRecoverChecked(const char *reason) {
                   !busOff;
 
   mcpChassisReady = ok;
+  canPerfObserveRecovery(CAN_PERF_CHASSIS, ok);
   if (!ok) {
     TMR_SERIAL_PRINTF("[CAN B] CHASSIS %s failed: reset=%d bitrate=%d mode=%d eflg=0x%02X\n",
                       reason ? reason : "recovery",
@@ -368,11 +369,15 @@ static bool mcpPartyInitChecked() {
 }
 
 static bool mcpReinit() {
-  return mcpInitChecked();
+  const bool ok = mcpInitChecked();
+  canPerfObserveRecovery(CAN_PERF_BODY, ok);
+  return ok;
 }
 
 static bool mcpPartyReinit() {
-  return mcpPartyInitChecked();
+  const bool ok = mcpPartyInitChecked();
+  canPerfObserveRecovery(CAN_PERF_PARTY, ok);
+  return ok;
 }
 
 static void canChassisHandleAlerts() {
@@ -1000,8 +1005,8 @@ static bool recoveryMcpColdInit() {
   digitalWrite(MCP2515_PARTY_STBY, LOW);
   delay(5);
 
-  const bool bodyOk = mcpInitChecked();
-  const bool partyOk = mcpPartyInitChecked();
+  const bool bodyOk = mcpReinit();
+  const bool partyOk = mcpPartyReinit();
 
   // Reuse the compatibility layer to initialize J3 CHASSIS.
   mcpChassisReady = false;

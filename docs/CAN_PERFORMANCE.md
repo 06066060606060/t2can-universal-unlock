@@ -35,10 +35,24 @@ Both receive tasks use priority 4 on core 1, including after recovery.
 
 ## Dashboard measurement
 
-Open **Settings > Diagnostics & CAN Recovery > CAN PERFORMANCE**. The current
-compiler optimization and separate BODY, CHASSIS and PARTY readings are shown.
+Open **Settings > Diagnostics & CAN Recovery > CAN COUNTERS**. Separate BODY,
+CHASSIS and PARTY cards show RX, TX, FAIL RX/TX, recovery OK/FAIL and RX overflow.
+TX failures include busy-buffer rejections. RX overflow remains a separate
+latched-event count, not a failed software read or an exact lost-frame count.
+The detailed timing, buffer and compiler readings remain available in JSON.
 Use the existing **System Stats JSON** button to save the complete measurements.
 The same data is available under `canPerformance` in `/api/system/stats`.
+
+- `recoveryAttempts`, `recoveries`, `recoveryErrors`: runtime controller
+  recovery attempts, successful reinitializations and failed reinitializations
+  on each physical bus. Initial boot setup is excluded; local and full subsystem
+  recoveries are included. These counters reset with **Reset Stats**.
+- PARTY `rx370`: standard data frames with ID `0x370` and nonzero DLC read
+  directly from J4, before profile and NAG eligibility checks.
+- PARTY `tx370`: successful controller submissions of those frames through the
+  PARTY TX path; this is not a physical CAN acknowledgement counter.
+  `tx370Errors` counts unsuccessful submissions, including busy buffers.
+  The PARTY card displays `0x370 RX` and `0x370 TX` independently of NAG method.
 
 - `rxToEnqueue`: completion of software RX read to successful `sendMessage()`
   return for that frame, attributed only to the decoding task on the same bus.
@@ -137,5 +151,7 @@ measured. Hardware verification will be performed manually via the dashboard.
 
 The subsequent [Home dashboard fixes](DASHBOARD_FIXES.md) correct the NAG
 switch, traffic field names, three-bus layout and polling timeout. The compiler
-comparison binaries above predate those fixes; use a new build of the current
-source or the corrected `.build/dashboard-fix/` application image.
+comparison binaries above predate those fixes. The later simplified CAN cards
+and per-bus recovery / PARTY `0x370` counters are in the current source and
+`.build/dashboard-counters/Os/TMR_Dashboard.ino.bin`. The older
+`.build/dashboard-fix/` image contains only the earlier Home fixes.

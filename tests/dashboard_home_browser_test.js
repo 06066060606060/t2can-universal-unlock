@@ -18,6 +18,8 @@ const config = {enabled:true, method:0, mode:1, targetId:0x370, apStateId:0x399,
 const traffic = {bodyTrafficSeen:true, bodyTrafficOnline:true, bodyTrafficAgeMs:10, chassisTrafficSeen:true, chassisTrafficOnline:true, chassisTrafficAgeMs:20, partyTrafficSeen:true, partyTrafficOnline:true, partyTrafficAgeMs:30, bodyState:1, bodyReady:true, chassisState:1, chassisReady:true, partyState:1, partyReady:true};
 const fast = {nag:{torque:0, apActive:true}, blink:{enabled:true, displayState:5, displayStateValid:true, noaSessionStateName:'READY'}, cantraffic:traffic, r79:{txState:'ACTIVE', txReason:'AP engaged', txOk:733, txFail:10, lastTxAgeMs:76, lastTxValid:true}};
 const slow = {blink:{enabled:true}, summon:{tlssc:false}, s3xy:{bluetoothEnabled:false}, lab3f8:{alcMode:0}};
+const counterBus = {rxFrames:1234,rxErrors:1,txQueued:42,txBusy:2,txErrors:3,recoveries:4,recoveryErrors:1,rxOverflowEvents:7};
+const systemStats = {fwVersion:'test',uptimeS:10,canPerformance:{body:counterBus,chassis:{...counterBus,recoveries:5},party:{...counterBus,recoveries:6,rx370:120,tx370:30}}};
 // Tie the fixture to production serializer keys so a frontend-only rename fails.
 const api = fs.readFileSync(path.join(root, 'web_api.h'), 'utf8');
 const serializer = api.slice(api.indexOf('static String homeFastSnapshotToJson()'),api.indexOf('static String homeSlowSnapshotToJson()'));
@@ -48,6 +50,7 @@ async function main() {
         return reply(config);
       }
       if (url.pathname === '/api/nag/stats') return reply({apActive:true, torque:0, canAState:1});
+      if (url.pathname === '/api/system/stats') return reply(systemStats);
       if (url.pathname === '/api/snapshot') {
         ++snapshotRequests;
         if (stalledSnapshot) return; // Simulate a request that never completes.
@@ -110,6 +113,24 @@ async function main() {
     await toggle('nagToggle2', true);
     await page.waitForFunction(() => nagCfg.enabled === true);
     await page.evaluate(() => closePanels());
+    // Real fetch/render path must finish after retirement of detailed recovery rows.
+    await page.evaluate(async () => {openPanel('panelDiag');await fetchSys()});
+    assert.equal(await page.locator('#canPerf_body_Rx').textContent(),'1234');
+    assert.equal(await page.locator('#canPerf_body_Fail').textContent(),'1 / 5');
+    assert.equal(await page.locator('#canPerf_chassis_Recovery').textContent(),'5 / 1');
+    assert.equal(await page.locator('#canPerf_party_Recovery').textContent(),'6 / 1');
+    assert.equal(await page.locator('#canPerf_party_Rx370').textContent(),'120');
+    assert.equal(await page.locator('#canPerf_party_Tx370').textContent(),'30');
+    assert.equal(await page.locator('#sysUptime').textContent(),'10s');
+    assert.equal(await page.locator('#sysMcpBusOffSnap').count(),0);
+    for (const width of [320,360,390]) {
+      await page.setViewportSize({width,height:780});
+      assert(await page.locator('#panelDiag').evaluate(panel=>panel.scrollWidth<=panel.clientWidth+1),'diagnostics fit mobile viewport');
+    }
+    await page.setViewportSize({width:360,height:780});
+    await page.screenshot({path:path.join(output,'can-counters-after.png'),fullPage:true});
+    await page.locator('section.card').filter({has:page.locator('#canPerf_party_Rx')}).screenshot({path:path.join(output,'party-counters-after.png')});
+    await page.evaluate(() => closePanels());
     // Missing configuration gets loaded before a user change, rather than ignored.
     await page.evaluate(() => {nagCfg=null});
     await toggle('nagToggle', false);
@@ -117,16 +138,17 @@ async function main() {
     await toggle('nagToggle', true);
     await page.waitForFunction(() => nagCfg.enabled === true);
     // Exercise stale/no-frame states using the actual serializer schema.
-    await page.evaluate(snapshot => {
+    const staleTraffic = await page.evaluate(snapshot => {
       renderHomeFast(snapshot);
+      return ['B','C'].map(bus=>document.getElementById('can'+bus+'Traffic').textContent);
     }, {...fast,cantraffic:{...traffic,chassisTrafficOnline:false,chassisTrafficAgeMs:2000,partyTrafficSeen:false,partyTrafficOnline:false}});
-    assert.equal(await page.locator('#canBTraffic').textContent(),'NO DATA');
-    assert.equal(await page.locator('#canCTraffic').textContent(),'WAITING');
+    assert.deepEqual(staleTraffic,['NO DATA','WAITING']);
     await page.evaluate(snapshot=>renderHomeFast(snapshot),fast);
-    await page.evaluate(snapshot=>renderHomeFast(snapshot),{...fast,cantraffic:{...traffic,bodyState:0,bodyReady:false,chassisState:2,partyState:1}});
-    assert.equal(await page.locator('#canABadge').textContent(),'STOPPED');
-    assert.equal(await page.locator('#canBBadge').textContent(),'BUS OFF');
-    assert.equal(await page.locator('#canCBadge').textContent(),'RUNNING');
+    const controllerStates = await page.evaluate(snapshot=>{
+      renderHomeFast(snapshot);
+      return ['A','B','C'].map(bus=>document.getElementById('can'+bus+'Badge').textContent);
+    },{...fast,cantraffic:{...traffic,bodyState:0,bodyReady:false,chassisState:2,partyState:1}});
+    assert.deepEqual(controllerStates,['STOPPED','BUS OFF','RUNNING']);
     await page.evaluate(snapshot=>renderHomeFast(snapshot),fast);
     // Unsupported profiles must remain disabled; supported ones can recover.
     await page.evaluate(() => {window.__tmrNagSupported=false;renderNagCfg()});

@@ -1,9 +1,6 @@
 #pragma once
 #include <stdint.h>
 
-// Host-testable AP state validity helpers. AP/NOA/manual state remains latched
-// until the active topology receives a newer DAS_status frame or the relevant
-// CAN recovery boundary invalidates that authorization.
 static inline bool dasStateApActivePure(bool valid, uint8_t state4) {
   if (!valid) return false;
   return state4 == 3 || state4 == 4 || state4 == 5 || state4 == 6;
@@ -38,20 +35,19 @@ enum NagSkipReasonPure : uint8_t {
 
 static inline NagSkipReasonPure nagEligibilityReasonPure(
     bool enabled, bool bootDelayPassed, bool canSeen, bool isOurs,
-    uint8_t handsOnState, bool apStateValid, bool apActive, bool ignoreApState = false) {
+  uint8_t handsOnState, bool apStateValid, bool apActive, bool ignoreApState = false,
+  bool ignoreHandsOnState = false) {
   if (!enabled) return NAG_SKIP_DISABLED;
   if (!bootDelayPassed) return NAG_SKIP_BOOT_DELAY;
   if (!canSeen) return NAG_SKIP_WARMUP;
   if (isOurs) return NAG_SKIP_SELF_FRAME;
-  if (handsOnState > 1) return NAG_SKIP_HANDS_ON;
+  if (!ignoreHandsOnState && handsOnState > 1) return NAG_SKIP_HANDS_ON;
   if (!ignoreApState && !apStateValid) return NAG_SKIP_AP_INVALID;
   if (!ignoreApState && !apActive) return NAG_SKIP_AP_INACTIVE;
   return NAG_SKIP_NONE;
 }
 
-// Mode H uses exact recent-TX payload matching because WAIT/REFRACTORY can
-// preserve arbitrary OEM torque while forcing HO=1. A/B/C keep their proven
-// torque-table self-frame heuristic.
+
 static inline bool nagExactRecentTxEchoPure(bool exactEchoMode, bool lastTxValid,
                                              uint32_t ageMs, const uint8_t *rx,
                                              const uint8_t *tx, uint8_t dlc) {
@@ -69,8 +65,7 @@ static inline uint32_t nagGapMaxUpdatePure(uint32_t previousTxMs, uint32_t nowMs
   return gap > currentMaxMs ? gap : currentMaxMs;
 }
 
-// Tesla Party CAN 0x257 DI_vehicleSpeed: Intel bit 12, length 12,
-// factor 0.08 km/h, offset -40 km/h. Raw 4095 is SNA.
+
 static inline bool nagDecodePartySpeedRawPure(const uint8_t *data, uint8_t dlc, uint16_t &rawOut) {
   if (!data || dlc < 3) return false;
   const uint16_t raw = (uint16_t)(((uint16_t)(data[1] >> 4) & 0x0Fu) | ((uint16_t)data[2] << 4));
@@ -112,7 +107,7 @@ static inline McpTxResultReason mcpTxResultReasonMaskedPure(
   return MCP_TX_OK;
 }
 
-// Legacy two-bus admission helper retained for host/runtime compatibility.
+
 static inline McpTxResultReason mcpTxResultReasonPure(
     bool msgValid, bool mutexAcquired, bool mcpReady, uint32_t currentEpoch,
     uint8_t freshMask, uint32_t expectedEpoch, bool sendOk) {

@@ -8,18 +8,6 @@
 #endif
 #pragma once
 
-// BOOT CAPTURE / CAN CORE / NAG
-// Kept in the same translation unit to preserve proven runtime behavior.
-
-// ═══════════════════════════════════════════════════════════════
-// BOOT / FIRST-CAN TIMING CAPTURE
-//
-// Passive diagnostics only. These timestamps never participate in feature
-// gating, CAN recovery decisions, or TX/injection. Capture starts
-// automatically on every ESP32 boot and can be exported as CSV from:
-//   /api/system/boot-capture.csv
-// All timestamps are milliseconds from setup() entry (bootTime).
-// ═══════════════════════════════════════════════════════════════
 
 static constexpr uint32_t BOOT_CAPTURE_UNSET = 0xFFFFFFFFUL;
 static portMUX_TYPE bootCaptureMux = portMUX_INITIALIZER_UNLOCKED;
@@ -82,9 +70,7 @@ static void bootCaptureObservePartyFrame(uint16_t id, uint8_t dlc, const uint8_t
       bootCapFirst370Ms = t;
       bootCapFirst370Raw = raw;
     }
-    // TORQUE (REAL) uses raw*0.01 - 20.5, so raw=2050 is 0.00 Nm.
-    // Record the first frame at |torque| >= 0.10 Nm to distinguish
-    // "0x370 arrived" from "a visibly non-zero torque arrived".
+
     if (bootCapFirst370TorqueMs == BOOT_CAPTURE_UNSET && (d >= 10 || d <= -10)) {
       bootCapFirst370TorqueMs = t;
       bootCapFirst370TorqueRaw = raw;
@@ -208,15 +194,7 @@ static void mcpRxOverflowReset() {
 
 static volatile bool canTxAdministrativeHold = false;
 
-// ═══════════════════════════════════════════════════════════════
-// TMR CHASSIS COMPATIBILITY SHIM
-//
-// The application historically used ESP32 CHASSIS types/functions for logical
-// CAN B. On TMR logical CAN B is the physical J3 CHASSIS MCP2515 (Can_B).
-//
-// BODY/VH is handled separately through Can_A; it is never silently redirected
-// through the CHASSIS transport.
-// ═══════════════════════════════════════════════════════════════
+
 static inline void tmrCanFrameToChassis(const struct can_frame &in, struct can_frame &out) {
   memset(&out, 0, sizeof(out));
   out.can_id = (uint32_t)(in.can_id & 0x7FFu);
@@ -232,9 +210,7 @@ static inline void tmrChassisToCanFrame(const struct can_frame &in, struct can_f
 }
 
 static inline MCP2515 *tmrLogicalVhMcp() {
-  // TMR has one physical BODY bus and VH is an alias of BODY for every profile.
-  // CHASSIS remains a separate physical MCP2515 on J3 and is handled by the
-  // dedicated CHASSIS RX/recovery task.
+
   return &Can_A;
 }
 
@@ -329,10 +305,7 @@ static esp_err_t mcpChassisClearTxQueue(void) {
 }
 
 
-// All feature TX reaches the hardware through these two functions. The caller
-// passes the recovery epoch captured before its authorization decision. The
-// mutex makes epoch validation and the nonblocking hardware enqueue one atomic
-// operation with respect to recovery-state invalidation.
+
 static uint32_t canTxEpochSnapshot() {
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return 0;
   const uint32_t epoch = canTxBarrierState.epoch;
@@ -341,8 +314,7 @@ static uint32_t canTxEpochSnapshot() {
 }
 
 static void canTxMarkFresh(uint8_t busBit) {
-  // After a bus has marked the current recovery epoch fresh, normal traffic
-  // avoids thousands of redundant semaphore operations per second.
+
   if ((__atomic_load_n(&canTxFreshMaskFast, __ATOMIC_ACQUIRE) & busBit) == busBit) return;
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return;
   canTxBarrierMarkFreshPure(canTxBarrierState, busBit);
@@ -350,9 +322,7 @@ static void canTxMarkFresh(uint8_t busBit) {
   xSemaphoreGive(canTxBarrierMutex);
 }
 
-// CAN B BUS-OFF diagnostic trace. Keep this deliberately small: every CAN B
-// application TX attempt passes this single point, while the most recent window
-// is frozen only when BUS_OFF is observed. No CAN RX frames are copied here.
+
 enum CanTxTraceSource : uint8_t {
   CAN_TX_TRACE_SOURCE_DEFAULT = 0,
   CAN_TX_TRACE_SOURCE_AUTO_BLINKER = 1,
@@ -410,9 +380,7 @@ static void canBTraceReset() {
   portEXIT_CRITICAL(&canBTxTraceMux);
 }
 
-// CAN A forensic trace mirrors the CAN B BUS-OFF trace but records only
-// application TX attempts that pass through canTxMcpSend(). It does not copy
-// CAN A RX traffic and has no effect on TX admission or recovery decisions.
+
 static constexpr uint8_t CAN_A_TX_TRACE_CAPACITY = 64;
 struct CanATxTraceEntry {
   uint32_t seq;
@@ -489,13 +457,6 @@ static bool canMaintenanceActive() {
   return __atomic_load_n(&canMaintenanceRequested, __ATOMIC_ACQUIRE);
 }
 
-// Administrative TX hold used by profile/reset/feature transitions.
-// Take the same barrier mutex used by all application TX paths so enabling
-// the hold waits for any in-flight application send to leave the critical
-// section before the caller mutates persistent/runtime state. Senders also
-// re-check the hold after acquiring the mutex, so no new application TX can
-// cross an active hold. Disabling resumes the existing epoch/freshness state;
-// callers that require invalidation explicitly invoke the recovery barrier.
 static void setCanTxAdministrativeHold(bool hold) {
   if (!canTxBarrierMutex) {
     canTxAdministrativeHold = hold || canMaintenanceActive();
@@ -528,9 +489,7 @@ static esp_err_t canTxChassisTransmitWithMaskTagged(
   return err;
 }
 
-// Feature-local cancellation guard. Advancing a generation takes the same
-// barrier as enqueue, so after cancellation returns no decision prepared under
-// the previous generation can reach CHASSIS.
+
 static uint32_t canTxCancellationGenerationSnapshot(
     const volatile uint32_t *generation) {
   return generation
@@ -738,14 +697,7 @@ static bool canTxMcpSendTaggedGuarded(
   return allowed;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// CAN RECOVERY SUPERVISOR
-//
-// IMPORTANT: this block does NOT participate in NAG / Summon / TLSSC / Advanced EAP /
-// Auto Blinker feature logic remains authoritative for its gating.
-// It only monitors CAN controller/task liveness and recreates the CAN
-// subsystem when acquisition or wake recovery fails.
-// ═══════════════════════════════════════════════════════════════
+
 
 enum CanSupervisorCommand : uint8_t {
   CAN_SUP_NONE = 0,
@@ -917,8 +869,6 @@ static constexpr uint32_t NAG_SPEED_FRESH_MS = 1000;
 
 enum NagMode : uint8_t {
   MODE_A = 0, MODE_B = 1,
-  // IDs 2 and 4..6 were removed legacy/experimental modes. Keep the numeric
-  // gaps so persisted/public IDs for Mode A/B/C/H remain unchanged.
   MODE_C = 3, MODE_H = 7
 };
 
@@ -957,19 +907,14 @@ struct NagConfig {
 static NagConfig nagCfg;
 static portMUX_TYPE nagCfgMux = portMUX_INITIALIZER_UNLOCKED;
 
-// RX selector cache: Party CAN carries many unrelated frames. Keep the three
-// configurable NAG selector IDs in a tiny lock-free read cache so unrelated RX
-// frames can return before taking nagCfgMux. Writers publish under nagCfgMux;
-// the sequence guard prevents readers from consuming a partially-updated set.
+
 static uint32_t nagRxSelectorSeq = 0;
 static uint16_t nagRxTargetId = 0x370;
 static uint16_t nagRxApStateId = 0x399;
 static uint16_t nagRxSteeringId = 0x129;
 
 static inline void nagRxSelectorsPublishLocked(const NagConfig &c) {
-  // GCC atomics avoid a C++ data race between the Core-0 web writer and the
-  // Core-1 CAN reader. The odd/even sequence publishes the three IDs as one
-  // coherent snapshot without putting the common RX path behind nagCfgMux.
+
   __atomic_add_fetch(&nagRxSelectorSeq, 1U, __ATOMIC_ACQ_REL);  // odd = writer active
   __atomic_store_n(&nagRxTargetId, c.targetId, __ATOMIC_RELAXED);
   __atomic_store_n(&nagRxApStateId, c.apStateId, __ATOMIC_RELAXED);
@@ -984,8 +929,7 @@ static inline void nagRxSelectorsSnapshot(uint16_t &targetId, uint16_t &apStateI
   steeringId = __atomic_load_n(&nagRxSteeringId, __ATOMIC_RELAXED);
   const uint32_t seq2 = __atomic_load_n(&nagRxSelectorSeq, __ATOMIC_ACQUIRE);
   if ((seq1 & 1U) || seq1 != seq2) {
-    // Config updates are rare. Fall back to the canonical protected copy
-    // instead of spinning inside the high-priority CAN RX task.
+
     portENTER_CRITICAL(&nagCfgMux);
     targetId = nagCfg.targetId;
     apStateId = nagCfg.apStateId;
@@ -1010,8 +954,7 @@ static void nagRxSelectorsRefreshFromConfig() {
 }
 
 static bool nagTsl9Body39BSelected() {
-  // TMR always uses CHASSIS/J3 0x399; never enable the legacy BODY 0x39B
-  // compatibility path on the fixed three-bus topology.
+
   if (activeVehicleTopology == VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS) return false;
   uint8_t route;
   portENTER_CRITICAL(&nagCfgMux);
@@ -1060,8 +1003,7 @@ static volatile int16_t  nagLastInjectedCenti = 0;
 static unsigned long nagLastTxFailLog = 0;
 #endif
 
-// b18 NAG continuity diagnostics. Dedicated counters avoid contamination by
-// other MCP/Party injections such as the 0x399 LEFT experiment.
+
 static portMUX_TYPE nagDiagMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t nagTxOk = 0;
 static volatile uint32_t nagTxFail = 0;
@@ -1104,13 +1046,9 @@ static void nagTsl9RuntimeReset() {
   nagTsl9State = {};
   portEXIT_CRITICAL(&nagTsl9Mux);
 }
-// Mode B burst/pause timing starts from AP engagement rather than boot uptime.
-// This is intentionally independent of the Original mcpRxCount > 1000 warmup check.
+
 static volatile uint32_t nagModeBPhaseStartMs = 0;
 
-// Mode H uses exact recent-TX payload matching because WAIT/REFRACTORY can
-// preserve arbitrary OEM torque while forcing HO=1. This state is isolated
-// from the existing A/B/C torque-table self-frame heuristic.
 static portMUX_TYPE nagExactEchoMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool nagExactEchoLastTxValid = false;
 static volatile uint32_t nagExactEchoLastTxMs = 0;
@@ -1467,9 +1405,7 @@ static void nagCfgClampAll(NagConfig& c) {
 static bool nagCfgApplyActiveProfilePolicy(NagConfig& c, bool disableIfFallback) {
   const bool torqueSupported = activeProfileNagTorqueSupported();
   const bool tsl9Supported = activeProfileNagTsl9Supported();
-  // TMR has a fixed three-bus topology. NAG torque is always sourced from
-  // PARTY/J4 as 0x370, while DAS/AP state is always sourced from CHASSIS/J3
-  // as 0x399. Do not let legacy persisted selector IDs redirect these paths.
+
   if (activeVehicleTopology == VEHICLE_TOPOLOGY_PARTY_BODY_CHASSIS) {
     c.targetId = 0x370u;
     c.apStateId = 0x399u;
@@ -1479,9 +1415,7 @@ static bool nagCfgApplyActiveProfilePolicy(NagConfig& c, bool disableIfFallback)
       previous, torqueSupported, tsl9Supported);
   const bool changed = resolved != previous;
   c.method = resolved;
-  // A topology migration must never auto-arm a newly selected injection method.
-  // Explicit user API changes pass disableIfFallback=false and retain the user's
-  // requested enabled state after the method has been normalized.
+
   if ((!torqueSupported && !tsl9Supported) || (changed && disableIfFallback))
     c.enabled = false;
   return changed;
@@ -1558,8 +1492,7 @@ static void nagCfgLoad() {
   uint8_t humanVariant = prefs.getUChar("hv", nagModeHDefaultVariantPure());
   if (!nagModeHVariantValidPure(humanVariant)) humanVariant = nagModeHDefaultVariantPure();
 
-  // Rev.4 has owned the h4* namespace since schema v15. Legacy Rev.1 Plus h1*
-  // keys are deliberately never reinterpreted as Rev.4 tuning.
+
   NagHumanV4ConfigPure rev4Cfg = rev4Defaults;
   rev4Cfg.base.peakMinRaw = prefs.getUShort("h4pmin", rev4Defaults.base.peakMinRaw);
   rev4Cfg.base.peakMaxRaw = prefs.getUShort("h4pmax", rev4Defaults.base.peakMaxRaw);
@@ -1577,15 +1510,12 @@ static void nagCfgLoad() {
   rev4Cfg.visualRescueDelayMs = prefs.getUShort("h4vdly", rev4Defaults.visualRescueDelayMs);
   prefs.end();
 
-  // v3.7.2-v3.8.4 stored bit43 under the LAB/features namespace. Promote an
-  // existing explicit ON selection once when the production NAG key is absent.
+
   if (!hadDmsControlKey && prefs.begin("features", true)) {
     nagCfg.dmsControlEnabled = prefs.getBool("dmsNag43", false);
     prefs.end();
   }
 
-  // Schema v17 promotes only the exact v16 Rev.4 defaults. Custom Rev.4
-  // tuning survives unchanged while all profiles gain the new HO defaults.
   const bool migratedRev4V17 = nagCfgVersion < 17u && nagHumanV4MigrateV16DefaultPure(rev4Cfg);
   const bool migratedRev4V18 = nagCfgVersion < 18u && nagHumanV4MigrateV17DefaultPure(rev4Cfg);
   if ((migratedRev4V17 || migratedRev4V18) &&
@@ -1603,10 +1533,7 @@ static void nagCfgLoad() {
   nagHumanV4Initialized = false;
   portEXIT_CRITICAL(&nagHumanMux);
 
-  // Schema v18 updates only an exact prior Rev.4 default profile. Custom
-  // tuning and an independently selected stop behavior survive unchanged.
-  // Profile id 1 is intentionally retained, so an OTA installation previously
-  // selecting Rev.1 Plus moves to Rev.4 without creating a fifth profile id.
+
   if ((nagCfgVersion < 20u || migratedRev4V17 || migratedRev4V18 ||
        profileMethodMigrated) && prefs.begin("nag", false)) {
     prefs.putBool("en", nagCfg.enabled);
@@ -1646,8 +1573,7 @@ static void nagCfgLoad() {
 #endif
 }
 
-// Persist the torque-only opt-in before publishing it to the running configuration.
-// Existing configuration writes retain their established format.
+
 static bool nagIgnoreApStatePersist(bool value) {
   if (!prefs.begin("nag", false)) return false;
   const bool saved = prefs.putBool("iap", value) == 1u &&
@@ -1876,22 +1802,20 @@ static void nagUpdateSteering(const uint8_t* data, uint8_t dlc) {
   const int16_t raw = (int16_t)(((uint16_t)data[bh] << 8) | data[bl]);
   const unsigned long now = millis();
   portENTER_CRITICAL(&nagCtxMux);
-  // Public Tesla DBC scale is fixed at 0.1 deg/raw with zero offset, so the
-  // signed raw value is already steering angle in deci-degrees.
+
   nagCtx.steeringAngleDeciDeg = raw;
   nagCtx.lastSteeringMs = now;
   portEXIT_CRITICAL(&nagCtxMux);
 }
 
-// ── Forward declarations : summon status handlers (defined in CAN B section) ──
-// On Model YL these are also called from CAN A (MCP2515).
+
 static void handle280(const uint8_t *data);
 static void handle390(const uint8_t *data);
 static void handle921(const uint8_t *data, uint8_t dlc);
 static void handle1016(const uint8_t *data, uint8_t dlc);
 static bool nagApInjectionGateOpen();
 static void nagApGateSnapshot(bool &validOut, bool &activeOut);
-// Explicit prototypes required here because NAG TX is defined before later modular definitions.
+
 
 static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo) {
   portENTER_CRITICAL(&nagTsl9Mux);
@@ -1913,9 +1837,6 @@ static void nagTsl9RecordTx(bool ok, uint32_t nowMs, uint8_t injectedHo) {
   }
 }
 
-// Legacy 39B is the only TSL9 status path that remains on the MCP/body-side
-// compatibility handler. TMR standardizes DAS_status 0x399 on CHASSIS/J3.
-// In particular, YL no longer consumes 0x399 from PARTY/J4.
 static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   const bool legacyBody39BRoute = nagTsl9Body39BSelected();
   if (!legacyBody39BRoute || !activeProfileNagTsl9Supported()) return false;
@@ -1968,10 +1889,7 @@ static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
   return ok;
 }
 
-// TMR receives DAS_status 0x399 exclusively on CHASSIS/J3 for all profiles.
-// The frame is also used to update the NAG AP/hands-on gate before any 0x370
-// torque frame arrives on PARTY/J4. If TSL9 mode is active, the modified 0x399
-// is transmitted back onto CHASSIS/J3.
+
 static bool nagProcessTsl9Chassis399(const struct can_frame &src) {
   if (!activeProfileNagTsl9Supported() || !activeCanBIsChassis()) return false;
   if ((src.can_id & CAN_EFF_FLAG) || (src.can_id & CAN_RTR_FLAG) || (src.can_id & CAN_EFF_MASK) != 0x399u ||
@@ -2017,18 +1935,14 @@ static bool nagProcessTsl9Chassis399(const struct can_frame &src) {
 // ── Nag process frame from MCP2515 ──
 
 static void nagProcessMcpFrame(const struct can_frame& rxf) {
-  // Defense in depth: never let extended or RTR frames alias a standard
-  // Tesla ID and reach status parsing or an actuation path.
+
   if ((rxf.can_id & 0xC0000000UL) != 0) return;
   const uint16_t id = rxf.can_id & 0x7FF;
   const uint8_t dlc = rxf.can_dlc;
   if (dlc < 1) return;
 
   const bool ylProfile = activeProfileIsYl();
-  // 0x399 is never consumed from PARTY/J4 on TMR. Legacy 39B handling remains
-  // on the dedicated BODY compatibility path; 0x370 is the NAG torque frame.
-  // Model-specific legacy Party helpers below are retained only where they do
-  // not alter the TMR 0x370/0x399 routing.
+
   if (ylProfile) {
     switch (id) {
       case 280: if (dlc >= 7) handle280(rxf.data); break;
@@ -2037,20 +1951,17 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     }
   }
 
-  // TMR torque NAG is sourced from PARTY/J4. The AP/hands-on gate is supplied
-  // independently by CHASSIS/J3 0x399 above.
+
   if (!activeProfileNagTorqueSupported()) return;
 
   uint16_t targetId, apStateId, steeringId;
   nagRxSelectorsSnapshot(targetId, apStateId, steeringId);
 
-  // Most Party frames are unrelated to NAG. Reject them before touching
-  // nagCfgMux; only speed/context/target frames enter the NAG processing path.
+
   if (id != NAG_SPEED_ID && id != targetId && id != apStateId && id != steeringId) return;
 
   if (id == NAG_SPEED_ID) nagUpdateVehicleSpeed(rxf.data, dlc);
-  // TMR never consumes 0x399 from PARTY/J4. The AP/hands-on state is updated
-  // only from CHASSIS/J3 by the CAN-B 0x399 handler.
+
   if (id == steeringId) nagUpdateSteering(rxf.data, dlc);
 
   uint8_t methodNow;
@@ -2064,8 +1975,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   bool en, ignoreApState;
   uint8_t modeNow;
   portENTER_CRITICAL(&nagCfgMux);
-  // Revalidate the configurable target after taking the lock. A dashboard
-  // config update can race the lock-free selector cache by at most this frame.
+
   if (id != nagCfg.targetId) {
     portEXIT_CRITICAL(&nagCfgMux);
     return;
@@ -2083,8 +1993,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   nagRealTorqueCenti = (int16_t)tRaw - 2050;
   const bool exactEchoMode = modeNow == MODE_H;
 
-  // Invalidate exact-echo state on every mode transition. Entering Mode H
-  // starts a fresh human-interaction event session; leaving H clears it.
+
   if (modeNow != nagExactEchoPrevMode) {
     const uint8_t previousMode = nagExactEchoPrevMode;
     nagExactEchoReset();
@@ -2128,14 +2037,14 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
 
   const uint32_t nowMs = (uint32_t)millis();
   bool bootDelayPassed = (nowMs - canInitTime) >= NAG_INJECTION_DELAY_MS;
-  bool canSeen = mcpRxCount > 1000;  // Retain the established MCP warmup threshold.
+  bool canSeen = mcpRxCount > 1000; 
   bool apValid, apActiveForNag;
   nagApGateSnapshot(apValid, apActiveForNag);
   const NagSkipReasonPure eligibility = nagEligibilityReasonPure(
-      en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag, ignoreApState);
+      en, bootDelayPassed, canSeen, isOurs, ho, apValid, apActiveForNag,
+      ignoreApState, modeNow == MODE_B);
   if (eligibility != NAG_SKIP_NONE) {
-    // A real gate closure cancels a Mode H event. A local self-echo is merely
-    // ignored and must not tear down the live event session.
+
     if (modeNow == MODE_H && eligibility != NAG_SKIP_SELF_FRAME)
       nagHumanRuntimeReset(false);
     nagDiagRecordSkip(eligibility, nowMs);
@@ -2173,9 +2082,7 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
     if (!humanDecision.tx) {
       const bool confirmedStopped = humanDecision.blockReason == H1_BLOCK_STOPPED;
       if (nagModeHUseStopCarrierPure(modeHStopBehavior, confirmedStopped)) {
-        // d5 A/B experiment: keep Mode H's event engine paused at a confirmed
-        // stop, but preserve transport continuity. Torque and the complete HO
-        // field remain stock; only the rolling counter/checksum are advanced.
+
         humanDecision.tx = true;
         humanDecision.raw = tRaw;
         humanDecision.setHo = false;
@@ -2224,9 +2131,10 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
       memcpy(txf.data, rxf.data, 8);
       txf.data[2] = (txf.data[2] & 0xF0) | (b2 & 0x0F);
       txf.data[3] = b3;
-      if (modeNow == MODE_H && hoOverrideValid) {
-        // Explicitly overwrite the complete 2-bit EPAS handsOnLevel field.
-        // Mode H may request HO=2; HO=3 is never generated.
+      if (modeNow == MODE_B) {
+        txf.data[4] = (uint8_t)((txf.data[4] & 0x3Fu) | 0x40u);
+      } else if (modeNow == MODE_H && hoOverrideValid) {
+
         txf.data[4] = (uint8_t)((txf.data[4] & 0x3Fu) | ((hoLevel & 0x03u) << 6));
       } else if (setHo) {
         txf.data[4] = (uint8_t)(txf.data[4] | 0x40u);

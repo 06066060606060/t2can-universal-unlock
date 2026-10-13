@@ -53,6 +53,12 @@ struct CanPerfBusPure {
   uint32_t txQueued;
   uint32_t txBusy;
   uint32_t txErrors;
+  uint32_t recoveryAttempts;
+  uint32_t recoveries;
+  uint32_t recoveryErrors;
+  uint32_t rx370;
+  uint32_t tx370;
+  uint32_t tx370Errors;
   CanPerfTimingPure txCall;
   CanPerfTimingPure rxToEnqueue;
   uint32_t txStatusSamples;

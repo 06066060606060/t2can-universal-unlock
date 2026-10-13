@@ -34,6 +34,14 @@ static void canPerfBusJson(JsonWriterArduino &jw, const char *key, CanPerfBus bu
   jw.u32("txQueued", s.txQueued);
   jw.u32("txBusy", s.txBusy);
   jw.u32("txErrors", s.txErrors);
+  jw.u32("recoveryAttempts", s.recoveryAttempts);
+  jw.u32("recoveries", s.recoveries);
+  jw.u32("recoveryErrors", s.recoveryErrors);
+  if (bus == CAN_PERF_PARTY) {
+    jw.u32("rx370", s.rx370);
+    jw.u32("tx370", s.tx370);
+    jw.u32("tx370Errors", s.tx370Errors);
+  }
   jw.u32("txStatusSamples", s.txStatusSamples);
   jw.u32("txFullSamples", s.txFullSamples);
   jw.u32("txPendingLast", s.txPendingLast);
