@@ -3,6 +3,11 @@
 TMR is an ESP32-S3 board with three external MCP2515 / XL2515 CAN controllers.
 There is no ESP32 internal CAN controller controller in this port.
 
+The hardware reported for this board uses **XL2515-TSS** controllers with
+**MCP2562-E/SN** transceivers. The MCP2515-compatible driver is retained and SPI
+remains at 10 MHz. See [CAN performance](docs/CAN_PERFORMANCE.md) for scheduling,
+dashboard metrics and the `-Os` / `-O2` comparison procedure.
+
 ## CAN hardware
 
 | Connector | Logical bus | Controller | CS | STBY |

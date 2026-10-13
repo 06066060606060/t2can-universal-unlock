@@ -1124,6 +1124,19 @@ static CanTrafficUiSnapshot canTrafficUiSnapshot() {
   return t;
 }
 
+// Shared controller state fields for the compact HOME and traffic endpoints.
+static void canTrafficControllerStateJson(JsonWriterArduino &jw,
+                                         const McpChassisStatus &chassis) {
+  // Normalize BODY/PARTY OK/WARN codes to the dashboard's 0=stopped,
+  // 1=running, 2=bus-off convention used by the CHASSIS shim.
+  jw.i32("bodyState", mcpState == 2 ? 2 : mcpReady ? 1 : 0);
+  jw.boolean("bodyReady", mcpReady);
+  jw.i32("chassisState", (int32_t)chassis.state);
+  jw.boolean("chassisReady", mcpChassisReady);
+  jw.i32("partyState", mcpPartyState == 2 ? 2 : mcpPartyReady ? 1 : 0);
+  jw.boolean("partyReady", mcpPartyReady);
+}
+
 static String canTrafficStatsToJson() {
   const CanTrafficUiSnapshot t = canTrafficUiSnapshot();
   uint32_t overflowCount, overflowLastMs;
@@ -1132,6 +1145,9 @@ static String canTrafficStatsToJson() {
   String s;
   s.reserve(384);
   JsonWriterArduino jw(s);
+  McpChassisStatus chassis = {};
+  mcpChassisGetStatus(&chassis);
+  canTrafficControllerStateJson(jw, chassis);
   jw.boolean("bodyTrafficSeen", t.bodySeen);
   jw.boolean("bodyTrafficOnline", t.bodyOnline);
   jw.u32("bodyTrafficAgeMs", t.bodyAgeMs);
@@ -1151,7 +1167,7 @@ static String canTrafficStatsToJson() {
 
 static String systemStatsToJson() {
   String s;
-  s.reserve(4600);
+  s.reserve(12000);
   JsonWriterArduino jw(s);
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t minFreeHeap = ESP.getMinFreeHeap();
@@ -1201,6 +1217,7 @@ static String systemStatsToJson() {
   const bool canBRecordCurrent =
       canBusOffPersistenceBoot[1] == CAN_BUS_OFF_BOOT_CURRENT;
   jw.string("fwVersion", FW_VERSION);
+  canPerformanceJson(jw);
   jw.u32("freeHeap", freeHeap);
   jw.u32("minFreeHeap", minFreeHeap);
   jw.u32("largestHeapBlock", largestHeapBlock);
@@ -4763,6 +4780,7 @@ static String homeFastSnapshotToJson() {
   jw.string("canStateName", chassisHomeOk ? mcpChassisStateName(chassisHome.state) : "UNAVAILABLE");
   jw.endObject();
   jw.beginObject("cantraffic");
+  canTrafficControllerStateJson(jw, chassisHome);
   jw.boolean("bodyTrafficSeen", traffic.bodySeen);
   jw.boolean("bodyTrafficOnline", traffic.bodyOnline);
   jw.u32("bodyTrafficAgeMs", traffic.bodyAgeMs);
@@ -5446,6 +5464,7 @@ static bool resetRuntimeStats() {
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
   canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
   canARxDiagnosticsResetPure(canARxDiagnostics);
+  canPerfReset();
   canATraceReset();
   canBTraceReset();
 

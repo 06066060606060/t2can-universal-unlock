@@ -414,9 +414,27 @@ static void tmrProcessPartyFrame(const struct can_frame &rxf, uint32_t frameNow,
   }
 }
 
+static uint8_t canDrainPartySlice() {
+  const uint32_t startedUs = (uint32_t)micros();
+  uint8_t processed = 0;
+  struct can_frame frame = {};
+  while (canRxSliceAvailablePure(processed, startedUs, (uint32_t)micros())) {
+    // Capture authorization epoch before reading, as on BODY/CHASSIS.
+    const uint32_t epoch = canTxEpochSnapshot();
+    uint32_t readUs = 0;
+    if (canPerfRead(Can_C, CAN_PERF_PARTY, &frame, &readUs) != MCP2515::ERROR_OK) break;
+    CanPerfRxScope scope(CAN_PERF_PARTY, readUs);
+    tmrProcessPartyFrame(frame, (uint32_t)millis(), epoch);
+    ++processed;
+  }
+  return processed;
+}
+
 static void canTaskMcp(void* arg) {
   TMR_SERIAL_PRINTLN("[CAN A] MCP2515 task started");
   canTaskDiagnosticsResetPure(canTaskMcpDiagnostics);
+  uint32_t burstStartedUs = (uint32_t)micros();
+  bool partyFirst = false;
   for (;;) {
     const uint32_t loopStartMs = (uint32_t)millis();
     canTaskMcpHeartbeatMs = loopStartMs;
@@ -429,27 +447,33 @@ static void canTaskMcp(void* arg) {
       canTaskMcpQuiesced = true;
       while (canTasksStopping || canMaintenanceActive()) vTaskDelay(pdMS_TO_TICKS(5));
       canTaskMcpQuiesced = false;
+      burstStartedUs = (uint32_t)micros();
       continue;
     }
     // ── BOUNDED READ LOOP ──
     // The default d3 path prefetches up to four MCP2515 frames before decoding.
     // LAB can select the c7-style path, which processes each frame immediately.
-    // Both modes retain the 32-frame yield budget and task priority.
+    // Alternate BODY/PARTY first service each pass. Both RX tasks have the
+    // same priority; yield between bounded slices so CHASSIS also gets served.
+    const uint8_t partyBefore = partyFirst ? canDrainPartySlice() : 0;
+    if (partyFirst) taskYIELD();
+    const uint32_t bodySliceStartedUs = (uint32_t)micros();
     static constexpr uint8_t MCP_PREFETCH_CAPACITY = 4;
     const uint8_t readBatchBudget = canARxReadBatchBudgetPure(labMenuEnabled, canARxSavedMode);
     struct can_frame prefetched[MCP_PREFETCH_CAPACITY];
     uint32_t lanePrefetchedRxMs[MCP_PREFETCH_CAPACITY];
+    uint32_t prefetchedRxUs[MCP_PREFETCH_CAPACITY];
     uint8_t processed = 0;
     bool noMoreFrames = false;
     canTaskDiagnosticsEnterStagePure(canTaskMcpDiagnostics,
                                      CAN_TASK_STAGE_RECEIVE,
                                      (uint32_t)millis());
-    while (processed < MCP_RX_BUDGET && !noMoreFrames) {
+    while (canRxSliceAvailablePure(processed, bodySliceStartedUs, (uint32_t)micros()) && !noMoreFrames) {
       const uint32_t countryRxEpoch = canTxEpochSnapshot();
       uint8_t batch = 0;
       while (batch < readBatchBudget &&
              processed + batch < MCP_RX_BUDGET &&
-             Can_A.readMessage(&prefetched[batch]) == MCP2515::ERROR_OK) {
+             canPerfRead(Can_A, CAN_PERF_BODY, &prefetched[batch], &prefetchedRxUs[batch]) == MCP2515::ERROR_OK) {
         lanePrefetchedRxMs[batch] = (uint32_t)millis();
         batch++;
       }
@@ -460,6 +484,7 @@ static void canTaskMcp(void* arg) {
                                        CAN_TASK_STAGE_PROCESS,
                                        (uint32_t)millis());
       const struct can_frame &rxf = prefetched[bi];
+      CanPerfRxScope rxScope(CAN_PERF_BODY, prefetchedRxUs[bi]);
       processed++;
       const uint32_t frameNow = (uint32_t)millis();
       lastCanAFrameMs = frameNow;
@@ -521,21 +546,18 @@ static void canTaskMcp(void* arg) {
     }
 
     // ── J4 PARTY / MCP2515 ──
-    // Party is independent from J2 BODY but shares the same SPI peripheral.
-    // Keep the drain bounded so a saturated Party bus cannot starve Body.
+    // No 32-frame BODY batch can delay PARTY. Already-prefetched BODY frames
+    // are all decoded, even if a decoder exceeds the cooperative time limit.
+    taskYIELD();
+    const uint8_t partyAfter = partyFirst ? 0 : canDrainPartySlice();
+    partyFirst = !partyFirst;
+    const uint8_t partyProcessed = partyBefore + partyAfter;
+    taskYIELD();
     {
-      uint8_t partyProcessed = 0;
-      struct can_frame partyFrame = {};
-      while (partyProcessed < MCP_RX_BUDGET &&
-             Can_C.readMessage(&partyFrame) == MCP2515::ERROR_OK) {
-        const uint32_t partyEpoch = canTxEpochSnapshot();
-        const uint32_t partyNow = (uint32_t)millis();
-        tmrProcessPartyFrame(partyFrame, partyNow, partyEpoch);
-        partyProcessed++;
-      }
       const uint8_t eflgParty = Can_C.getErrorFlags();
+      canPerfObserveOverflow(CAN_PERF_PARTY, eflgParty);
       if (eflgParty & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR))
-        Can_C.clearRXnOVR();
+        Can_C.clearRXnOVRFlags();
       if (eflgParty & MCP2515::EFLG_TXBO) {
         mcpPartyState = 2;
         const unsigned long partyNowMs = millis();
@@ -568,25 +590,22 @@ static void canTaskMcp(void* arg) {
                                      CAN_TASK_STAGE_STATUS,
                                      (uint32_t)millis());
     unsigned long now = millis();
+    // Observe and clear RX overflow every slice, not once per second.
+    const uint8_t bodyFlags = Can_A.getErrorFlags();
+    canPerfObserveOverflow(CAN_PERF_BODY, bodyFlags);
+    if (bodyFlags & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR)) {
+      mcpRxOverflowObserve((uint32_t)now, bodyFlags);
+      canARxDiagnosticsObserveOverflowPure(canARxDiagnostics, (uint32_t)now, bodyFlags,
+          (bodyFlags & MCP2515::EFLG_RX0OVR) != 0, (bodyFlags & MCP2515::EFLG_RX1OVR) != 0);
+      Can_A.clearRXnOVRFlags();
+    }
     if (now - lastMcpStatusMs >= 1000) {
       lastMcpStatusMs = now;
 
       // Read the REAL MCP2515 error flags (EFLG register).
-      uint8_t eflg = Can_A.getErrorFlags();
+      uint8_t eflg = bodyFlags;
       mcpLastErrorFlags = eflg;
       mcpLastErrorFlagsMs = (uint32_t)now;
-
-      // 1) RX overflow: MUST be cleared, otherwise the controller stops
-      //    receiving in this buffer and the Nag Killer appears frozen.
-      if (eflg & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR)) {
-        mcpRxOverflowObserve((uint32_t)now, eflg);
-        canARxDiagnosticsObserveOverflowPure(
-            canARxDiagnostics, (uint32_t)now, eflg,
-            (eflg & MCP2515::EFLG_RX0OVR) != 0,
-            (eflg & MCP2515::EFLG_RX1OVR) != 0);
-        Can_A.clearRXnOVR();
-        TMR_SERIAL_PRINTLN("[CAN A] RX overflow flags cleared");
-      }
 
       // 2) REAL bus-off via EFLG_TXBO only. Transient TX failures are not
       //    sufficient to declare BUS-OFF and must not trigger recovery.
@@ -616,7 +635,9 @@ static void canTaskMcp(void* arg) {
                                      (uint32_t)millis());
     canTaskDiagnosticsFinishLoopPure(canTaskMcpDiagnostics,
                                      (uint32_t)micros());
-    vTaskDelay(1);
+    canPerfSampleTx(Can_A, CAN_PERF_BODY);
+    canPerfSampleTx(Can_C, CAN_PERF_PARTY);
+    canRxFinishBurst(processed != 0 || partyProcessed != 0, burstStartedUs);
   }
 }
 
@@ -627,6 +648,7 @@ static void canTaskChassis(void* arg) {
   uint32_t lastQueueStatusMs = 0;
 
   canTaskDiagnosticsResetPure(canTaskChassisDiagnostics);
+  uint32_t burstStartedUs = (uint32_t)micros();
   for (;;) {
     const uint32_t loopStartMs = (uint32_t)millis();
     canTaskChassisHeartbeatMs = loopStartMs;
@@ -639,6 +661,7 @@ static void canTaskChassis(void* arg) {
       canTaskChassisQuiesced = true;
       while (canTasksStopping || canMaintenanceActive()) vTaskDelay(pdMS_TO_TICKS(5));
       canTaskChassisQuiesced = false;
+      burstStartedUs = (uint32_t)micros();
       continue;
     }
     // Drain completion/error alerts before the potentially busy RX batch so
@@ -653,9 +676,13 @@ static void canTaskChassis(void* arg) {
                                      CAN_TASK_STAGE_RECEIVE,
                                      (uint32_t)millis());
     uint32_t countryRxEpoch = canTxEpochSnapshot();
-    esp_err_t rxResult = mcpChassisReceive(&f, pdMS_TO_TICKS(2));
+    const uint32_t chassisSliceStartedUs = (uint32_t)micros();
+    uint32_t chassisReadUs = 0;
+    esp_err_t rxResult = mcpChassisReceive(&f, 0, &chassisReadUs);
     uint32_t laneRxMs = (uint32_t)millis();
     while (rxBudget < MCP_CHASSIS_RX_DRAIN_BUDGET && rxResult == ESP_OK) {
+      {
+      CanPerfRxScope rxScope(CAN_PERF_CHASSIS, chassisReadUs);
       rxBudget++;
       canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                        CAN_TASK_STAGE_PROCESS,
@@ -774,8 +801,10 @@ static void canTaskChassis(void* arg) {
       canTaskDiagnosticsEnterStagePure(canTaskChassisDiagnostics,
                                        CAN_TASK_STAGE_RECEIVE,
                                        (uint32_t)millis());
+      }
       countryRxEpoch = canTxEpochSnapshot();
-      rxResult = rxBudget < MCP_CHASSIS_RX_DRAIN_BUDGET ? mcpChassisReceive(&f, 0) : ESP_ERR_TIMEOUT;
+      rxResult = canRxSliceAvailablePure(rxBudget, chassisSliceStartedUs, (uint32_t)micros())
+          ? mcpChassisReceive(&f, 0, &chassisReadUs) : ESP_ERR_TIMEOUT;
       laneRxMs = (uint32_t)millis();
     }
 
@@ -811,6 +840,10 @@ static void canTaskChassis(void* arg) {
                                      CAN_TASK_STAGE_STATUS,
                                      (uint32_t)millis());
     unsigned long now = millis();
+    const uint8_t chassisFlags = Can_B.getErrorFlags();
+    canPerfObserveOverflow(CAN_PERF_CHASSIS, chassisFlags);
+    if (chassisFlags & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR))
+      Can_B.clearRXnOVRFlags();
     if (now - lastChassisStatusMs >= 1000) {
       lastChassisStatusMs = now;
       McpChassisStatus st = {};
@@ -889,7 +922,8 @@ static void canTaskChassis(void* arg) {
                                      (uint32_t)millis());
     canTaskDiagnosticsFinishLoopPure(canTaskChassisDiagnostics,
                                      (uint32_t)micros());
-    vTaskDelay(1);
+    canPerfSampleTx(Can_B, CAN_PERF_CHASSIS);
+    canRxFinishBurst(rxBudget != 0, burstStartedUs);
   }
 }
 
@@ -1064,6 +1098,9 @@ static void recoveryStopCanTasks() {
   canTaskChassisHandle = nullptr;
   if (a) vTaskDelete(a);
   if (b) vTaskDelete(b);
+  // Forced deletion may not unwind a frame scope. Do not let a recreated
+  // task with a reused handle inherit the previous task's RX timestamp.
+  canPerfClearRxContexts();
 
   canTasksStopping = false;
   canTaskMcpQuiesced = false;
@@ -1076,12 +1113,12 @@ static void recoveryStopCanTasks() {
 }
 
 static bool recoveryStartCanTasks() {
-  BaseType_t a = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, 5, &canTaskBodyHandle, 1);
+  BaseType_t a = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskBodyHandle, 1);
   if (a != pdPASS) {
     canTaskBodyHandle = nullptr;
     return false;
   }
-  BaseType_t b = xTaskCreatePinnedToCore(canTaskChassis, "canB", 8192, nullptr, 4, &canTaskChassisHandle, 1);
+  BaseType_t b = xTaskCreatePinnedToCore(canTaskChassis, "canB", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskChassisHandle, 1);
   if (b != pdPASS) {
     vTaskDelete(canTaskBodyHandle);
     canTaskBodyHandle = nullptr;

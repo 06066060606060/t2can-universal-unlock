@@ -149,7 +149,7 @@ static constexpr CAN_CLOCK MCP_CLOCK = MCP_16MHZ;
 
 static constexpr uint32_t MCP_SPI_HZ = 10000000;
 
-static constexpr uint8_t MCP_RX_BUDGET = 32;
+static constexpr uint8_t MCP_RX_BUDGET = CAN_RX_SLICE_FRAMES;
 
 // TMR physical CAN map:
 //   Can_A = J2 BODY
@@ -267,10 +267,11 @@ static esp_err_t mcpChassisDeinit(void) {
   return ESP_OK;
 }
 
-static esp_err_t mcpChassisReceive(struct can_frame *message, TickType_t ticks_to_wait) {
+static esp_err_t mcpChassisReceive(struct can_frame *message, TickType_t ticks_to_wait,
+                                 uint32_t *readUs = nullptr) {
   if (!message || !mcpChassisReady) return ESP_ERR_INVALID_STATE;
   struct can_frame f = {};
-  MCP2515::ERROR e = Can_B.readMessage(&f);
+  MCP2515::ERROR e = canPerfRead(Can_B, CAN_PERF_CHASSIS, &f, readUs);
   if (e == MCP2515::ERROR_OK) {
     tmrCanFrameToChassis(f, *message);
     return ESP_OK;
@@ -284,7 +285,9 @@ static esp_err_t mcpChassisTransmit(const struct can_frame *message, TickType_t)
   if (!mcpChassisReady || canTxAdministrativeHold) return ESP_ERR_INVALID_STATE;
   struct can_frame f = {};
   tmrChassisToCanFrame(*message, f);
-  return Can_B.sendMessage(&f) == MCP2515::ERROR_OK ? ESP_OK : ESP_FAIL;
+  const MCP2515::ERROR result = canPerfSend(Can_B, CAN_PERF_CHASSIS, &f);
+  return result == MCP2515::ERROR_OK ? ESP_OK :
+      result == MCP2515::ERROR_ALLTXBUSY ? ESP_ERR_TIMEOUT : ESP_FAIL;
 }
 
 static esp_err_t mcpChassisReadAlerts(uint32_t *alerts, TickType_t) {
@@ -634,7 +637,7 @@ static bool canTxMcpSendTagged(const struct can_frame *msg,
   MCP2515::ERROR traceResult = MCP2515::ERROR_FAIL;
 
   if (allowed) {
-    errOut = Can_A.sendMessage(msg);
+    errOut = canPerfSend(Can_A, CAN_PERF_BODY, msg);
     traceResult = errOut;
     reason = mcpTxResultReasonMaskedPure(
         true, true, true, canTxBarrierState.epoch, canTxBarrierState.freshMask,
@@ -673,7 +676,7 @@ static bool canTxPartyMcpSendTagged(const struct can_frame *msg,
       canTxBarrierState.freshMask, expectedEpoch, CAN_TX_FRESH_PARTY, true);
   const bool allowed = reason == MCP_TX_OK;
   if (allowed) {
-    errOut = Can_C.sendMessage(msg);
+    errOut = canPerfSend(Can_C, CAN_PERF_PARTY, msg);
     reason = mcpTxResultReasonMaskedPure(
         true, true, true, canTxBarrierState.epoch,
         canTxBarrierState.freshMask, expectedEpoch, CAN_TX_FRESH_PARTY,
@@ -722,7 +725,7 @@ static bool canTxMcpSendTaggedGuarded(
   const bool allowed = generationValid && reason == MCP_TX_OK;
   MCP2515::ERROR traceResult = MCP2515::ERROR_FAIL;
   if (allowed) {
-    errOut = Can_A.sendMessage(msg);
+    errOut = canPerfSend(Can_A, CAN_PERF_BODY, msg);
     traceResult = errOut;
     reason = mcpTxResultReasonMaskedPure(
         true, true, true, canTxBarrierState.epoch,

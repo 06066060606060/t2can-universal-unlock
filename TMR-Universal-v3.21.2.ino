@@ -22,7 +22,7 @@
 #include <host/ble_store.h>
 #endif
 #include <pin_config.h>
-#include <mcp2515.h>
+#include "mcp2515.h"
 #include <SPI.h>
 
 #ifndef TMR_SERIAL_DIAGNOSTICS
@@ -77,6 +77,8 @@
 #include "can_research_capture.h"
 #include "driver_monitor_capture.h"
 #include "s3xy_ble.h"
+#include "can_performance.h"
+#include "can_performance_json.h"
 #include "can_core.h"
 #include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
@@ -285,13 +287,13 @@ void setup() {
   bootCaptureMarkOnce(&bootCapCanInitDoneMs);
 
   // Start CAN tasks after all three TMR controllers are ready/running.
-  BaseType_t retMcp = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, 5, &canTaskBodyHandle, 1);
+  BaseType_t retMcp = xTaskCreatePinnedToCore(canTaskMcp, "canA", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskBodyHandle, 1);
   if (retMcp != pdPASS) {
     TMR_SERIAL_PRINTF("CAN A task creation failed: %d\n", retMcp);
     restartTmrCanSafely();
   }
 
-  BaseType_t retChassis = xTaskCreatePinnedToCore(canTaskChassis, "canB", 8192, nullptr, 4, &canTaskChassisHandle, 1);
+  BaseType_t retChassis = xTaskCreatePinnedToCore(canTaskChassis, "canB", 8192, nullptr, CAN_RX_TASK_PRIORITY, &canTaskChassisHandle, 1);
   if (retChassis != pdPASS) {
     TMR_SERIAL_PRINTF("CAN B task creation failed: %d\n", retChassis);
     restartTmrCanSafely();

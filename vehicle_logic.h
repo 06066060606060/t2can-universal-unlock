@@ -1294,7 +1294,7 @@ static const char *alcStateName(uint8_t v) {
 static constexpr uint16_t MCP_CHASSIS_TX_QUEUE_LEN = 16;
 static constexpr uint16_t MCP_CHASSIS_PARK_NON_R79_QUEUE_LIMIT = 14;
 static constexpr uint16_t MCP_CHASSIS_SUMMON_NON_R79_QUEUE_LIMIT = 6;
-static constexpr uint8_t  MCP_CHASSIS_RX_DRAIN_BUDGET = 64;
+static constexpr uint8_t  MCP_CHASSIS_RX_DRAIN_BUDGET = CAN_RX_SLICE_FRAMES;
 static constexpr uint32_t MCP_CHASSIS_QUEUE_TELEMETRY_PERIOD_MS = 50;
 
 static volatile uint32_t chassisTxQueueNow = 0;
@@ -4307,7 +4307,7 @@ static void laneGraphObserveBody(const struct can_frame &src, uint32_t txEpoch,
         laneGraphApplyPure(out.data, out.can_dlc, laneGraphActive());
     const bool visionChanged = visionControlApplyFinal(out.data, VISION_CONTROL_BODY_PURE);
     if (!laneChanged && !visionChanged) { xSemaphoreGive(canTxBarrierMutex); return; }
-    const MCP2515::ERROR result = Can_A.sendMessage(&out);
+    const MCP2515::ERROR result = canPerfSend(Can_A, CAN_PERF_BODY, &out);
     const bool ok = result == MCP2515::ERROR_OK;
     visionControlRecordTx(visionChanged, VISION_CONTROL_BODY_PURE, ok);
     canATraceRecordTx(&out, ok ? MCP_TX_OK : MCP_TX_SEND_ERROR, result, CAN_TX_TRACE_SOURCE_DEFAULT);
