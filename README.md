@@ -98,6 +98,15 @@
 
 > Model 3 Highland requires selecting the installed turn-control type during profile setup. Other supported profiles automatically use the Stalk configuration.
 
+## 🔧 Hardware Target
+
+This code is adapted for the **LilyGO / T-2Can**.
+
+| Device | CAN Interface | CAN Bus | Function |
+|---|---|---|---|
+| LilyGO / T-2Can | CAN A — MCP2515 | Chassis CAN | 
+| LilyGO / T-2Can | CAN B — TWAI | Body CAN | 
+
 ## 🧩 Main features
 
 ### 🛡️ Vehicle-profile safety
