@@ -1,5 +1,6 @@
 #pragma once
 
+#if TMR_CAN_DETAILED_STATS
 static void canPerfTimingJson(JsonWriterArduino &jw, const char *key,
                               const CanPerfTimingPure &t) {
   jw.beginObject(key);
@@ -19,6 +20,7 @@ static void canPerfTimingJson(JsonWriterArduino &jw, const char *key,
   jw.raw("histogram", bins);
   jw.endObject();
 }
+#endif
 
 static void canPerfBusJson(JsonWriterArduino &jw, const char *key, CanPerfBus bus) {
   const CanPerfBusPure s = canPerfSnapshot(bus);
@@ -52,6 +54,7 @@ static void canPerfBusJson(JsonWriterArduino &jw, const char *key, CanPerfBus bu
     jw.u32("tx370", s.tx370);
     jw.u32("tx370Errors", s.tx370Errors);
   }
+#if TMR_CAN_DETAILED_STATS
   jw.u32("txStatusSamples", s.txStatusSamples);
   jw.u32("txFullSamples", s.txFullSamples);
   jw.u32("txPendingLast", s.txPendingLast);
@@ -62,12 +65,14 @@ static void canPerfBusJson(JsonWriterArduino &jw, const char *key, CanPerfBus bu
   canPerfTimingJson(jw, "rxProcess", s.rxProcess);
   canPerfTimingJson(jw, "txCall", s.txCall);
   canPerfTimingJson(jw, "rxToEnqueue", s.rxToEnqueue);
+#endif
   jw.endObject();
 }
 
 static void canPerformanceJson(JsonWriterArduino &jw) {
   jw.beginObject("canPerformance");
-  jw.u32("schemaVersion", 1);
+  jw.u32("schemaVersion", 2);
+  jw.boolean("detailedStatsEnabled", TMR_CAN_DETAILED_STATS != 0);
 #if defined(TMR_PERF_BUILD_O2) && !defined(__OPTIMIZE_SIZE__)
   jw.string("compilerOptimization", "O2");
 #elif defined(__OPTIMIZE_SIZE__)
@@ -75,7 +80,10 @@ static void canPerformanceJson(JsonWriterArduino &jw) {
 #else
   jw.string("compilerOptimization", "other");
 #endif
+#if TMR_CAN_DETAILED_STATS
   jw.string("latencyOrigin", "software_read_complete");
+  jw.string("txStatusOrigin", "rx_poll_read_status");
+#endif
   jw.string("txSuccessMeaning", "controller_enqueue");
   jw.string("rxLossMeaning", "latched_overflow_events_not_lost_frame_count");
   jw.u32("rxSliceFrames", CAN_RX_SLICE_FRAMES);

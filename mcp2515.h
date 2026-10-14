@@ -492,6 +492,7 @@ class MCP2515
         ERROR readMessage(const RXBn rxbn, struct can_frame *frame);
         ERROR readMessage(struct can_frame *frame);
         ERROR readMessage(struct can_frame *frame, RXBn *bufferRead);
+        ERROR readMessage(struct can_frame *frame, RXBn *bufferRead, uint8_t *statusRead);
         void getRxBufferConfiguration(uint8_t &rx0Ctrl, uint8_t &rx1Ctrl);
         bool checkReceive(void);
         bool checkError(void);

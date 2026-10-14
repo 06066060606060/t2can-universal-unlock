@@ -1,6 +1,12 @@
 #pragma once
 #include <stdint.h>
 
+// Essential counters remain available in the normal build. Opt in to timing
+// and occupancy instrumentation only when conducting a diagnostic comparison.
+#ifndef TMR_CAN_DETAILED_STATS
+#define TMR_CAN_DETAILED_STATS 0
+#endif
+
 static constexpr uint8_t CAN_PERF_HISTOGRAM_BINS = 11;
 struct CanPerfTimingPure {
   uint32_t count;
@@ -40,7 +46,9 @@ static inline uint8_t canPerfPendingPure(uint8_t readStatus) {
 struct CanPerfBusPure {
   uint32_t polls;
   uint32_t lastPollUs;
+#if TMR_CAN_DETAILED_STATS
   CanPerfTimingPure pollGap;
+#endif
   uint32_t rxFrames;
   uint32_t rx0Frames;
   uint32_t rx1Frames;
@@ -52,9 +60,11 @@ struct CanPerfBusPure {
   uint32_t rxOverflowEvents;
   uint32_t rx0OverflowEvents;
   uint32_t rx1OverflowEvents;
+#if TMR_CAN_DETAILED_STATS
   CanPerfTimingPure rxRead;
   CanPerfTimingPure rxDispatch;
   CanPerfTimingPure rxProcess;
+#endif
   uint32_t txAttempts;
   uint32_t txQueued;
   uint32_t txBusy;
@@ -65,16 +75,20 @@ struct CanPerfBusPure {
   uint32_t rx370;
   uint32_t tx370;
   uint32_t tx370Errors;
+#if TMR_CAN_DETAILED_STATS
   CanPerfTimingPure txCall;
   CanPerfTimingPure rxToEnqueue;
   uint32_t txStatusSamples;
   uint32_t txFullSamples;
   uint8_t txPendingLast;
   uint8_t txPendingMax;
+#endif
 };
 
 static inline void canPerfPollObservePure(CanPerfBusPure &s, uint32_t nowUs) {
+#if TMR_CAN_DETAILED_STATS
   if (s.polls) canPerfTimingObservePure(s.pollGap, nowUs - s.lastPollUs);
+#endif
   ++s.polls;
   s.lastPollUs = nowUs;
 }
@@ -86,9 +100,11 @@ static inline void canPerfOverflowObservePure(CanPerfBusPure &s, uint8_t flags) 
   if (flags & 0x80u) ++s.rx1OverflowEvents;
 }
 
+#if TMR_CAN_DETAILED_STATS
 static inline void canPerfStatusObservePure(CanPerfBusPure &s, uint8_t status) {
   ++s.txStatusSamples;
   s.txPendingLast = canPerfPendingPure(status);
   if (s.txPendingLast > s.txPendingMax) s.txPendingMax = s.txPendingLast;
   if (s.txPendingLast == 3) ++s.txFullSamples;
 }
+#endif

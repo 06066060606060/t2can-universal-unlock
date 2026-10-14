@@ -745,7 +745,16 @@ MCP2515::ERROR MCP2515::readMessage(struct can_frame *frame)
 
 MCP2515::ERROR MCP2515::readMessage(struct can_frame *frame, RXBn *bufferRead)
 {
+    return readMessage(frame, bufferRead, nullptr);
+}
+
+MCP2515::ERROR MCP2515::readMessage(struct can_frame *frame, RXBn *bufferRead,
+                                  uint8_t *statusRead)
+{
     const uint8_t stat = getStatus();
+    // READ STATUS includes TXREQ as well as RX flags. Expose this observation
+    // for diagnostics without issuing another SPI transaction.
+    if (statusRead) *statusRead = stat;
     if (!(stat & STAT_RXIF_MASK)) return ERROR_NOMSG;
     // When RX0 refills continuously, fixed RX0 priority starves RX1. Rotate
     // priority per controller, while always reading the sole pending buffer.

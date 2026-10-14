@@ -249,7 +249,10 @@ static esp_err_t mcpChassisReceive(struct can_frame *message, TickType_t ticks_t
   struct can_frame f = {};
   MCP2515::ERROR e = canPerfRead(Can_B, CAN_PERF_CHASSIS, &f, readUs);
   if (e == MCP2515::ERROR_OK) {
-    tmrCanFrameToChassis(f, *message);
+    // Both sides use can_frame. Preserve EFF/RTR flags so the receive task
+    // can reject non-data/non-standard frames before calling its decoders.
+    // The zero-initialized local frame also retains zero padding for short DLC.
+    *message = f;
     return ESP_OK;
   }
   if (ticks_to_wait) vTaskDelay(ticks_to_wait);

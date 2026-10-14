@@ -612,7 +612,6 @@ static void canTaskMcp(void* arg) {
                                      (uint32_t)millis());
     canTaskDiagnosticsFinishLoopPure(canTaskMcpDiagnostics,
                                      (uint32_t)micros());
-    canPerfSampleTx(Can_A, CAN_PERF_BODY);
     canPerfSampleRxConfig(Can_A, CAN_PERF_BODY);
     canRxFinishBurst(processed != 0, rxPause);
   }
@@ -663,7 +662,6 @@ static void canTaskParty(void* arg) {
     } else if (mcpPartyReady) {
       mcpPartyState = 0;
     }
-    canPerfSampleTx(Can_C, CAN_PERF_PARTY);
     canPerfSampleRxConfig(Can_C, CAN_PERF_PARTY);
     canTaskDiagnosticsEnterStagePure(canTaskPartyDiagnostics,
                                      CAN_TASK_STAGE_DELAY, (uint32_t)millis());
@@ -953,7 +951,6 @@ static void canTaskChassis(void* arg) {
                                      (uint32_t)millis());
     canTaskDiagnosticsFinishLoopPure(canTaskChassisDiagnostics,
                                      (uint32_t)micros());
-    canPerfSampleTx(Can_B, CAN_PERF_CHASSIS);
     canPerfSampleRxConfig(Can_B, CAN_PERF_CHASSIS);
     canRxFinishBurst(rxBudget != 0, rxPause);
   }

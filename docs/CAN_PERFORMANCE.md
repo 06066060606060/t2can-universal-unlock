@@ -97,6 +97,48 @@ compilation results are saved in `.build/can-rx-diagnostics/target/results.json`
 No complete application was linked or uploaded. Physical readback and any
 overflow reduction remain to be confirmed after loading the updated sources.
 
+## Essential statistics (default since 2026-10-14)
+
+`TMR_CAN_DETAILED_STATS` now defaults to `0`. All buses retain RX/TX counters,
+RX read errors, TX busy/errors, RX overflow, recovery successes/failures and
+the RX0/RX1/BUKT diagnostics. PARTY retains raw `0x370` RX/TX/error counters.
+Closing the dashboard alone does not stop instrumentation; this compile-time
+setting actually removes its timing work from the receive/transmit path.
+
+In this essential build, `CanPerfRxScope` is empty; timing clock reads,
+per-frame timing contexts and histogram updates are omitted. The optional
+`readUs` output is zero and is consumed only by that disabled timing scope.
+The statistics lock remains around the small counter updates so dashboard
+snapshots and Reset Stats remain synchronized with RX/TX tasks.
+RX configuration sampling no longer takes the statistics lock on every pass:
+each receive owner schedules its own once-per-second readback. After Reset
+Stats, configuration is republished at the next scheduled sample.
+
+For a diagnostic comparison, add `-DTMR_CAN_DETAILED_STATS=1` to `build_opt.h`
+alongside its existing flags. In this detailed build, the driver's existing
+RX `READ STATUS` observation also supplies TXREQ occupancy. The three RX
+tasks no longer issue an extra `READ STATUS` solely for TX statistics at the
+end of every service pass. Sampling now occurs per RX poll; occupancy sample
+counts/percentages from the former per-pass implementation are not directly
+comparable. TX enqueue/busy/error counters remain independent of sampling.
+
+`canPerformance.schemaVersion` is `2`, and `detailedStatsEnabled` explicitly
+states the build mode. Timing/histogram and TX occupancy fields are omitted
+when disabled, so missing measurements are not presented as zero latency or
+zero saturation. The compact dashboard cards continue to use the essential
+counters and require no UI changes.
+
+The CHASSIS compatibility receive shim now copies its `can_frame` directly
+instead of clearing and rebuilding an identical struct. This preserves the
+driver's extended/RTR flags, allowing the existing receive task's frame-type
+guard to work; padding beyond short payloads stays zero. Output remains
+untouched on empty reads, invalid DLC and unavailable controllers.
+
+See [CHASSIS trace analysis](CHASSIS_TRACE_ANALYSIS.md) for the input log,
+measured software-operation reductions and verification scope. These changes
+do not establish a physical overflow or latency improvement without bench
+measurements after loading the updated sources.
+
 ## TX barrier contention
 
 The common BODY/PARTY/CHASSIS transport entry points now wait up to one
@@ -141,7 +183,8 @@ Open **Settings > Diagnostics & CAN Recovery > CAN COUNTERS**. Separate BODY,
 CHASSIS and PARTY cards show RX, TX, FAIL RX/TX, recovery OK/FAIL and RX overflow.
 TX failures include busy-buffer rejections. RX overflow remains a separate
 latched-event count, not a failed software read or an exact lost-frame count.
-The detailed timing, buffer and compiler readings remain available in JSON.
+Buffer/configuration and compiler readings remain available in JSON. Detailed
+timing and TX occupancy readings require `TMR_CAN_DETAILED_STATS=1`.
 Use the existing **System Stats JSON** button to save the complete measurements.
 The same data is available under `canPerformance` in `/api/system/stats`.
 
