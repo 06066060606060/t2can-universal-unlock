@@ -92,7 +92,7 @@
 
 | Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
 |---|:---:|:---:|:---:|:---:|
-| **Model YL · Party + VH** | ✅ | ✅ | ✅ | ✅ |
+| **Model YL · Party + Body** | ✅ | ✅ | ✅ | ✅ |
 | **Standard Model 3/Y · Body + Chassis** | ❌✅ | ✅ | ✅ | ✅ | 
 | **Standard Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
 
@@ -103,9 +103,9 @@
 This code is adapted for the **LilyGO / T-2Can**.
 
 | Device | CAN Interface | CAN Bus | Function |
-|---|---|---|---|
-| LilyGO / T-2Can | CAN A — MCP2515 | Chassis CAN | 
-| LilyGO / T-2Can | CAN B — TWAI | Body CAN | 
+|---|---|---|---| 
+| LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
+| LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
 
 ## 🧩 Main features
 
