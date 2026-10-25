@@ -15,6 +15,11 @@
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
+### Discord
+Join Discord server for more info:
+https://discord.gg/euPbYG8Npc
+
+---
 
 **v3.28+ **	
 - Continuous AP fix   
