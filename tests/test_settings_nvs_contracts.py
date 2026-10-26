@@ -78,7 +78,7 @@ class SettingsNvsContracts(unittest.TestCase):
 
         ROOT = pathlib.Path(__file__).resolve().parents[1]
         API = (ROOT / "web_api.h").read_text()
-        INO = (ROOT / (ROOT.name + ".ino")).read_text()
+        INO = next(ROOT.glob('*.ino')).read_text()
 
 
         class NvsKeepBleResetContract(unittest.TestCase):
@@ -88,7 +88,7 @@ class SettingsNvsContracts(unittest.TestCase):
                 expected = {
                     "v3profile", "wifiap", "nag", "summon", "lab3f8", "labv3fd", "ulc",
                     "alc293lab", "countrylab", "r79lab", "r79", "lanegraph", "researchcap", "features",
-                    "canDiag", "t2meta",
+                    "canDiag", "t2meta", "preheat",
                 }
                 found = set(re.findall(r'"([A-Za-z0-9]+)"', helper))
                 self.assertEqual(expected, found)

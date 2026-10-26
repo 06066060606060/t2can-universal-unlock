@@ -192,6 +192,48 @@ static inline bool vehicleProfileApDriveProfileSupported(uint8_t id, uint8_t top
   return vehicleProfilePedalMapSupported(id, topology);
 }
 
+// ---------------------------------------------------------------------------
+// Vehicle/Body (VH) bus resolver.
+//
+// This bus carries every frame the battery-preheat feature needs:
+//   0x082 UI_tripPlanning   (RX source frame / TX target)
+//   0x212 BMS_status        (bmsSeen, precondition flags)
+//   0x241 VCFRONT_coolant   (battery coolant flow + flow reason)
+//   0x252 BMS_powerAvailable(max stationary heat power)
+//   0x2E1 VCFRONT_status    (isActiveHeatingBattery, mux 0)
+//   0x332 BattBrickMinMax   (pack temperature min/max, mux 0)
+//
+// BODY == VEHICLE == VH: one bus, three names. PARTY is a different bus and
+// never carries these frames. The physical channel therefore depends on the
+// topology:
+//   STANDARD_BODY_CHASSIS  -> Vehicle/Body is CAN A   (MCP2515)
+//   YL_PARTY_VH            -> Vehicle/Body is CAN B   (TWAI, exposed as VH)
+//   STANDARD_PARTY_CHASSIS -> no Vehicle/Body path at all
+//
+// This is exactly the 0x334 pedal-map requirement, so it is reused rather than
+// duplicated: PedalMap is the existing feature that already encodes "is the
+// Vehicle/Body bus reachable, and on which channel".
+static inline bool vehicleProfileVehicleBusSupported(uint8_t id, uint8_t topology) {
+  return vehicleProfilePedalMapSupported(id, topology);
+}
+
+static inline bool vehicleProfileVehicleBusOnCanA(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology) &&
+         topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+}
+
+static inline bool vehicleProfileVehicleBusOnCanB(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology) &&
+         id == VEHICLE_MODEL_YL && topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
+}
+
+// Battery preheat needs the Vehicle/Body bus for both its RX source frame and
+// its TX path, so it is gated exactly like PedalMap: unavailable on
+// Party+Chassis, which has no Vehicle/Body path.
+static inline bool vehicleProfilePreheatSupported(uint8_t id, uint8_t topology) {
+  return vehicleProfileVehicleBusSupported(id, topology);
+}
+
 // Experimental 0x3F8 UI_ulcStalkConfirm override is supported on every valid
 // Universal dual-CAN topology. Model YL keeps its fixed validated route; every
 // other Model 3/Y profile can select physical CAN A or CAN B in LAB, default B.
@@ -351,6 +393,18 @@ static inline bool activeProfilePedalMapSupported() {
 
 static inline bool activeProfileApDriveProfileSupported() {
   return vehicleProfileApDriveProfileSupported(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfilePreheatSupported() {
+  return vehicleProfilePreheatSupported(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileVehicleBusOnCanA() {
+  return vehicleProfileVehicleBusOnCanA(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileVehicleBusOnCanB() {
+  return vehicleProfileVehicleBusOnCanB(activeVehicleProfile, activeVehicleTopology);
 }
 
 static inline bool activeProfileUlcNoConfirmSupported() {

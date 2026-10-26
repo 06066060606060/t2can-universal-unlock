@@ -36,7 +36,7 @@
 .listrow{min-height:57px;padding:0 15px;display:flex;align-items:center;justify-content:space-between;gap:10px}.listrow+.listrow{border-top:1px solid var(--line)}.listrow.clickable{cursor:pointer}.listkey{font-size:11.5px;font-weight:570}.listdesc{font-size:8.5px;color:var(--muted);margin-top:3px}.chev{font-size:17px;color:var(--muted)}.value{font-size:9.5px;color:var(--muted);font-weight:620;text-align:right}
 details+details{border-top:1px solid var(--line)}summary{list-style:none;cursor:pointer;padding:15px;display:flex;justify-content:space-between;align-items:center;font-size:11.5px;font-weight:590}summary::-webkit-details-marker{display:none}.body{padding:0 15px 13px}.r{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 16px;padding:9px 0;border-top:1px solid var(--line);font-size:9.5px}.r>span{min-width:0;max-width:100%;white-space:nowrap;overflow-wrap:normal;overflow-x:auto}.r>span:first-child{flex:1 0 auto}.r>span:last-child{flex:0 1 auto;margin-left:auto;text-align:left}.rk2{color:var(--muted)}.rv{text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .panel{display:none;position:fixed;z-index:35;inset:0;background:var(--bg);overflow:auto}.panel.show{display:block}.panelin{max-width:520px;margin:auto;padding:calc(var(--global-header-h) + 3px + env(safe-area-inset-top)) 14px calc(var(--global-nav-h) + 18px + env(safe-area-inset-bottom))}.paneltop{height:48px;display:flex;align-items:center;gap:2px}.backbtn{border:0;background:transparent;width:40px;height:40px;padding:0;display:flex;align-items:center;justify-content:center;flex:0 0 40px;margin-left:-8px}.backbtn svg,.backIcon{width:18px;height:18px;display:block}.paneltitle{font-size:15px;font-weight:680;line-height:20px;display:flex;align-items:center;height:40px}.panelHero{font-size:31px;font-weight:660;letter-spacing:-.045em;margin:18px 2px 3px}.panelSub{font-size:10px;color:var(--muted);line-height:1.45;margin:0 2px 14px}.panel .card{margin-top:10px}.fieldgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:13px}.field{background:var(--bg);border-radius:13px;padding:9px 10px}.field label{display:block;font-size:8px;color:var(--muted);font-weight:650;margin-bottom:5px}.field input{width:100%;border:0;outline:0;background:transparent;color:var(--ink);font-size:13px}.field.full{grid-column:1/-1}.subhead{font-size:9px;color:var(--muted);font-weight:700;letter-spacing:.08em;margin:13px 0 7px}.controlgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:13px}.btn{border:0;border-radius:13px;padding:12px;background:var(--bg);color:var(--ink);font-size:10px;font-weight:620;text-align:center}.btn.primary{background:var(--ink);color:var(--bg)}.btn.blue{background:var(--blue);color:#fff}.btn.full{width:100%}.linkbtn{display:flex;align-items:center;justify-content:center;text-decoration:none}.torqueWrap{padding:0 13px 13px}.torqueRows{display:grid;gap:5px}.torqueRow{display:grid;grid-template-columns:28px 1fr 1fr 60px;gap:6px;align-items:center}.torqueRow input{width:100%;border:0;border-radius:10px;background:var(--bg);color:var(--ink);padding:8px;font-size:11px}.torqueRow span{font-size:9px;text-align:right}.ota{padding:13px}.ota input[type=file]{width:100%;font-size:10px;color:var(--muted);margin:6px 0 8px}.progress{height:4px;background:var(--line);border-radius:99px;overflow:hidden;display:none}.progress.show{display:block}.progress>i{display:block;height:100%;width:0;background:var(--green)}.otaMsg{font-size:9px;color:var(--muted);margin-top:7px;line-height:1.5}.settingToggleRow{min-height:57px;padding:0 15px;display:flex;align-items:center;justify-content:space-between}.diagButtons{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:13px}
-.bottomnav{position:fixed;z-index:45;left:50%;bottom:0;transform:translateX(-50%);width:min(520px,100%);height:calc(65px + env(safe-area-inset-bottom));padding:0 13px env(safe-area-inset-bottom);background:var(--nav);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4,1fr)}.bottomnav.labHidden{grid-template-columns:repeat(3,1fr)}.navbtn{border:0;background:transparent;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:8.5px;font-weight:680;letter-spacing:.04em}.navicon{height:22px;font-size:17px;display:grid;place-items:center}.navbtn.active{color:var(--ink)}.navbtn.active .navicon{color:var(--green)}
+.bottomnav{position:fixed;z-index:45;left:50%;bottom:0;transform:translateX(-50%);width:min(520px,100%);height:calc(65px + env(safe-area-inset-bottom));padding:0 13px env(safe-area-inset-bottom);background:var(--nav);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr)}.bottomnav.labHidden{grid-template-columns:repeat(4,1fr)}.navbtn{border:0;background:transparent;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:8.5px;font-weight:680;letter-spacing:.04em}.navicon{height:22px;font-size:17px;display:grid;place-items:center}.navbtn.active{color:var(--ink)}.navbtn.active .navicon{color:var(--green)}
 .toast{position:fixed;z-index:60;left:50%;bottom:calc(78px + env(safe-area-inset-bottom));transform:translate(-50%,18px);padding:9px 13px;border-radius:999px;background:rgba(20,20,20,.9);color:#fff;font-size:9px;opacity:0;pointer-events:none;transition:.2s;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}.toast.show{opacity:1;transform:translate(-50%,0)}.sheetback{position:fixed;inset:0;z-index:49;background:rgba(0,0,0,.34);opacity:0;pointer-events:none;transition:.2s}.sheetback.show{opacity:1;pointer-events:auto}.sheet{position:fixed;z-index:50;left:50%;bottom:0;transform:translate(-50%,105%);width:min(520px,100%);max-height:76vh;overflow:auto;background:var(--card);border-radius:24px 24px 0 0;padding:10px 14px calc(18px + env(safe-area-inset-bottom));transition:.25s cubic-bezier(.22,.7,.2,1)}.sheet.show{transform:translate(-50%,0)}.handle{width:36px;height:4px;background:var(--line);border-radius:99px;margin:1px auto 15px}.sheett{font-size:20px;font-weight:650;letter-spacing:-.03em;padding:0 4px 4px}.sheets{font-size:10px;color:var(--muted);padding:0 4px 12px}.found{padding:13px 4px;display:flex;align-items:center;justify-content:space-between;gap:10px}.found+.found{border-top:1px solid var(--line)}.pair{border:0;border-radius:12px;background:var(--blue);color:#fff;padding:9px 12px;font-size:9px;font-weight:650}.done{width:100%;border:0;border-radius:13px;background:var(--bg);padding:11px;margin-top:10px;font-size:10px;font-weight:620}
 @media(max-width:380px){.can{padding:12px}.metrics .metric .v{font-size:12px}}
 
@@ -88,7 +88,7 @@ body.setup-active .setupShell{display:block}
 @media(max-width:410px){.setupTitle{font-size:34px}.topologyChoices{grid-template-columns:1fr}.vehicleChoice{min-height:72px;grid-template-columns:1fr auto;gap:3px 8px;padding:10px 11px}.vehicleChoiceName{grid-column:1;grid-row:1}.vehicleChoiceMeta{grid-column:1;grid-row:2}.vehicleChoiceBadge{grid-column:2;grid-row:1/3;align-self:center;margin-right:26px}.turnChoices{grid-template-columns:1fr}.warningBtns{grid-template-columns:1fr}}
 
 
-.bottomnav.devicesHidden{grid-template-columns:repeat(3,1fr)}.bottomnav.labHidden.devicesHidden{grid-template-columns:repeat(2,1fr)}
+.bottomnav.devicesHidden{grid-template-columns:repeat(4,1fr)}.bottomnav.labHidden.devicesHidden{grid-template-columns:repeat(3,1fr)}
 body:not(.setup-active) .setupShell{display:none}.setupShell{display:block}
 
 /* Keep telemetry tokens intact; only whole labels/values move to a new line. */
@@ -101,6 +101,30 @@ body.t2-2027 .panel .r.rNote>span:last-child{flex-basis:100%;white-space:normal;
 .detailValue,.value{display:block;min-width:0;max-width:100%;white-space:nowrap;overflow-x:auto;text-align:left}
 .detailRow .chev,.listrow .rowRight .chev{flex-shrink:0}
 .r>span.continuousApRxValue{white-space:normal;overflow-wrap:anywhere;overflow-x:visible}
+
+/* ── Actions tab ─────────────────────────────────────────────────────────── */
+/* Bottom-nav column count when the Actions tab is the third/fourth entry.
+   The spec only defines labHidden/devicesHidden; these cover the new tab. */
+.bottomnav.actionsHidden{grid-template-columns:repeat(4,1fr)}
+.bottomnav.actionsHidden.labHidden{grid-template-columns:repeat(3,1fr)}
+.bottomnav.actionsHidden.devicesHidden{grid-template-columns:repeat(3,1fr)}
+.bottomnav.actionsHidden.labHidden.devicesHidden{grid-template-columns:repeat(2,1fr)}
+.preheatRight{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+.preheatState{font-size:10px;font-weight:650;line-height:1.3;color:var(--muted);text-align:right;white-space:nowrap}
+/* There is no alarm colour on this tab on purpose: a self-stopped engine is named
+   in the status chip and the reason is read from GET /api/preheat/stats. */
+.preheatBmsValue{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:650;color:var(--muted);white-space:nowrap}
+.preheatBmsValue:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted2);flex:0 0 auto}
+.preheatBmsValue.good{color:var(--green)}
+.preheatBmsValue.good:before{background:var(--green)}
+.preheatBmsValue.warn{color:var(--amber)}
+.preheatBmsValue.warn:before{background:var(--amber)}
+.preheatBmsValue.bad{color:var(--red)}
+.preheatBmsValue.bad:before{background:var(--red)}
+.page[data-page="actions"] .card .listrow>div:first-child{min-width:0}
+/* Pack Temperature, Heat Power and Coolant Flow share the theme's three-cell .actionSummary strip, the component the
+   Devices tab already uses, so they carry no local styling here; the tab only
+   adds the centring override next to that component's definition. */
 </style>
 
 
@@ -259,6 +283,97 @@ body.t2-2027 .actionSummaryRow{min-width:0;min-height:64px;padding:10px 8px;disp
 body.t2-2027 .actionSummaryRow+.actionSummaryRow{border:0}
 body.t2-2027 .actionSummaryRow span:first-child{font-size:9.5px;font-weight:600;letter-spacing:.04em;opacity:.58}
 body.t2-2027 .actionSummaryRow span:last-child{max-width:100%;font-size:11px;font-weight:600;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The Actions tab centres the label and the value of every strip cell; Devices
+   keeps the left-aligned default. align-items moves them on the column cross
+   axis and text-align centres the text inside its span, so both are needed. */
+body.t2-2027 .page[data-page="actions"] .actionSummaryRow{align-items:center}
+body.t2-2027 .page[data-page="actions"] .actionSummaryRow span{text-align:center}
+/* The Actions strip is four cells in two rows inside the same rounded container:
+   PACK TEMP, HEAT POWER and COOLANT keep their measured 1/3 tracks and STATOR HEAT
+   takes the whole second row. It is deliberately not a quarter-width fourth track
+   on the first row: a third of the strip is 79.3 px at 360 px, the width
+   "21.5-22.5 °C" was measured to fit, and the stator cell carries two readings, so
+   a four-way first row would ellipsise the pack range and the pair at once.
+   Full width is also what lets the pair sit on ONE line - "3.60 / 3.68 kW", front
+   then rear, the order the two raw rows list them - which is why the strip is back
+   to two rows of min-height:64px (129 px with the 1 px gutter) instead of the
+   138 px the two-line stator cell and a fifth cell forced. */
+body.t2-2027 .actionSummary .preheatStatorRow{grid-column:1/-1}
+/* The toggle's status text stays neutral on purpose: the switch already carries
+   the on/off meaning, and colour is reserved for the BMS badge below it. */
+body.t2-2027 .preheatState{color:var(--field-ink);opacity:.62}
+/* The badge keeps its colour, but --green is not part of the t2-2027 palette. It
+   stays at the legacy #278353, which is nearly invisible on --field, so the good
+   state borrows the theme's own success colour. warn and bad already use --amber
+   and --red, both of which the palette does define. */
+body.t2-2027 .preheatBmsValue.good{color:var(--ok)}
+body.t2-2027 .preheatBmsValue.good:before{background:var(--ok)}
+/* The raw fold-out has no header row of its own: its <summary> IS the BMS Heating
+   State row, so the tap target is that whole line and the single chevron sits after
+   the description instead of in a title of its own. The theme's .listrow rules
+   already carry the metrics (min-height:66px, the 10/18 px padding, the
+   space-between); the rules below only keep a 14 px chevron from inflating the
+   15.5 px caption line it is baseline-aligned to, which a theme .chev of 20 px does -
+   measured: with the theme's chevron the row read 71.75 px instead of the 66 px every
+   other row on the tab takes. The hook is the row's own class and not the id, because
+   the preview suffixes every id per state and an id-keyed rule would then measure a
+   row the tab does not have. */
+body.t2-2027 .preheatFoldRow .preheatBmsLine{display:flex;align-items:baseline;gap:7px}
+body.t2-2027 .preheatFoldRow .chev{flex:0 0 auto;font-size:14px;line-height:1;opacity:.45}
+/* Thermal: the car's service "Thermal" screen redrawn as an inline SVG for this tab,
+   pipes routed as on photos of that screen: Supermanifold
+   with LCC / Chiller, the coolant valve (Octovalve on a heat-pump car), both pumps,
+   loop inlets, coolant bottle, the radiator fan in its shroud, and the powertrain /
+   battery loop blocks. A fixed dark palette, like the car's own screen, in either
+   theme of the dashboard. Green dot = the value's frame is fresh, grey = no data.
+   Which pipes carry coolant, and in which colour, follows the valve mode: blue is
+   the loop on the PT pump (or the one loop in Series), purple the separate loop on
+   the battery pump (Ambient Source, Parallel), pale an idle radiator or stopped
+   pumps. The light segments run while their pump turns and the fan and impellers
+   spin while they turn - none of it under prefers-reduced-motion. */
+body.t2-2027 .preheatThermal{border-top:1px solid var(--line)}
+body.t2-2027 .preheatThermalSvg{display:block;width:100%;height:auto;padding:0 4px 8px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,Arial,sans-serif}
+body.t2-2027 .preheatThPanel{fill:#1d1e21}
+body.t2-2027 .preheatThFrame{fill:none;stroke:#8d9096;stroke-width:1;stroke-dasharray:3 3}
+body.t2-2027 .preheatThFrameName{font-size:8.4px;fill:#c3c6cc;paint-order:stroke;stroke:#1d1e21;stroke-width:4px}
+body.t2-2027 .preheatThShell,.preheatThBox,.preheatThValve{fill:none;stroke:#d8dadf;stroke-width:1.4}
+body.t2-2027 .preheatThName{font-size:8.2px;font-weight:600;fill:#eceef2;paint-order:stroke;stroke:#1d1e21;stroke-width:3.4px}
+body.t2-2027 .preheatThValveName{font-size:10px}
+body.t2-2027 .preheatThHead{font-size:8.8px;font-weight:700;fill:#f2f3f5;paint-order:stroke;stroke:#1d1e21;stroke-width:3px}
+body.t2-2027 .preheatThSub{font-size:8.4px;fill:#b9bcc2;paint-order:stroke;stroke:#1d1e21;stroke-width:3px}
+body.t2-2027 .preheatThNum{font-weight:700;fill:#ffffff}
+body.t2-2027 .preheatThNumL{font-size:9.6px;font-weight:600;fill:#e9ebef;paint-order:stroke;stroke:#1d1e21;stroke-width:3px}
+body.t2-2027 .preheatThRefr{fill:#5b2a5e}
+body.t2-2027 .preheatThRefrTxt{font-size:6.4px;font-weight:600;fill:#c99ccf}
+body.t2-2027 .preheatThPipes path{fill:none;stroke-width:10;stroke-linecap:round;stroke-linejoin:round}
+body.t2-2027 .preheatThPb{stroke:#2fb6e3;stroke-opacity:.72}
+body.t2-2027 .preheatThPp{stroke:#a64bf4;stroke-opacity:.85}
+body.t2-2027 .preheatThPg{stroke:#d8b9c8;stroke-opacity:.42}
+body.t2-2027 .preheatThermal .preheatThHide{display:none}
+body.t2-2027 .preheatThSeg{fill:none;stroke-width:10;stroke-dasharray:6 14;stroke-linecap:butt;stroke-opacity:.3}
+body.t2-2027 .preheatThSegb{stroke:#eafcff}
+body.t2-2027 .preheatThSegp{stroke:#f1ddff}
+body.t2-2027 .preheatThSegs.preheatThOn .preheatThSeg{animation:preheatThFlowMove 1.4s linear infinite}
+body.t2-2027 .preheatThShroud{fill:#26282c;stroke:#b9bcc2;stroke-width:1.2}
+body.t2-2027 .preheatThFanRim{fill:#1d1e21;stroke:#8d9096;stroke-width:1}
+body.t2-2027 .preheatThFan{fill:#c9ccd1}
+body.t2-2027 .preheatThFan,.preheatThImp{transform-box:view-box;transform-origin:0 0}
+body.t2-2027 .preheatThFan.preheatThOn,.preheatThImp.preheatThOn{animation:preheatThSpin 1.1s linear infinite}
+body.t2-2027 .preheatThHub{fill:#3a3c40;stroke:#d8dadf;stroke-width:.8}
+body.t2-2027 .preheatThVolute{fill:#1d1e21;stroke:#d8dadf;stroke-width:1.2}
+body.t2-2027 .preheatThImpRim{fill:#3a3c40;stroke:#9a9da3;stroke-width:1}
+body.t2-2027 .preheatThImp path{fill:none;stroke:#e5e7eb;stroke-width:1.2;stroke-linecap:round}
+body.t2-2027 .preheatThRing{fill:none;stroke:#e5e7eb;stroke-width:1.2}
+body.t2-2027 .preheatThBottle{fill:#2b7f99;fill-opacity:.6;stroke:#d8dadf;stroke-width:1.2}
+body.t2-2027 .preheatThBottleTxt{font-size:7.4px;font-weight:700;fill:#ffffff}
+body.t2-2027 .preheatThPill{font-size:9px;font-weight:700;fill:#ffffff;paint-order:stroke;stroke:#1d1e21;stroke-width:5px}
+body.t2-2027 .preheatThSep{stroke:#8d9096;stroke-width:.8;stroke-dasharray:2 2}
+body.t2-2027 .preheatThLeader{stroke:#d8dadf;stroke-width:1}
+body.t2-2027 .preheatThDot{fill:#9a9da3}
+body.t2-2027 .preheatThDot.preheatThFresh{fill:#2fd15b}
+@keyframes preheatThFlowMove{to{stroke-dashoffset:-40}}
+@keyframes preheatThSpin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){body.t2-2027 .preheatThSegs.preheatThOn .preheatThSeg,body.t2-2027 .preheatThFan.preheatThOn,body.t2-2027 .preheatThImp.preheatThOn{animation:none}}
 body.t2-2027 .devfoot{margin-top:14px;padding:11px 18px 14px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;font-size:10.5px;opacity:.68}
 body.t2-2027 .devicesFootNote{padding-top:16px;color:var(--field-ink);font-size:11px;opacity:.62}
 body.t2-2027 .empty{padding:34px 18px;font-size:13px;color:var(--field-ink);line-height:1.5;opacity:.72}
@@ -362,9 +477,25 @@ html:has(.rebootScreen.show),body.t2-2027:has(.rebootScreen.show){background:var
   body.t2-2027 .homeBusVal{font-size:22px}
   body.t2-2027 .homeBusMeta{font-size:10px}
   body.t2-2027 .navbtn{min-width:72px;padding:0 10px;font-size:12px}
+  /* Five tabs cannot fit behind that 72 px floor: the pill is at most
+     calc(100% - 24px), so at 320 px it offers 268 px of button room while
+     5 x 72 px plus the pill's own 12 px padding and 16 px of gaps needs 388 px
+     (overflow 92 px at 320, 52 px at 360, 22 px at 390). The floor drops to
+     46 px - the widest value the five labels still fit at 320 px in either
+     measured font - and only while every tab is shown; four tabs or fewer keep
+     the 72 px floor untouched. Measured by _actions_tab_spec/measure-nav.py. */
+  body.t2-2027 .bottomnav:not(.labHidden):not(.devicesHidden):not(.actionsHidden) .navbtn{min-width:46px}
   body.t2-2027 .page[data-page="lab"] .labDirectionCell{padding:10px 8px}
   body.t2-2027 .page[data-page="lab"] .labDirectionCell .driveStateValue{font-size:13px}
   body.t2-2027 .page[data-page="lab"] #alcStateBig.driveStateValue{font-size:14px}
+}
+/* Five tabs on the narrowest phones: the 46 px floor above is not the binding
+   constraint there, the padding is. With the 46 px floor the five labels need
+   297.2 px at the 10 px padding (Geist, the wider of the two measured fonts)
+   while the pill offers W - 52 px, so the padding gives way below 366 px and
+   the floor keeps the five even. */
+@media(max-width:365px){
+  body.t2-2027 .bottomnav:not(.labHidden):not(.devicesHidden):not(.actionsHidden) .navbtn{padding:0 6px}
 }
 body.t2-2027 .homeInjectionGrid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;grid-template-rows:auto auto!important;grid-template-areas:"cana canb" "r79 r79"!important;gap:10px!important;align-items:stretch!important}
 body.t2-2027 .homeInjectionGrid .homeCanACard{grid-area:cana!important}
@@ -585,7 +716,7 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="listrow clickable" data-panel="panelPedalMap" id="pedalMapSettingsRow"><div><div class="listkey">Pedal Response</div><div class="listdesc" id="pedalMapSettingsDesc">Change acceleration response for this drive.</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelContinuousAp" id="continuousApSettingsRow"><div><div class="listkey">Continuous AP</div><div class="listdesc" id="continuousApDesc">Re-engage AP after a signaled lane change.</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelApDriveProfile" id="apDriveProfileSettingsRow"><div><div class="listkey">AP Accel / Regen</div><div class="listdesc" id="apDriveProfileDesc">Use Chill acceleration and chosen regen during AP.</div></div><span class="chev">›</span></div>
-<div class="listrow"><div><div class="listkey">S3XY</div><div class="listdesc" id="s3xyFeatureDesc">Use S3XY buttons for assigned vehicle actions.</div></div><label class="toggle"><input id="s3xyFeatureToggle" type="checkbox"/><span class="track"></span></label></div><div class="listrow"><div><div class="listkey">LAB Menu</div><div class="listdesc" id="labMenuDesc">Show experimental controls and capture tools.</div></div><label class="toggle"><input id="labMenuToggle" type="checkbox"/><span class="track"></span></label></div>
+<div class="listrow"><div><div class="listkey">S3XY</div><div class="listdesc" id="s3xyFeatureDesc">Use S3XY buttons for assigned vehicle actions.</div></div><label class="toggle"><input id="s3xyFeatureToggle" type="checkbox"/><span class="track"></span></label></div><div class="listrow"><div><div class="listkey">LAB Menu</div><div class="listdesc" id="labMenuDesc">Show experimental controls and capture tools.</div></div><label class="toggle"><input id="labMenuToggle" type="checkbox"/><span class="track"></span></label></div><div class="listrow"><div><div class="listkey">Actions Menu</div><div class="listdesc" id="actionsMenuDesc">Show the Actions tab with battery preheat.</div></div><label class="toggle"><input id="actionsMenuToggle" type="checkbox"/><span class="track"></span></label></div>
 </section>
 <div class="sectionhead"><div class="sectiontitle">System</div><div class="sectionnote">T-2CAN</div></div>
 <section class="card">
@@ -604,6 +735,79 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <section class="card bannedDangerZone" id="bannedDangerZone">
 <div class="listrow"><div><div class="listkey">Banned Car</div><div class="listdesc" id="bannedCarDesc">Show restore controls for already-banned vehicles.</div></div><label class="toggle"><input id="bannedCarToggle" type="checkbox"/><span class="track"></span></label></div>
 <div class="listrow vehicleStatusRestore" id="tlsscRestoreRow"><div><div class="listkey dangerKey">TLSSC Restore</div><div class="listdesc dangerDesc" id="tlsscRestoreDesc">Try the TLSSC restore override on a banned vehicle.</div></div><label class="toggle"><input id="tlsscRestoreToggle" type="checkbox"/><span class="track"></span></label></div>
+</section>
+</main>
+<main class="page" data-page="actions" id="actionsPage">
+<div class="pageTitle">Actions</div><div class="pageSub">Quick vehicle actions.</div>
+<div class="sectionhead"><div class="sectiontitle">Preheat</div><div class="sectionnote">Battery pack</div></div>
+<section class="card">
+<div class="listrow"><div><div class="listkey">Battery Preheating</div><div class="listdesc" id="preheatDesc">Preheat before charging</div></div><div class="preheatRight"><span class="preheatState" id="preheatStatus" role="status">Loading…</span><label class="toggle"><input id="preheatToggle" type="checkbox" disabled/><span class="track"></span></label></div></div>
+<div class="listrow" id="preheatTargetRow"><div><div class="listkey">Auto-off Target</div><div class="listdesc" id="preheatTargetDesc">Stop at average</div></div><select aria-label="Preheat auto-off target temperature" class="selectArrow labSelect" id="preheatTargetC"><option value="20.0">20.0 °C</option><option value="25.0">25.0 °C</option><option value="30.0">30.0 °C</option><option value="35.0">35.0 °C</option><option value="40.0" selected>40.0 °C</option><option value="45.0">45.0 °C</option><option value="50.0">50.0 °C</option></select></div>
+<div class="actionSummary" id="preheatSummary">
+<div class="actionSummaryRow"><span>PACK TEMP</span><span id="preheatTempValue">—</span></div>
+<div class="actionSummaryRow"><span>HEAT POWER</span><span id="preheatPowerValue">—</span></div>
+<div class="actionSummaryRow"><span>COOLANT</span><span id="preheatFlowValue">—</span></div>
+<div class="actionSummaryRow preheatStatorRow"><span>STATOR HEAT</span><span id="preheatStatorValue">—</span></div>
+</div>
+<details id="preheatRaw"><summary class="listrow preheatFoldRow" id="preheatBmsRow"><div><div class="listkey">BMS Heating State</div><div class="preheatBmsLine"><span class="listdesc" id="preheatBmsDesc">Waiting for BMS frames…</span><span class="chev">›</span></div></div><span class="preheatBmsValue" id="preheatBmsValue" role="status">WAIT</span></summary>
+<div>
+<div class="listrow"><div><div class="listkey">BMS_thermistorTAvg</div><div class="listdesc" id="ptAvgMeta">0x332 m0 · —</div></div><div class="rowRight"><span class="value" id="ptAvg">—</span></div></div>
+<div class="listrow"><div><div class="listkey">BMS_maxPackTemperature</div><div class="listdesc" id="ptMaxPackMeta">0x312 m0 · —</div></div><div class="rowRight"><span class="value" id="ptMaxPack">—</span></div></div>
+<div class="listrow"><div><div class="listkey">BMS_activeHeatCellTargetT</div><div class="listdesc" id="ptCellTargetMeta">0x312 m1 · —</div></div><div class="rowRight"><span class="value" id="ptCellTarget">—</span></div></div>
+<div class="listrow"><div><div class="listkey">VCFRONT_hpBattHeatingPowerTrgt</div><div class="listdesc" id="ptHpPowerMeta">0x3A1 m1 · —</div></div><div class="rowRight"><span class="value" id="ptHpPower">—</span></div></div>
+<div class="listrow"><div><div class="listkey">BMS_flowRequest</div><div class="listdesc" id="ptFlowReqMeta">0x312 m0 · —</div></div><div class="rowRight"><span class="value" id="ptFlowReq">—</span></div></div>
+<div class="listrow"><div><div class="listkey">VCFRONT_pumpBatteryRPMActual</div><div class="listdesc" id="ptPumpMeta">0x201 · —</div></div><div class="rowRight"><span class="value" id="ptPump">—</span></div></div>
+<div class="listrow"><div><div class="listkey">VCFRONT_tempAmbient</div><div class="listdesc" id="ptAmbientMeta">0x321 byte3 · —</div></div><div class="rowRight"><span class="value" id="ptAmbient">—</span></div></div>
+<div class="listrow"><div><div class="listkey">DIF_heatPowerActual</div><div class="listdesc" id="ptStatorFMeta">0x2E5 DIF · —</div></div><div class="rowRight"><span class="value" id="ptStatorF">—</span></div></div>
+<div class="listrow"><div><div class="listkey">DIR_heatPowerActual</div><div class="listdesc" id="ptStatorRMeta">0x266 DIR · —</div></div><div class="rowRight"><span class="value" id="ptStatorR">—</span></div></div>
+<div class="listrow"><div><div class="listkey">BMS_maxStationaryHeatPower</div><div class="listdesc" id="ptHeatLimitMeta">0x252 · —</div></div><div class="rowRight"><span class="value" id="ptHeatLimit">—</span></div></div>
+<div class="listrow"><div><div class="listkey">srcRaw</div><div class="listdesc" id="ptSrcRawMeta">trip frame the car sent</div></div><div class="rowRight"><span class="value" id="ptSrcRaw">—</span></div></div>
+<div class="listrow"><div><div class="listkey">lastTxRaw</div><div class="listdesc">frame actually transmitted</div></div><div class="rowRight"><span class="value" id="ptLastTxRaw">—</span></div></div>
+<div class="listrow"><div><div class="listkey">TX</div><div class="listdesc">accepted frames · longest gap</div></div><div class="rowRight"><span class="value" id="ptTx">—</span></div></div>
+<div class="listrow"><div><div class="listkey">Reply</div><div class="listdesc">answers / car frames · max delay</div></div><div class="rowRight"><span class="value" id="ptReply">—</span></div></div>
+<div class="listrow"><div><div class="listkey">Heat drops</div><div class="listdesc">all · within 3 s of a car frame</div></div><div class="rowRight"><span class="value" id="ptDrops">—</span></div></div>
+<div class="listrow"><div><div class="listkey">Loop</div><div class="listdesc" id="ptLoopMeta">reply breaker · max 5 / s</div></div><div class="rowRight"><span class="value" id="ptLoop">—</span></div></div>
+</div>
+</details>
+<details class="preheatThermal" id="thermalFold"><summary class="listrow preheatFoldRow"><div><div class="listkey">Thermal</div><div class="preheatBmsLine"><span class="listdesc" id="thSummary">coolant loops</span><span class="chev">›</span></div></div><span class="value" id="thModeChip">—</span></summary>
+<svg class="preheatThermalSvg" viewBox="0 0 360 372" role="img" aria-label="Coolant system">
+<rect class="preheatThPanel" width="360" height="372" rx="14"/>
+<rect class="preheatThFrame" x="6" y="73" width="348" height="150" rx="10"/>
+<rect class="preheatThFrame" x="8" y="229" width="118" height="139" rx="10"/>
+<rect class="preheatThFrame" x="252" y="229" width="102" height="139" rx="10"/>
+<g class="preheatThPipes" id="thPipes"><path class="preheatThPg" d="M180 120 V64 Q180 51 192 51 Q204 51 204 64 V120"/><path class="preheatThPg" d="M180 120 V124 Q180 132 192 132 Q204 132 204 124 V120"/><path class="preheatThPg" d="M110 344 V350 Q110 358 102 358 H94 Q86 358 86 350 V69 Q86 61 94 61 H139 Q147 61 147 69 V92 L156 101 V120"/><path class="preheatThPg" d="M200 159 V170 Q200 178 192 178 H137 Q129 178 129 170 V113 Q129 104 119.5 104 Q110 104 110 113 V344"/><path class="preheatThPg" d="M156 159 V197 Q156 205 164 205 H255 Q263 205 263 213 V350 Q263 358 271 358 H279 Q287 358 287 350 V183 Q287 175 279 175 H232 Q224 175 224 167 V159"/><path class="preheatThPg" d="M180 159 V183 Q180 191 188 191 H254 Q262 191 262 183 V151"/><path class="preheatThPg" d="M262 129 V111 Q262 101 252 101 H234 Q224 101 224 111 V120"/><path class="preheatThPg" d="M156 120 V159"/><path class="preheatThHide" d="M180 120 V159"/><path class="preheatThPg" d="M224 120 V159"/><path class="preheatThPg" d="M180 159 V151 Q180 141 190 141 Q200 141 200 151 V159"/><path class="preheatThHide" d="M224 159 V152 Q224 142 212 142 Q200 142 200 152 V159"/><path class="preheatThHide" d="M224 120 V124 Q224 133 214 133 Q204 133 204 124 V120"/><path class="preheatThHide" d="M204 120 V146 Q204 152 200 156 V159"/><path class="preheatThHide" d="M156 120 V124 Q156 132 168 132 Q180 132 180 124 V120"/><path class="preheatThHide" d="M156 159 V155 Q156 146 168 146 Q180 146 180 155 V159"/></g>
+<g class="preheatThSegs" id="thFlowPtLine"><path class="preheatThHide" data-n="0" d="M180 120 V64 Q180 51 192 51 Q204 51 204 64 V120"/><path class="preheatThHide" data-n="1" d="M180 120 V124 Q180 132 192 132 Q204 132 204 124 V120"/><path class="preheatThHide" data-n="2" d="M110 344 V350 Q110 358 102 358 H94 Q86 358 86 350 V69 Q86 61 94 61 H139 Q147 61 147 69 V92 L156 101 V120"/><path class="preheatThHide" data-n="3" d="M200 159 V170 Q200 178 192 178 H137 Q129 178 129 170 V113 Q129 104 119.5 104 Q110 104 110 113 V344"/><path class="preheatThHide" data-n="4" d="M156 159 V197 Q156 205 164 205 H255 Q263 205 263 213 V350 Q263 358 271 358 H279 Q287 358 287 350 V183 Q287 175 279 175 H232 Q224 175 224 167 V159"/><path class="preheatThHide" data-n="5" d="M180 159 V183 Q180 191 188 191 H254 Q262 191 262 183 V151"/><path class="preheatThHide" data-n="6" d="M262 129 V111 Q262 101 252 101 H234 Q224 101 224 111 V120"/><path class="preheatThHide" data-n="7" d="M156 120 V159"/><path class="preheatThHide" data-n="8" d="M180 120 V159"/><path class="preheatThHide" data-n="9" d="M224 120 V159"/><path class="preheatThHide" data-n="10" d="M180 159 V151 Q180 141 190 141 Q200 141 200 151 V159"/><path class="preheatThHide" data-n="11" d="M224 159 V152 Q224 142 212 142 Q200 142 200 152 V159"/><path class="preheatThHide" data-n="12" d="M224 120 V124 Q224 133 214 133 Q204 133 204 124 V120"/><path class="preheatThHide" data-n="13" d="M204 120 V146 Q204 152 200 156 V159"/><path class="preheatThHide" data-n="14" d="M156 120 V124 Q156 132 168 132 Q180 132 180 124 V120"/><path class="preheatThHide" data-n="15" d="M156 159 V155 Q156 146 168 146 Q180 146 180 155 V159"/></g>
+<g class="preheatThSegs" id="thFlowBatLine"></g>
+<text class="preheatThFrameName" x="16" y="76">Supermanifold</text>
+<text class="preheatThFrameName" x="16" y="232">Powertrain Loop</text>
+<text class="preheatThFrameName" x="268" y="232">Battery Loop</text>
+<circle class="preheatThDot" id="thDotAmb" cx="152" cy="15" r="3.3"/><text class="preheatThHead" x="159" y="18.3">Ambient Air: <tspan id="thAmb">—</tspan></text>
+<rect class="preheatThShell" x="152" y="31" width="77" height="40" rx="4"/>
+<text class="preheatThName" x="157" y="34.5">Radiator</text>
+<rect class="preheatThShroud" x="177" y="36" width="30" height="30" rx="4"/><circle class="preheatThFanRim" cx="192" cy="51" r="13"/>
+<g transform="translate(192 51) scale(.78)"><g class="preheatThFan" id="thFanG"><path transform="rotate(0)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(40)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(80)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(120)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(160)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(200)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(240)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(280)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/><path transform="rotate(320)" d="M0.8 -3 C 4.5 -5.5, 5 -10, 2.4 -14.6 L 0.6 -14.8 C 2 -10.5, 1.2 -6.5, -0.9 -3 Z"/></g></g><circle class="preheatThHub" cx="192" cy="51" r="2.6"/>
+<line class="preheatThLeader" x1="229" y1="40" x2="237" y2="24"/><line class="preheatThLeader" x1="207" y1="51" x2="237" y2="45"/>
+<circle class="preheatThDot" cx="241" cy="21" r="3.3"/><text class="preheatThHead" x="248" y="24.3">Radiator</text><text class="preheatThSub" x="250" y="34.5">Health: <tspan class="preheatThNum">—</tspan></text>
+<circle class="preheatThDot" id="thDotFan" cx="241" cy="44" r="3.3"/><text class="preheatThHead" x="248" y="47.3">Radiator Fan</text><text class="preheatThSub" x="250" y="57.5">RPM: <tspan class="preheatThNum" id="thFan">—</tspan></text>
+<rect class="preheatThShell" x="93" y="80" width="48" height="35" rx="4"/><text class="preheatThName" x="98" y="83.5">LCC</text><rect class="preheatThRefr" x="95" y="86" width="44" height="8.5"/><text class="preheatThRefrTxt" x="117" y="92.6" text-anchor="middle">Refrigerant</text>
+<rect class="preheatThShell" x="232" y="80" width="44" height="33" rx="4"/><text class="preheatThName" x="237" y="83.5">Chiller</text><rect class="preheatThRefr" x="234" y="86" width="40" height="8.5"/><text class="preheatThRefrTxt" x="254" y="92.6" text-anchor="middle">Refrigerant</text>
+<path class="preheatThValve" d="M163 120 H144 Q140 120 140 124 V155 Q140 159 144 159 H150 M226 120 H235 Q239 120 239 124 V155 Q239 159 235 159 H232"/>
+<circle class="preheatThDot" id="thDotValve" cx="170" cy="120.5" r="3.3"/><text class="preheatThName preheatThValveName" x="177" y="124" id="thValveName">Coolant valve</text>
+<text class="preheatThPill" x="149" y="166" id="thMode">—</text>
+<path class="preheatThVolute" d="M78 137 A11 11 0 1 1 94 150 L94 157 L78 157 Z"/><circle class="preheatThImpRim" cx="88.42" cy="140.52" r="6.6"/><g transform="translate(88.42 140.52)"><g class="preheatThImp" id="thImpPt"><path transform="rotate(0)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(60)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(120)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(180)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(240)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(300)" d="M0 -1.6 Q3 -3 2.4 -6.2"/></g></g>
+<path class="preheatThVolute" d="M270 133 A11 11 0 1 0 254 146 L254 153 L270 153 Z"/><circle class="preheatThImpRim" cx="259.58" cy="136.52" r="6.6"/><g transform="translate(259.58 136.52)"><g class="preheatThImp" id="thImpBat"><path transform="rotate(0)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(60)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(120)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(180)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(240)" d="M0 -1.6 Q3 -3 2.4 -6.2"/><path transform="rotate(300)" d="M0 -1.6 Q3 -3 2.4 -6.2"/></g></g>
+<circle class="preheatThDot" id="thDotPumpPt" cx="14" cy="136" r="3.3"/><text class="preheatThHead" x="21" y="139.3">PT Pump</text><text class="preheatThSub" x="23" y="150">RPM: <tspan class="preheatThNum" id="thPumpPt">—</tspan></text>
+<circle class="preheatThDot" id="thDotPumpBat" cx="281" cy="133" r="3.3"/><text class="preheatThHead" x="288" y="136.3">Battery Pump</text><text class="preheatThSub" x="290" y="147">RPM: <tspan class="preheatThNum" id="thPumpBat">—</tspan></text>
+<circle class="preheatThRing" cx="86" cy="198" r="7.5"/><circle class="preheatThDot" id="thDotPtIn" cx="14" cy="189" r="3.3"/><text class="preheatThHead" x="21" y="192.3">PT Loop Inlet</text><text class="preheatThSub" x="23" y="204">Temp: <tspan class="preheatThNum" id="thPtIn">—</tspan></text><text class="preheatThSub" x="23" y="214">Flow: <tspan class="preheatThNum" id="thPtFlow">—</tspan></text>
+<rect class="preheatThBottle" x="95" y="189" width="48" height="24" rx="4"/><circle class="preheatThDot" cx="100" cy="201" r="2.4"/><text class="preheatThBottleTxt" x="105" y="199">Coolant</text><text class="preheatThBottleTxt" x="105" y="208">Bottle</text>
+<circle class="preheatThRing" cx="287" cy="192" r="7.5"/><circle class="preheatThDot" id="thDotBatIn" cx="299" cy="167" r="3.3"/><text class="preheatThHead" x="306" y="170.3">Battery</text><text class="preheatThHead" x="306" y="179.5">Loop Inlet</text><text class="preheatThSub" x="299" y="196">Temp: <tspan class="preheatThNum" id="thBatIn">—</tspan></text><text class="preheatThSub" x="299" y="206">Flow: <tspan class="preheatThNum" id="thBatFlow">—</tspan></text>
+<rect class="preheatThBox" x="14" y="238" width="98" height="56" rx="5"/><text class="preheatThName" x="19" y="247">PCS</text><text class="preheatThName" x="107" y="247" text-anchor="end">DCDC</text><circle class="preheatThDot" id="thDotDcdc" cx="24" cy="258" r="3.3"/><text class="preheatThNumL" x="31" y="261.5" id="thDcdc">—</text><line class="preheatThSep" x1="18" y1="268" x2="108" y2="268"/><circle class="preheatThDot" id="thDotChg" cx="24" cy="279" r="3.3"/><text class="preheatThNumL" x="31" y="282.5" id="thChg">—</text><text class="preheatThName" x="107" y="290" text-anchor="end">Charger</text>
+<rect class="preheatThBox" x="14" y="300" width="98" height="28" rx="5"/><text class="preheatThName" x="19" y="309">Front Drive Inverter</text><circle class="preheatThDot" id="thDotInvF" cx="24" cy="319" r="3.3"/><text class="preheatThNumL" x="31" y="322.5" id="thInvF">—</text>
+<rect class="preheatThBox" x="14" y="334" width="98" height="28" rx="5"/><text class="preheatThName" x="19" y="343">Rear Drive Inverter</text><circle class="preheatThDot" id="thDotInvR" cx="24" cy="353" r="3.3"/><text class="preheatThNumL" x="31" y="356.5" id="thInvR">—</text>
+<rect class="preheatThBox" x="258" y="238" width="90" height="58" rx="5"/><text class="preheatThName" x="263" y="247">Autopilot</text><circle class="preheatThDot" id="thDotAp" cx="306" cy="258" r="3.3"/><text class="preheatThNumL" x="313" y="261.5" id="thAp">—</text><line class="preheatThSep" x1="262" y1="268" x2="344" y2="268"/><circle class="preheatThDot" id="thDotInfo" cx="306" cy="279" r="3.3"/><text class="preheatThNumL" x="313" y="282.5" id="thInfo">—</text><text class="preheatThName" x="343" y="292" text-anchor="end">Infotainment</text>
+<rect class="preheatThBox" x="258" y="302" width="90" height="60" rx="5"/><text class="preheatThName" x="263" y="311">HV Battery</text><text class="preheatThName" x="343" y="311" text-anchor="end">Max</text><circle class="preheatThDot" id="thDotPackMax" cx="306" cy="322" r="3.3"/><text class="preheatThNumL" x="313" y="325.5" id="thPackMax">—</text><line class="preheatThSep" x1="262" y1="332" x2="344" y2="332"/><circle class="preheatThDot" id="thDotPackMin" cx="306" cy="343" r="3.3"/><text class="preheatThNumL" x="313" y="346.5" id="thPackMin">—</text><text class="preheatThName" x="343" y="357" text-anchor="end">Min</text>
+</svg>
+</details>
 </section>
 </main>
 <main class="page" data-page="lab">
@@ -826,7 +1030,7 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 </section>
 <div class="softNote">Start each test condition immediately after pressing A–F. A = normal front view, B = short screen glance, C = sustained side look, D = look down, E = steering torque while looking away, F = front view with no intentional steering torque. All tracked IDs are observed on both physical CAN buses. Decoded interaction / hands-on / EPAS values are best-effort research fields; raw bytes plus the recorded CAN A/B and bus role are authoritative. This recorder is RX-only and never transmits CAN. Captured data clears after restart. Download it first.</div>
 </div></section>
-<nav aria-label="Dashboard" class="bottomnav labHidden devicesHidden" id="bottomNav"><button class="navbtn active" data-page="home">Home</button><button class="navbtn hiddenByProfile" data-page="devices" id="devicesNavBtn">Devices</button><button class="navbtn" data-page="settings">Settings</button><button class="navbtn hiddenByProfile" data-page="lab" id="labNavBtn">LAB</button></nav>
+<nav aria-label="Dashboard" class="bottomnav labHidden devicesHidden" id="bottomNav"><button class="navbtn active" data-page="home">Home</button><button class="navbtn hiddenByProfile" data-page="devices" id="devicesNavBtn">Devices</button><button class="navbtn" data-page="settings">Settings</button><button class="navbtn hiddenByProfile" data-page="lab" id="labNavBtn">LAB</button><button class="navbtn hiddenByProfile" data-page="actions" id="actionsNavBtn">Actions</button></nav>
 <div class="sheetback" id="sheetback"></div>
 <section class="sheet" id="actionSheet"><div class="handle"></div><div class="sheett" id="actionSheetTitle">Choose Action</div><div class="sheets" id="actionSheetSub">Select what this button gesture should do.</div><div class="actionSheetList" id="actionChoices"></div><button class="sheetCancel" id="actionCancel">Cancel</button></section>
 <div class="sheetback selectSheetBack" id="selectSheetBack"></div>
@@ -993,12 +1197,12 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 
 
 <script>
-const $=id=>document.getElementById(id);let nagCfg=null,otaUploading=false,otaUiPhase='idle',lastOk=0,downloadInProgress=false,downloadStartedAt=0,downloadManaged=false,downloadProgress=null,lastBlink=null,lastNag=null,lastSum=null,lastSys=null,lastDas=null,lastS3=null,currentPage="home";let labEnabled=false,s3xyEnabled=false,universalBootReady=false,settingsLiteValid=false;
+const $=id=>document.getElementById(id);let nagCfg=null,otaUploading=false,otaUiPhase='idle',lastOk=0,downloadInProgress=false,downloadStartedAt=0,downloadManaged=false,downloadProgress=null,lastBlink=null,lastNag=null,lastSum=null,lastSys=null,lastDas=null,lastS3=null,currentPage="home";let labEnabled=false,s3xyEnabled=false,preheatOk=false,universalBootReady=false,settingsLiteValid=false;
 const DASHBOARD_POLL_OPTIONS=[250,500,1000];function loadDashboardPollMs(){try{const v=Number(localStorage.getItem('t2canDashboardPollMs'));return DASHBOARD_POLL_OPTIONS.includes(v)?v:500}catch(e){return 500}}let dashboardPollMs=loadDashboardPollMs();
 const researchLabelDirty={A:false,B:false,C:false,D:false};const researchLabelSaving=new Set();const humanPeakEdit={dirty:false,saving:false,epoch:0};const humanStopEdit={saving:false,epoch:0};
 function tuHidePanel(p,dir){if(!p.classList.contains('show'))return;p.classList.remove('show');p.dataset.nav=dir;p.classList.add('closing');const done=()=>{p.classList.remove('closing');delete p.dataset.nav};p.addEventListener('animationend',done,{once:true});setTimeout(done,300)}
 function tuHideAllPanels(dir){document.querySelectorAll('.panel.show').forEach(p=>tuHidePanel(p,dir))}
-function showPage(name){if(name==='lab'&&!labEnabled)name='settings';if(name==='devices'&&!s3xyEnabled)name='settings';currentPage=name;if(name==='settings')settingsLiteValid=false;tuHideAllPanels('back');window.scrollTo({top:0,left:0,behavior:'auto'});document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.dataset.page===name));document.querySelectorAll('.navbtn').forEach(b=>b.classList.toggle('active',b.dataset.page===name));window.scrollTo(0,0);setTimeout(()=>{if(typeof forcePoll==='function')forcePoll()},0)}
+function showPage(name){if(name==='lab'&&!labEnabled)name='settings';if(name==='devices'&&!s3xyEnabled)name='settings';if(name==='actions'&&!preheatOk)name='settings';currentPage=name;if(name==='settings')settingsLiteValid=false;tuHideAllPanels('back');window.scrollTo({top:0,left:0,behavior:'auto'});document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.dataset.page===name));document.querySelectorAll('.navbtn').forEach(b=>b.classList.toggle('active',b.dataset.page===name));window.scrollTo(0,0);setTimeout(()=>{if(typeof forcePoll==='function')forcePoll()},0)}
 document.querySelectorAll('.navbtn').forEach(b=>b.onclick=()=>showPage(b.dataset.page));
 $('homeS3xy').closest('.metric').style.cursor='pointer';$('homeS3xy').closest('.metric').onclick=()=>showPage('devices');
 function tuPollAfterMotion(el){let done=false;const finish=()=>{if(done)return;done=true;if(typeof forcePoll==='function')forcePoll()};if(!el){setTimeout(finish,0);return}el.addEventListener('animationend',finish,{once:true});setTimeout(finish,340)}
@@ -1463,8 +1667,8 @@ function busOffRecordText(record,snapshotValid,currentAgeMs){if(!snapshotValid)r
 function renderPersistedBusOff(s){const a=s?.canABusOffRecord||{},b=s?.canBBusOffRecord||{},aText=busOffRecordText(a,!!s?.mcpBusOffSnapshotValid,s?.mcpBusOffSnapshotAgeMs),bText=busOffRecordText(b,!!s?.twaiBusOffSnapshotValid,s?.twaiBusOffSnapshotAgeMs);$('sysMcpBusOffSnap').textContent=aText;$('sysTwaiBusOffAge').textContent=bText;$('sysTwaiBusOffSnap').textContent=bText+(s?.twaiBusOffSnapshotValid?(' · RX gap '+fmtMs(s.twaiBusOffSnapshotRxGapMs)):'');$('sysCanATxTrace').textContent=(s?.canATxTraceCount||0)?((s.canATxTraceCount||0)+' frames · BUS OFF #'+(s.canATxTraceBusOffOrdinal||0)+' · '+aText):'—';$('sysCanBTxTrace').textContent=(s?.canBTxTraceCount||0)?((s.canBTxTraceCount||0)+' frames · BUS OFF #'+(s.canBTxTraceBusOffOrdinal||0)+' · '+bText):'—'}
 function fmtMs(v){v=Number(v)||0;return v>=1000?(v/1000).toFixed(v>=10000?1:2)+' s':v+' ms'}
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-const actionOptions=[['none','None'],['noa_cancel','NOA Lane Change Cancel'],['left_blinker','Left Blinker'],['right_blinker','Right Blinker'],['accel_mode_toggle','Acceleration Mode Toggle'],['performance_mode','Performance Mode'],['tlssc_toggle','TLSSC Toggle'],['auto_blinker_toggle','Auto Blinker Toggle'],['research_capture_a','Research Capture A'],['research_capture_b','Research Capture B'],['research_capture_c','Research Capture C'],['research_capture_d','Research Capture D'],['research_capture_reset','Research Capture Reset']];
-function availableActionOptions(){return actionOptions.filter(([v])=>(!['accel_mode_toggle','performance_mode'].includes(v)||!!window.__t2PedalMapSupported)&&(v!=='auto_blinker_toggle'||!!window.__t2AdvancedEapSupported)&&(!['left_blinker','right_blinker'].includes(v)||!!window.__t2TurnSignalSupported))}
+const actionOptions=[['none','None'],['noa_cancel','NOA Lane Change Cancel'],['left_blinker','Left Blinker'],['right_blinker','Right Blinker'],['accel_mode_toggle','Acceleration Mode Toggle'],['performance_mode','Performance Mode'],['tlssc_toggle','TLSSC Toggle'],['auto_blinker_toggle','Auto Blinker Toggle'],['battery_preheat','Battery Preheating'],['research_capture_a','Research Capture A'],['research_capture_b','Research Capture B'],['research_capture_c','Research Capture C'],['research_capture_d','Research Capture D'],['research_capture_reset','Research Capture Reset']];
+function availableActionOptions(){return actionOptions.filter(([v])=>(!['accel_mode_toggle','performance_mode'].includes(v)||!!window.__t2PedalMapSupported)&&(v!=='auto_blinker_toggle'||!!window.__t2AdvancedEapSupported)&&(v!=='battery_preheat'||!!window.__t2PreheatSupported)&&(!['left_blinker','right_blinker'].includes(v)||!!window.__t2TurnSignalSupported))}
 function actionLabel(v){const x=actionOptions.find(a=>a[0]===v);return x?x[1]:'None'}
 function signalLabel(rssi){rssi=Number(rssi);if(!Number.isFinite(rssi)||rssi<=-120)return'Signal unavailable';if(rssi>=-55)return'Excellent signal';if(rssi>=-70)return'Good signal';if(rssi>=-82)return'Weak signal';return'Very weak signal'}
 function friendlyDeviceState(d,btOn=true){if(!btOn)return['Bluetooth Off','off'];const st=String(d?.state||'');if(st==='READY')return['Connected','good'];if(['SCANNING','FOUND','CONNECTING','CONNECTED'].includes(st))return['Connecting…','wait'];if(['SECURING','DISCOVERING','SUBSCRIBING','HANDSHAKE'].includes(st))return['Preparing…','wait'];if(st==='RETRY')return['Reconnecting…','wait'];if(st==='ERROR')return['Connection Error','bad'];return['Offline','off']}
@@ -1569,7 +1773,9 @@ async function startResearchCapture(slot){try{await saveResearchLabel(slot,true)
 ['A','B','C','D'].forEach(slot=>{const el=$('researchLabel'+slot);if(el)el.oninput=()=>{researchLabelDirty[slot]=true}});$('researchCapMode').onchange=saveResearchMode;$('researchCapPreWindow').onchange=()=>saveResearchWindow(false);$('researchCapPostWindow').onchange=()=>saveResearchWindow(false);$('researchCapA').onclick=()=>startResearchCapture('A');$('researchCapB').onclick=()=>startResearchCapture('B');$('researchCapC').onclick=()=>startResearchCapture('C');$('researchCapD').onclick=()=>startResearchCapture('D');$('researchCapSave').onclick=saveAllResearchLabels;$('researchCapDownload').onclick=downloadResearchCaptureCsv;$('researchCapReset').onclick=async()=>{if(!confirm('Reset all CAN Research Capture segments and PRE snapshots?'))return;try{await post('/api/researchcapture/reset');;fetchResearchCapture()}catch(e){}};['A','B','C','D','E','F'].forEach(slot=>{const b=$('driverMonCap'+slot);if(b)b.onclick=()=>startDriverMonitorCapture(slot)});$('driverMonDownload').onclick=()=>downloadFile('/api/drivermonitor/log.csv','Driver_Monitoring_Capture.csv','Preparing Driver Monitoring CSV');$('driverMonReset').onclick=async()=>{if(!confirm('Reset all Driver Monitoring Capture segments?'))return;try{await post('/api/drivermonitor/reset');;fetchDriverMonitor()}catch(e){}};$('diagBleCsv').onclick=()=>downloadFile('/api/s3xy/log.csv','T2CAN_S3XY_MULTI.csv','Preparing BLE CSV');$('diagSystemStatsJson').onclick=()=>downloadFile('/api/system/stats','T2CAN_SYSTEM_STATS.json','Preparing System Stats JSON');$('diagCanATxCsv').onclick=()=>downloadFile('/api/system/cana-tx.csv','T2CAN_CANA_TX_TRACE.csv','Preparing CAN A TX CSV');$('diagCanBTxCsv').onclick=()=>downloadFile('/api/system/canb-tx.csv','T2CAN_CANB_TX_TRACE.csv','Preparing CAN B TX CSV');$('diagBleCsvSystem').onclick=()=>downloadFile('/api/s3xy/log.csv','T2CAN_S3XY_MULTI.csv','Preparing BLE CSV');
 $('btnResetStats').onclick=async()=>{if(!confirm('Reset runtime counters and permanently delete stored BUS OFF evidence?'))return;try{const r=await fetch('/api/system/reset-stats',{method:'POST'});let body={};try{body=await r.json()}catch(e){}if(!r.ok)throw new Error(body?.error||'bus-off-persistence-clear-failed');ok();;fetchSys()}catch(e){;fetchSys()}};$('btnReinit').onclick=async()=>{if(!confirm('Hard reinitialize CAN A and CAN B?'))return;try{await post('/api/system/reinit-can');}catch(e){}};
 async function reboot(){if(!confirm('Reboot T-2CAN now?'))return;showReconnectScreen('Rebooting T-2CAN','If Wi-Fi Auto-Join is disabled, reconnect to the T-2CAN access point manually.\nThis page will resume automatically.');try{await post('/api/system/reboot');waitForT2CanReconnect({title:'Rebooting T-2CAN'})}catch(e){waitForT2CanReconnect({title:'Rebooting T-2CAN'})}}$('rebootRow').onclick=reboot;
-$('s3MasterToggle').onchange=async e=>{const v=e.target.checked;await applyS3xyMaster(v)};
+/* applyS3xyMaster is declared in the features scope below, so this block cannot
+   reach it by name; it is published as window.__applyS3xyMaster for this call. */
+$('s3MasterToggle').onchange=async e=>{const v=e.target.checked;await window.__applyS3xyMaster(v)};
 $('s3AutoToggle').onchange=async e=>{try{await post(e.target.checked?'/api/s3xy/auto-enable':'/api/s3xy/auto-disable');;fetchS3()}catch(x){;fetchS3()}};$('s3ResetAll').onclick=async()=>{if(!lastS3?.bluetoothEnabled)return ;const n=(lastS3?.devices||[]).length;if(!confirm(`Reset all Bluetooth data?\n\nThis will remove ${n} registered S3XY Button${n===1?'':'s'}, all button action mappings, local BLE bonds, reconnect state, discovery cache and BLE logs.\n\nBluetooth Master and Global Auto Connect settings will be kept.\n\nT-2CAN will restart.`))return;try{await post('/api/s3xy/reset-all');waitForT2CanReconnect({title:'Resetting Bluetooth Data',sub:'T-2CAN is rebooting after clearing S3XY registry and BLE bonds.\nReconnect to Wi-Fi manually if Auto-Join is disabled.'})}catch(e){}};
 
 $('s3Clear').onclick=async()=>{try{await post('/api/s3xy/clear');;fetchS3()}catch(e){}};
@@ -1642,8 +1848,356 @@ async function fetchHomeSnapshot(forceSlow=false){
 async function fetchLabSnapshot(){const s=await fetchPageSnapshot('lab-lite');if(s)renderLabLite(s)}
 async function fetchSettingsSnapshot(){const s=await fetchPageSnapshot('settings-lite');if(s){renderSettingsLite(s);settingsLiteValid=true}}
 async function fetchHeartbeat(){await fetchPageSnapshot('heartbeat')}
+/* ── Actions tab: battery preheat ──────────────────────────────────────────
+   This block lives next to the other page fetch functions on purpose: showPage
+   and pollTick are in this scope, so they can call into it. The Settings
+   toggle wiring stays in the features scope below, where applyFeatures lives.
+   Design notes (the API is described in docs/actions_tab/README.md):
+     T2 - pack temperature keeps one decimal, so the 0.5 C step the car
+          actually reports stays visible in the range the strip shows.
+     T3 - the PACK TEMP cell alternates every 3 s between the pack average and
+          that range, so both numbers fit a cell with room for one. The average
+          is packTempAvgC from the device - the car's own BMS_thermistorTAvg -
+          never computed here, and never the mean of the two cells in that frame.
+     H1 - HEAT POWER is the drive units' own front+rear sum, not the BMS's
+          0x252 permission, and STATOR HEAT prints the two
+          sides one per line. The raw 0x252 value is a row in the fold-out below.
+     A1 - the tab has no alarm colour at all: a self-stopped engine is named in
+          the status chip and the reason is read from GET /api/preheat/stats.
+     B2 - the BMS state row shows HEATING while 0x2E1 mux0 bit63 is set,
+          because 0x212 bit5 never rises on this firmware.
+     S1 - the status names the live gate instead of claiming "Heating" while a
+          gate holds the engine back, reads "No CAN data" when the evaluation
+          itself has gone stale, and the IDLE description states what the BMS is
+          doing rather than repeating the spec's "heating not needed now", which
+          was read off 0x212 bit5 - a bit that never rises on this car.
+   The JSON field names are the contract; renaming any breaks the tab. */
+let preheatSaved=null,preheatSaving=false,preheatAltPhase=false;
+/* The live gate the engine is waiting on, in the strip's own words. Only the
+   gates that can hold an armed engine are named; anything else falls through to
+   "Waiting" rather than to "Heating", so the strip can never claim a
+   transmission it is not making. The reason comes from the device (blocked /
+   blockedReason) because the tick is the only thing that knows which gate won
+   the cascade. */
+function preheatStallText(r){
+  switch(String(r||'')){
+    case 'BOOT_DELAY':return 'CAN restarted';
+    case 'MCP_WARMUP':return 'CAN warmup';
+    case 'BUS_SILENT':return 'Bus silent';
+    case 'NO_TRIP_ID':return 'No trip frame';
+    default:return 'Waiting';
+  }
+}
+/* The CAN service stage evaluates the cascade on every pass of its loop - about
+   once a millisecond - and it is also the only writer of every value on this
+   card. An evaluation older than this therefore means the strip is showing
+   history, and no cell can show that on its own: packSeen / bmsSeen / ptAmbientSeen
+   are "ever seen" flags, not freshness. 3000 ms is the window the bus-liveness
+   gate uses and ~3000 loop passes of headroom, so this cannot fire on jitter. */
+const PREHEAT_EVAL_STALE_MS=3000;
+function preheatServiceStalled(s){
+  const age=Number(s.evalAgeMs);
+  return Number.isFinite(age)&&age>PREHEAT_EVAL_STALE_MS;
+}
+function renderPreheat(s){
+  if(!s)return;
+  preheatSaved=s;
+  const supported=s.supported===true,enabled=s.enabled===true,warm=s.batteryWarm===true,active=s.active===true,txOk=Number(s.txOk)||0,txFail=Number(s.txFail)||0,reached=s.targetReached===true,t=$('preheatToggle');
+  t.disabled=preheatSaving||!supported;
+  if(!preheatSaving)t.checked=enabled;
+  /* The ID the engine speaks on, in plain sight: 0x082 on the HW3 test car, 0x347 on
+     HW4. Until the car has shown either, the row keeps its plain description - an
+     armed engine then reads `No trip frame` on the status chip. */
+  $('preheatDesc').textContent=s.tripId==='0x347'?'Sends on 0x347':s.tripId==='0x082'?'Sends on 0x082':'Preheat before charging';
+  /* A gate holding an armed engine is not "Heating": it is the one state the
+     field report could not tell apart from a working preheat. Older firmware
+     sends no blocked flag, so the source check stays as the fallback. A stale
+     evaluation outranks both, because it means the gate itself is old. An engine
+     that switched ITSELF off is named by its reason too, or the tab would show the
+     same "Off" a manual toggle shows. That chip is the whole of the presentation:
+     nothing is painted red and nothing counts the silence, so the reason for a
+     stall is read from GET /api/preheat/stats. */
+  $('preheatStatus').textContent=supported?(reached?'Target reached':warm?'Battery warm':active?(preheatServiceStalled(s)?'No CAN data':(s.blocked===true?preheatStallText(s.blockedReason):(txOk===0&&txFail>0?'No TX':'Heating'))):(s.autoOffReason==='STATOR_STALL'?'Stall auto-off':(s.autoOffReason==='TARGET_REACHED'?'Target reached':'Off'))):'Unavailable';
+  renderPreheatBms(s);
+  renderPreheatExtra(s);
+  renderPreheatTelemetry(s);
+  renderThermal(s);
+  renderPreheatTarget(s);
+}
+function renderPreheatBms(s){
+  /* The cell alternates between the pack average - the number the auto-off acts
+     on - and the min-max range behind it, so both stay visible without growing
+     the cell or the card. Both come from the JSON, and the average is the car's
+     own BMS_thermistorTAvg (packTempAvgC): the mean of the two cells this frame
+     also carries is a different number, and it is not the one the engine stops
+     on. A device older than that field falls back to the range, so a freshly
+     updated tab against older firmware still shows a number. */
+  const packSeen=s.packSeen===true,tv=$('preheatTempValue');
+  if(packSeen){
+    const lo=Number(s.packTempMinC),hi=Number(s.packTempMaxC),avg=Number(s.packTempAvgC);
+    const range=lo===hi?lo.toFixed(1)+' °C':lo.toFixed(1)+'–'+hi.toFixed(1)+' °C';
+    tv.textContent=(!Number.isFinite(avg)||preheatAltPhase)?range:avg.toFixed(1)+' °C';
+  }else tv.textContent='—';
+  const bv=$('preheatBmsValue'),bd=$('preheatBmsDesc');
+  /* Descriptions stay minimal. The badge text already names the state, and the
+     kW, keep-warm and TX-reason tails only repeated the strip or the log. */
+  if(s.bmsSeen!==true){bv.textContent='WAIT';bv.className='preheatBmsValue';bd.textContent='Waiting for BMS frames…';return}
+  const allowed=s.bmsPreconditionAllowed===true,worthwhile=s.bmsHeatingWorthwhile===true,heating=s.heatingActive===true;
+  let text,cls='',desc;
+  if(heating){text='HEATING';cls='good';desc='Pack is heating'}
+  else if(!allowed){text='BLOCKED';cls='warn';desc=((Number(s.txOk)||0)>0)?'Requests sent · BMS declines':'BMS not accepting requests'}
+  else if(worthwhile){text='READY';cls='good';desc='Heating advised'}
+  /* The spec says "heating not needed now". That is a verdict this car never
+     delivers: 0x212 bit5 is 0 in every one of the 268 frames of the reference
+     capture, taken while the pack was heating at 8 kW, so the branch above is
+     unreachable and the spec's sentence would be the only thing ever shown.
+     State what is observed instead - the BMS is not heating. */
+  else{text='IDLE';desc='BMS not heating'}
+  bv.textContent=text;bv.className='preheatBmsValue'+(cls?' '+cls:'');bd.textContent=desc;
+}
+/* The strip's heat-power, coolant and stator cells. Every number here comes from a
+   frame that decodes cleanly on this firmware; the 0x312 dissipation / flow /
+   heat-target fields do not, which is why they are absent. A cell has no room for
+   the waiting-for-a-frame explanation the old rows carried, so an unseen value is
+   simply a dash. The car's outside-air reading (0x321 byte3) is a raw row inside the
+   fold below, not a cell: it is a witness the engine never acts on. */
+function renderPreheatExtra(s){
+  const p=$('preheatPowerValue');
+  /* HEAT POWER is the drive units' own reading, front plus rear: a measurement of
+     what is going into the pack - not 0x252 BMS_maxStationaryHeatPower, which is
+     what the BMS ALLOWS rather than what flows: a PASSIVE log read
+     0.00 kW there in all 1213 of its frames while the stators held 3.60 kW each for
+     34 seconds. That field is a raw row in the fold-out below now. */
+  /* On the HW4 (0x347) car the stators are no reading of pack heating: its rear
+     unit reports ~1.36 kW in every snapshot of the capture, with or without a
+     route, and there is no front unit. There the cell prints the car's own heating
+     request instead (0x3A1 mux 1, 0 W idle / ~4500 W preheating), relabelled
+     HEAT REQ so it cannot pass for a measurement, and the stator row is hidden. */
+  const frontSeen=s.statorFrontSeen===true,rearSeen=s.statorRearSeen===true,hw4=s.tripId==='0x347';
+  const pl=p.previousElementSibling;
+  if(pl)pl.textContent=hw4?'HEAT REQ':'HEAT POWER';
+  if(hw4)p.textContent=s.ptHpPowerSeen===true?((Number(s.ptHpPowerW)||0)/1000).toFixed(2)+' kW':'—';
+  else if(frontSeen||rearSeen)p.textContent=(Number(s.statorHeatKw)||0).toFixed(2)+' kW';else p.textContent='—';
+  const strip=p.closest('.actionSummary'),sr=strip&&strip.querySelector('.preheatStatorRow');
+  if(sr)sr.style.display=hw4?'none':'';
+  /* Stator heat, both drive units on one line: the pair is the honest kW reading of
+     pack heating, because it is what the inverters measure rather than a target or a
+     permission. Front then rear, the order the two raw rows list them, and a side
+     whose frame has not been seen keeps its dash - so a half-populated pair cannot
+     read as a total. */
+  const st=$('preheatStatorValue');
+  if(st){
+    if(frontSeen||rearSeen){
+      const line=(seen,kw)=>seen?(Number(kw)||0).toFixed(2):'—';
+      st.textContent=line(frontSeen,s.statorHeatFrontKw)+' / '
+        +line(rearSeen,s.statorHeatRearKw)+' kW';
+    }else st.textContent='—';
+  }
+  const f=$('preheatFlowValue');
+  if(s.coolantSeen===true)f.textContent=(Number(s.coolantFlowLpm)||0).toFixed(1)+' LPM';else f.textContent='—';
+}
+/* Raw values from the bus, one row per signal, each with the age of the frame
+   that carried it. The seven signals travel in four different IDs, so they are
+   never equally fresh at one moment: the age is what separates a live number
+   from a remembered one. Nothing is derived here - every value arrives already
+   scaled by the device, because the tab does no arithmetic on sensor readings. */
+function ptAgeText(ms){
+  const n=Number(ms);
+  if(!Number.isFinite(n))return 'no frame';
+  return n<1000?n+' ms':(n/1000).toFixed(1)+' s';
+}
+function renderPreheatTelemetry(s){
+  const rows=[
+    ['ptAvg','0x332 m0','ptPackAvgC','ptAvgSeen','ptAvgAgeMs',1,'°C'],
+    ['ptMaxPack','0x312 m0','ptMaxPackC','ptMaxPackSeen','ptMaxPackAgeMs',1,'°C'],
+    ['ptAmbient','0x321 byte3','ptAmbientC','ptAmbientSeen','ptAmbientAgeMs',1,'°C'],
+    ['ptCellTarget','0x312 m1','ptCellTargetC','ptCellTargetSeen','ptCellTargetAgeMs',2,'°C'],
+    ['ptHpPower','0x3A1 m1','ptHpPowerW','ptHpPowerSeen','ptHpPowerAgeMs',0,'W'],
+    ['ptFlowReq','0x312 m0','ptFlowReqLpm','ptFlowReqSeen','ptFlowReqAgeMs',2,'LPM'],
+    ['ptPump','0x201','ptPumpRpm','ptPumpSeen','ptPumpAgeMs',0,'rpm'],
+    ['ptStatorF','0x2E5 DIF','statorHeatFrontKw','statorFrontSeen','statorFrontAgeMs',2,'kW'],
+    ['ptStatorR','0x266 DIR','statorHeatRearKw','statorRearSeen','statorRearAgeMs',2,'kW'],
+    ['ptHeatLimit','0x252','ptHeatLimitKw','ptHeatLimitSeen','ptHeatLimitAgeMs',2,'kW']
+  ];
+  rows.forEach(function(r){
+    const v=$(r[0]),m=$(r[0]+'Meta');
+    if(!v||!m)return;
+    const val=Number(s[r[2]]);
+    const seen=s[r[3]]===true&&Number.isFinite(val);
+    v.textContent=seen?val.toFixed(r[5])+' '+r[6]:'—';
+    m.textContent=r[1]+' · '+(seen?ptAgeText(s[r[4]]):'no frame');
+  });
+  /* What the engine actually did, on the same screen as the switch. srcRaw is
+     the 0x082 the composer started from, lastTxRaw what it sent: a blank
+     lastTxRaw next to a rising TX count reads as "nothing has gone out yet",
+     and a lastTxRaw that equals the reference frame reads as "the frame the car
+     itself heats with", which is the comparison a field run is making. */
+  const sr=$('ptSrcRaw'),lr=$('ptLastTxRaw'),tx=$('ptTx');
+  if(sr){
+    sr.textContent=(typeof s.srcRaw==='string'&&s.srcRaw.length)?s.srcRaw:'—';
+    /* One shape per car and one cadence, so the meta line is the car's trip ID and
+       its constant plus the number of frames that went out and, after `r`, how
+       many of them answered a car frame that disagreed (immediate reassertion) -
+       the facts a field report needs. 0x082 is the HW3 car, 0x347 the HW4 one; until the car has
+       sent either, the engine waits and the line says so. srcRaw above stays the
+       witness for what the car itself was saying, and a self-stopped engine is
+       named by the status chip rather than by text on this row. */
+    const dm=$('ptSrcRawMeta');
+    if(dm){
+      const trip=s.tripId==='0x347'?'0x347 flat AF 24 9D 1D FF 03 F2 07':s.tripId==='0x082'?'0x082 flat AB 50 C8 13 FF 03 8E 14':'trip ID not seen';
+      let meta=trip+' · 10 Hz + reply · tx '+(Number(s.txOk)||0)+' · r '+(Number(s.replyTx)||0);
+      if(s.autoOffReason==='TARGET_REACHED')meta+=' · auto-off: target reached';
+      dm.textContent=meta;
+    }
+  }
+  if(lr)lr.textContent=(typeof s.lastTxRaw==='string'&&s.lastTxRaw.length)?s.lastTxRaw:'—';
+  if(tx)tx.textContent=(Number(s.txOk)||0)+' ok · '+(Number(s.maxTxGapMs)||0)+' ms';
+  /* Immediate reassertion, per armed session: how many of the car's disagreeing
+     trip frames were answered and how fast, how often the heat dropped while we
+     sent (and how many of those came within 3 s of a car frame), and whether the
+     rate breaker caught a loop - then answers are off and the line says so in red. */
+  const rp=$('ptReply'),dr=$('ptDrops'),lp=$('ptLoop'),lm=$('ptLoopMeta');
+  const hasReply=typeof s.replyTx==='number';
+  if(rp)rp.textContent=hasReply?(Number(s.replyTx)||0)+' / '+(Number(s.carConflict)||0)+' · '+(Number(s.replyLatMaxMs)||0)+' ms':'—';
+  if(dr)dr.textContent=typeof s.heatDrops==='number'?(Number(s.heatDrops)||0)+' · '+(Number(s.heatDropsNearCar)||0):'—';
+  if(lp){
+    const loop=s.replyBreaker===true;
+    lp.textContent=typeof s.replyBreaker==='boolean'?(loop?'LOOP':'no'):'—';
+    lp.classList.toggle('dangerDesc',loop);
+    if(lm){lm.textContent=loop?'replies off · 10 Hz only':'reply breaker · max 5 / s';lm.classList.toggle('dangerDesc',loop)}
+  }
+}
+/* Thermal fold: the car's service "Thermal" screen, redrawn. Every value has a
+   status dot - green while its frame is fresh, grey otherwise, with "--°C" in place
+   of a temperature as on the car's screen. Fresh means younger than 5 s for the
+   10 Hz frames (0x201, 0x241, 0x3A1) and 15 s for the slow ones (0x321, 0x2A4,
+   0x315 / 0x376, 0x353, 0x3FC), which come every 1-2 s but with gaps of up to 17 s.
+   A HW4 car has no front motor and its 0x315 is another frame, so both inverters
+   stay grey.
+   The pipes follow the valve (0x201 index 1). Per mode, one character per pipe
+   segment of the drawing, in its order: b blue (the PT-pump loop, or the one loop),
+   p purple (the separate battery-pump loop), g pale, - not drawn. Series Radiator
+   Bypass is SERIES with the heat pump asking for SERIES_BYPASS (thHpReq 2); BLEND,
+   which no capture has shown, is drawn as Series. With both pumps stopped, or no
+   valve frame, every pipe is pale. */
+const PREHEAT_TH_FRESH_MS=5000,PREHEAT_TH_SLOW_MS=15000;
+const PREHEAT_TH_DRAW={bypass:'ggbbbbbb-bb-----',ambient:'p-bbbppbp--bp---',series:'b-bbbbbbbb---b--',parallel:'b-bbppp--p---bbp',off:'gggggggg-gg-----'};
+const PREHEAT_TH_LABEL={bypass:'Series Radiator Bypass',ambient:'Ambient Source',series:'Series',parallel:'Parallel',off:'Off'};
+function preheatThFresh(age,win){const a=Number(age);return Number.isFinite(a)&&a<=(win||PREHEAT_TH_FRESH_MS)}
+function preheatThDraw(key){
+  const pipes=$('thPipes'),pt=$('thFlowPtLine'),bat=$('thFlowBatLine');
+  if(!pipes||!pt||!bat||pipes.dataset.mode===key)return;
+  pipes.dataset.mode=key;
+  const draw=PREHEAT_TH_DRAW[key];
+  Array.prototype.forEach.call(pipes.children,(p,i)=>p.setAttribute('class',draw[i]==='-'?'preheatThHide':'preheatThP'+draw[i]));
+  Array.prototype.forEach.call(pipes.parentNode.querySelectorAll('path[data-n]'),p=>{
+    const c=draw[Number(p.dataset.n)];
+    if(c==='b'||c==='p'){(c==='p'?bat:pt).appendChild(p);p.setAttribute('class','preheatThSeg preheatThSeg'+c)}
+    else p.setAttribute('class','preheatThHide');
+  });
+}
+function renderThermal(s){
+  const set=(id,t)=>{const e=$(id);if(e)e.textContent=t};
+  const on=(id,v)=>{const e=$(id);if(e)e.classList.toggle('preheatThOn',v)};
+  const dot=(id,v)=>{const e=$(id);if(e)e.classList.toggle('preheatThFresh',v)};
+  const c0=v=>Math.round(Number(v)||0)+' °C',none='--°C',slow=PREHEAT_TH_SLOW_MS;
+  const vit=preheatThFresh(s.thVitalsAgeMs);
+  const pb=Number(s.thPumpBatRpm)||0,pp=Number(s.thPumpPtRpm)||0,fan=Number(s.thFanRpm)||0;
+  const md=preheatThFresh(s.thModeAgeMs),vm=Number(s.thValveMode)&3;
+  let key=!md?'off':vm===3?'ambient':vm===1?'parallel':Number(s.thHpReq)===2?'bypass':'series';
+  if(vit&&pb===0&&pp===0)key='off';
+  const mode=md?PREHEAT_TH_LABEL[key]:'—';
+  preheatThDraw(key);
+  set('thMode',mode);set('thModeChip',mode);dot('thDotValve',md);
+  if(preheatThFresh(s.thSysAgeMs))set('thValveName',s.thHeatPump===true?'Octovalve':'Coolant valve');
+  set('thPumpBat',vit?String(pb):'—');set('thPumpPt',vit?String(pp):'—');set('thFan',vit?String(fan):'—');
+  dot('thDotPumpBat',vit);dot('thDotPumpPt',vit);dot('thDotFan',vit);
+  const one=key==='bypass'||key==='series';
+  on('thFlowPtLine',vit&&(pp>0||(one&&pb>0)));on('thFlowBatLine',vit&&pb>0);
+  on('thImpPt',vit&&pp>0);on('thImpBat',vit&&pb>0);on('thFanG',vit&&fan>0);
+  const inl=preheatThFresh(s.thInletsAgeMs,slow),flo=preheatThFresh(s.thFlowsAgeMs);
+  const lpm=v=>Math.round(Number(v)||0)+' LPM';
+  set('thPtIn',inl?c0(s.thPtInletC):none);set('thBatIn',inl?c0(s.thBatInletC):none);
+  set('thPtFlow',flo?lpm(s.thFlowPtLpm):'—');set('thBatFlow',flo?lpm(s.thFlowBatLpm):'—');
+  dot('thDotPtIn',inl);dot('thDotBatIn',inl);
+  const pcs=preheatThFresh(s.thPcsAgeMs,slow);
+  set('thDcdc',pcs?c0(s.thDcdcC):none);set('thChg',pcs?c0(s.thChargerC):none);dot('thDotDcdc',pcs);dot('thDotChg',pcs);
+  const invF=preheatThFresh(s.thInvFrontAgeMs,slow),invR=preheatThFresh(s.thInvRearAgeMs,slow);
+  set('thInvF',invF?c0(s.thInvFrontC):none);set('thInvR',invR?c0(s.thInvRearC):none);dot('thDotInvF',invF);dot('thDotInvR',invR);
+  const ap=preheatThFresh(s.thApAgeMs,slow),inf=preheatThFresh(s.thInfoAgeMs,slow);
+  set('thAp',ap?c0(s.thApC):none);set('thInfo',inf?c0(s.thInfoC):none);dot('thDotAp',ap);dot('thDotInfo',inf);
+  const pk=s.packSeen===true;
+  set('thPackMax',pk?c0(s.packTempMaxC):none);set('thPackMin',pk?c0(s.packTempMinC):none);dot('thDotPackMax',pk);dot('thDotPackMin',pk);
+  const amb=s.ptAmbientSeen===true&&preheatThFresh(s.ptAmbientAgeMs,slow);
+  set('thAmb',amb?c0(s.ptAmbientC):'—');dot('thDotAmb',amb);
+}
+/* Auto-off target. This is the tab's only writable value: it is posted back as
+   targetC, and the engine switches itself off once the pack average reaches it.
+   The control is never rewritten while it has focus, or the 1500 ms poll would
+   fight the user mid-edit. */
+function renderPreheatTarget(s){
+  const inp=$('preheatTargetC'),d=$('preheatTargetDesc');
+  if(!inp)return;
+  const supported=s.supported===true,reached=s.targetReached===true,target=Number(s.targetC);
+  inp.disabled=preheatSaving||!supported;
+  if(document.activeElement!==inp){
+    /* The dropdown carries the 5 C presets only. A target saved by an older
+       build - the 2 C dropdown, or the 0.5 C number field before that - can
+       fall between them, and a select whose value matches no option renders
+       blank, so that single value gets an option of its own, dropped again as
+       soon as a preset fits. */
+    const want=Number.isFinite(target)?target.toFixed(1):'40.0';
+    const odd=inp.querySelector('option[data-odd]');
+    const preset=Array.prototype.filter.call(inp.options,o=>o.dataset.odd===undefined).map(o=>o.value).indexOf(want)>=0;
+    if(preset){if(odd)odd.remove()}
+    else if(odd){if(odd.value!==want){odd.value=want;odd.textContent=want+' °C'}}
+    else{const o=document.createElement('option');o.dataset.odd='1';o.value=want;o.textContent=want+' °C';inp.appendChild(o)}
+    inp.value=want;
+  }
+  /* The box beside the 156 px .labSelect pill is 118 px wide at 360 px - not the
+     101 px an earlier revision of this comment claimed, which is only the width
+     the .listkey above it forces the box to take. Measured there (headless
+     Chrome, this tab, 360 px): "Stop at coldest cell" 95.6 px, "Stop at
+     average" 79.2 px, "Stop at pack average" 106.0 px, "Reached · heat off"
+     91.2 px - the shipped pair fits with room to spare. "Stop at this cell
+     temperature" needs ~143 px and would still wrap, so it stays out. The
+     auto-off count stays in the JSON (autoOffCount) instead of competing for
+     that box. */
+  d.textContent=reached?'Reached · heat off':'Stop at average';
+}
+async function updatePreheatTarget(){
+  const inp=$('preheatTargetC');
+  if(preheatSaving||!preheatSaved||preheatSaved.supported!==true){if(preheatSaved)renderPreheat(preheatSaved);return}
+  const value=Number(inp.value);
+  if(!Number.isFinite(value)||value<20||value>50){await fetchPreheat();return}
+  preheatSaving=true;
+  try{renderPreheat(await featurePostJson('/api/preheat/set?targetC='+encodeURIComponent(value.toFixed(1))))}
+  catch(e){await fetchPreheat()}
+  finally{preheatSaving=false;renderPreheat(preheatSaved)}
+}
+async function fetchPreheat(){try{renderPreheat(await jget('/api/preheat/stats'))}catch(e){if(!preheatSaved){$('preheatToggle').disabled=true;$('preheatDesc').textContent='Preheat before charging';$('preheatStatus').textContent='Retrying…'}}}
+async function updatePreheat(){
+  if(preheatSaving||!preheatSaved||preheatSaved.supported!==true){if(preheatSaved)renderPreheat(preheatSaved);return}
+  const enabled=$('preheatToggle').checked;
+  preheatSaving=true;
+  renderPreheat({...preheatSaved,enabled});
+  try{renderPreheat(await featurePostJson('/api/preheat/set?enabled='+(enabled?1:0)))}
+  catch(e){await fetchPreheat()}
+  finally{preheatSaving=false;renderPreheat(preheatSaved)}
+}
+$('preheatToggle').onchange=updatePreheat;$('preheatTargetC').onchange=updatePreheatTarget;
+/* The strip alternates between the average and the range every 3 s. The swap is
+   a text change, so CSS cannot stop it - prefers-reduced-motion has to be read
+   here. With motion reduced the cell stays on the average, the number the
+   auto-off actually acts on. */
+const preheatMotionReduced=()=>{try{return !!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches)}catch(e){return false}};
+setInterval(()=>{
+  if(preheatMotionReduced())return;
+  preheatAltPhase=!preheatAltPhase;
+  if(preheatSaved&&preheatSaved.packSeen===true)renderPreheatBms(preheatSaved);
+},3000);
 if($('countryOverrideMode'))$('countryOverrideMode').onchange=()=>updateCountryOverrideMode('countryMode');if($('countryMapMode'))$('countryMapMode').onchange=()=>updateCountryOverrideMode('mapMode');
-const pollLast={driverMonitoringRecovery:0,isaSuppressionRecovery:0,nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,driverMon:0,summonHeartbeat:0,homeSnap:0,labSnap:0,settingsSnap:0,heartbeat:0};
+const pollLast={driverMonitoringRecovery:0,isaSuppressionRecovery:0,nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,driverMon:0,summonHeartbeat:0,homeSnap:0,labSnap:0,settingsSnap:0,heartbeat:0,preheat:0};
 function activePanelId(){return document.querySelector('.panel.show')?.id||''}
 function pollDue(k,ms,fn,now,force=false){if(force||now-pollLast[k]>=ms){pollLast[k]=now;fn()}}
 function pollTick(force=false){
@@ -1680,6 +2234,8 @@ function pollTick(force=false){
     pollDue('s3',900,fetchS3,now,force);
   }else if(currentPage==='lab'){
     pollDue('labSnap',700,fetchLabSnapshot,now,force);
+  }else if(currentPage==='actions'){
+    pollDue('preheat',1500,fetchPreheat,now,force);
   }else{
     if(force||!settingsLiteValid)pollDue('settingsSnap',500,fetchSettingsSnapshot,now,force);
     else pollDue('heartbeat',3000,fetchHeartbeat,now,false);
@@ -1783,7 +2339,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
     document.body.classList.add('setup-active');setupMessage(profileStatus?.nvsError?'NVS storage is unavailable. Profile saving is blocked. Use Factory Reset to recover; this erases all settings and BLE bonds.':profileSaveUncertain?'Save result could not be confirmed. Reconnect to T-2CAN Wi-Fi and use Check Status before retrying. The controller may already be rebooting.':'',profileSaveUncertain&&!profileStatus?.nvsError);setupUpdate();window.scrollTo(0,0);
   }
   function applyProfile(s){
-    profileStatus=s;window.__t2ProfileId=Number(s.profile);window.__t2TopologyId=Number(s.topology);window.__t2PedalMapSupported=!!s.pedalMapSupported;window.__t2AdvancedEapSupported=!!s.advancedEapSupported;window.__t2TurnSignalSupported=Number(s.turn)!==0;window.__t2NagSupported=!!s.nagSupported;window.__t2NagTorqueSupported=!!s.nagTorqueSupported;window.__t2NagTsl9Supported=!!s.nagTsl9Supported;window.__t2CanBName=s.canB||'';renderR79Hw3(r79Hw3Saved);const p=PROFILES[Number(s.profile)],t=TOPOLOGIES[Number(s.topology)];if(!p||!t)return;
+    profileStatus=s;window.__t2ProfileId=Number(s.profile);window.__t2TopologyId=Number(s.topology);window.__t2PedalMapSupported=!!s.pedalMapSupported;window.__t2AdvancedEapSupported=!!s.advancedEapSupported;window.__t2TurnSignalSupported=Number(s.turn)!==0;window.__t2PreheatSupported=!!s.preheatSupported;window.__t2NagSupported=!!s.nagSupported;window.__t2NagTorqueSupported=!!s.nagTorqueSupported;window.__t2NagTsl9Supported=!!s.nagTsl9Supported;window.__t2CanBName=s.canB||'';renderR79Hw3(r79Hw3Saved);const p=PROFILES[Number(s.profile)],t=TOPOLOGIES[Number(s.topology)];if(!p||!t)return;
     q('activeProfileModel').textContent=p.name;q('activeProfileBadge').textContent=p.badge;q('activeProfileCan').textContent=s.topologyName||t.name;q('activeProfileTurn').textContent=turnText(s.turn);q('activeProfileCaps').textContent=[s.nagSupported?'✓ NAG':'— NAG',s.advancedEapSupported?'✓ ADV EAP':'— ADV EAP',s.euUnlockSupported?'✓ EU UNLOCK':'— EU UNLOCK'].join(' · ');
     const a=q('homeCanAName'),b=q('homeCanBName');if(a){a.textContent='CAN A';a.dataset.role=s.canA||t.canA.replace('CAN A · ','')}if(b){b.textContent='CAN B';b.dataset.role=s.canB||t.canB.replace('CAN B · ','')}
     const nagSupported=!!s.nagSupported,advSupported=!!s.advancedEapSupported;
@@ -1830,14 +2386,26 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   function applyFeatures(f){
     featureStatus=f;labEnabled=!!f.lab;s3xyEnabled=!!f.s3xy;if(r79ApSaved)renderR79ApControl(r79ApSaved);if(visionControlSaved)renderVisionControlLab(visionControlSaved);
     q('labMenuToggle').checked=labEnabled;q('labMenuDesc').textContent="Show experimental controls and capture tools.";q('labNavBtn')?.classList.toggle('hiddenByProfile',!labEnabled);q('bottomNav')?.classList.toggle('labHidden',!labEnabled);
+    preheatOk=!!f.preheatSupported&&!!f.preheat;q('actionsMenuToggle').checked=!!f.preheat;q('actionsMenuToggle').disabled=!f.preheatSupported;q('actionsMenuDesc').textContent=f.preheatSupported?'Show the Actions tab with battery preheat.':'Battery preheat needs the Vehicle/Body CAN on this profile.';q('actionsNavBtn')?.classList.toggle('hiddenByProfile',!preheatOk);q('bottomNav')?.classList.toggle('actionsHidden',!preheatOk);
     q('s3xyFeatureToggle').checked=s3xyEnabled;q('s3xyFeatureDesc').textContent="Use S3XY buttons for assigned vehicle actions.";q('devicesNavBtn')?.classList.toggle('hiddenByProfile',!s3xyEnabled);q('bottomNav')?.classList.toggle('devicesHidden',!s3xyEnabled);
-    if(!labEnabled&&currentPage==='lab')showPage('settings');if(!s3xyEnabled&&currentPage==='devices')showPage('settings');
+    if(!labEnabled&&currentPage==='lab')showPage('settings');if(!s3xyEnabled&&currentPage==='devices')showPage('settings');if(!preheatOk&&currentPage==='actions')showPage('settings');
     q('doorCancelToggle').checked=!!f.doorCancel;q('doorCancelDesc').textContent="Cancel a lane change with the front door-open button.";
     const bannedSupported=!!f.bannedSupported;q('bannedDangerHead')?.classList.toggle('hiddenByProfile',!bannedSupported);q('bannedDangerZone')?.classList.toggle('hiddenByProfile',!bannedSupported);q('bannedCarToggle').checked=bannedSupported&&!!f.banned;q('bannedCarToggle').disabled=!bannedSupported;q('bannedCarDesc').textContent="Show restore controls for already-banned vehicles.";q('tlsscRestoreRow').classList.toggle('show',bannedSupported&&!!f.banned&&!!f.tlsscRestoreSupported);q('tlsscRestoreToggle').checked=bannedSupported&&!!f.tlsscRestore;q('tlsscRestoreToggle').disabled=!bannedSupported;q('tlsscRestoreDesc').textContent="Try the TLSSC restore override on a banned vehicle.";
     const pedalSupported=!!f.pedalMapSupported;q('pedalMapSettingsRow')?.classList.toggle('hiddenByProfile',!pedalSupported);if(q('pedalMapSelect'))q('pedalMapSelect').disabled=!pedalSupported;if(q('pedalMapPerformance'))q('pedalMapPerformance').disabled=!pedalSupported;const apDriveSupported=!!f.apDriveProfileSupported,apRegen=Number(f.apDriveProfileRegenRaw??10),apRegenLabel=apDriveRegenName(apRegen);const apDriveRow=q('apDriveProfileSettingsRow');if(apDriveRow)apDriveRow.classList.toggle('hiddenByProfile',!apDriveSupported);if(q('apDriveProfileToggle')){q('apDriveProfileToggle').checked=apDriveSupported&&!!f.apDriveProfile;q('apDriveProfileToggle').disabled=!apDriveSupported}if(q('apDriveRegenSelect')){q('apDriveRegenSelect').value=String(apRegen);q('apDriveRegenSelect').disabled=!apDriveSupported}if(q('apDriveProfileDesc'))q('apDriveProfileDesc').textContent="Use Chill acceleration and chosen regen during AP.";if(q('apDriveProfileOwnership'))q('apDriveProfileOwnership').textContent=f.apDriveProfile?'ON · AP only':'OFF';if(q('apDriveProfileRegenStatus'))q('apDriveProfileRegenStatus').textContent=apRegenLabel+' · raw '+apRegen;
     if(q('s3MasterToggle'))q('s3MasterToggle').checked=s3xyEnabled;
   }
   async function refreshFeatures(){try{applyFeatures(await jget('/api/features/status'))}catch(e){}}
+
+  /* The Settings toggle needs applyFeatures/refreshFeatures, which live in this
+     scope; the tab presentation itself is in the page-routing scope above. */
+  async function updatePreheatMenu(){
+    const t=$('actionsMenuToggle'),want=t.checked;
+    t.disabled=true;
+    try{const r=await featurePostJson('/api/features/preheat?enabled='+(want?1:0));if(r&&r.ok===false)throw Error('failed');applyFeatures(r)}
+    catch(e){await refreshFeatures()}
+    finally{t.disabled=false}
+  }
+  $('actionsMenuToggle').onchange=updatePreheatMenu;
   async function setApDriveRegen(raw){try{const f=await featurePostJson('/api/features/ap-drive-profile?regen='+encodeURIComponent(raw));applyFeatures(f);;fetchPedalMap()}catch(e){;await refreshFeatures()}}
   if(q('pedalMapSelect'))q('pedalMapSelect').onchange=e=>setPedalMap(e.target.value||'stock');if(q('pedalMapPerformance'))q('pedalMapPerformance').onclick=()=>{const perfActive=q('pedalMapPerformance').getAttribute('aria-pressed')==='true';setPedalMap(perfActive?'stock':'performance')};if(q('apDriveRegenSelect'))q('apDriveRegenSelect').onchange=e=>setApDriveRegen(e.target.value);
   if(q('apDriveProfileToggle'))q('apDriveProfileToggle').onchange=async e=>{const v=e.target.checked;try{const f=await featurePostJson('/api/features/ap-drive-profile?enabled='+(v?1:0));applyFeatures(f);;fetchPedalMap()}catch(x){;await refreshFeatures()}};
@@ -1893,7 +2461,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
       if(s.migrationNotice)openModal('migrationNoticeModal');return;
     }
     setupMessage();applyProfile(s);document.body.classList.remove('setup-active');
-    await refreshFeatures();await fetchDriverMonitoringControl();await fetchIsaSuppressionControl();await fetchContinuousAp();await fetchVisionControlLab();
+    await refreshFeatures();await fetchDriverMonitoringControl();await fetchIsaSuppressionControl();await fetchContinuousAp();await fetchVisionControlLab();await fetchPreheat();
     universalBootReady=true;otaUiPhase='idle';if(s.nagSupported){try{await loadNag()}catch(e){}}
     forceHomeTop();forcePoll();
     if(otaJustUpdated)history.replaceState(null,'',location.pathname);
