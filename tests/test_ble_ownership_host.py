@@ -94,7 +94,7 @@ struct Preferences {
 };
 static volatile uint32_t s3xyActionPending,s3xyAccelActionPending,s3xyPerformanceActionPending;
 static volatile uint32_t s3xyResearchCaptureAPending,s3xyResearchCaptureBPending,s3xyResearchCaptureCPending,s3xyResearchCaptureDPending,s3xyResearchCaptureResetPending;
-static volatile uint32_t s3xyTlsscActionPending,s3xyAutoBlinkerActionPending,s3xyLeftBlinkerActionPending,s3xyRightBlinkerActionPending;
+static volatile uint32_t s3xyTlsscActionPending,s3xyAutoBlinkerActionPending,s3xyPreheatActionPending,s3xyLeftBlinkerActionPending,s3xyRightBlinkerActionPending;
 """
 MAIN = r"""
 int main(){
@@ -121,10 +121,10 @@ int main(){
     assert(saved.back().nextAttemptMs==s3xyDevices[1].nextAttemptMs);
     assert(events[1]==std::string("device auto-connect ")+(enabled?"enabled1":"disabled1"));
   }
-  volatile uint32_t *pending[]={&s3xyActionPending,&s3xyAccelActionPending,&s3xyPerformanceActionPending,&s3xyResearchCaptureAPending,&s3xyResearchCaptureBPending,&s3xyResearchCaptureCPending,&s3xyResearchCaptureDPending,&s3xyResearchCaptureResetPending,&s3xyTlsscActionPending,&s3xyAutoBlinkerActionPending,&s3xyLeftBlinkerActionPending,&s3xyRightBlinkerActionPending};
+  volatile uint32_t *pending[]={&s3xyActionPending,&s3xyAccelActionPending,&s3xyPerformanceActionPending,&s3xyResearchCaptureAPending,&s3xyResearchCaptureBPending,&s3xyResearchCaptureCPending,&s3xyResearchCaptureDPending,&s3xyResearchCaptureResetPending,&s3xyTlsscActionPending,&s3xyAutoBlinkerActionPending,&s3xyPreheatActionPending,&s3xyLeftBlinkerActionPending,&s3xyRightBlinkerActionPending};
   for(auto scope:{S3XY_PENDING_CAN_RECOVERY,S3XY_PENDING_ALL}){
     for(auto p:pending)*p=7;portENTER_CRITICAL(&s3xyMux);s3xyClearPendingActionsLocked(scope);assert(lockDepth==1);portEXIT_CRITICAL(&s3xyMux);
-    for(unsigned i=0;i<12;++i)assert(*pending[i]==(scope==S3XY_PENDING_CAN_RECOVERY&&i>=10?7u:0u));
+    for(unsigned i=0;i<13;++i)assert(*pending[i]==(scope==S3XY_PENDING_CAN_RECOVERY&&i>=11?7u:0u));
   }
   for(unsigned mask=0;mask<8;++mask)for(size_t rawLen:{size_t(0),size_t(1),size_t(8),size_t(9)})for(bool complete:{false,true}){
     events.clear();opens["s3xy"]=mask&1;opens["s3xyreg"]=mask&2;registeredCount=(mask&4)?1:0;

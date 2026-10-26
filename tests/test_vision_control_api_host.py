@@ -77,9 +77,9 @@ int main() {
  disabled=true;bus=1;saveOk=false;request({{"disabled","0"},{"bus","0"}},503);assert(disabled&&bus==1);saveOk=true;
  // Both explicit reset actions must remove the new namespace while preserving BLE.
  for(bool keepBle:{false,true}) {
-   stored={{"labv3fd",true},{"s3xy",true},{"s3xyreg",true},{"v3profile",true},{"wifiap",true}};
+   stored={{"labv3fd",true},{"s3xy",true},{"s3xyreg",true},{"v3profile",true},{"wifiap",true},{"preheat",true}};
    assert(keepBle?resetNvsKeepBleClearApplicationNamespaces():resetFirmwareSettingsPreserveProfileAndBle());
-   assert(!stored["labv3fd"]&&stored["s3xy"]&&stored["s3xyreg"]);
+   assert(!stored["labv3fd"]&&!stored["preheat"]&&stored["s3xy"]&&stored["s3xyreg"]);
    assert(stored["v3profile"]!=keepBle&&stored["wifiap"]!=keepBle);
  }
 }

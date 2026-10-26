@@ -2795,6 +2795,7 @@ static void writeProfileCapabilityJson(JsonWriterArduino &jw) {
   jw.string("apDriveProfileRegenName", apDriveRegenNamePure(apDriveProfileRegenRaw));
   jw.boolean("bodyControlsSupported", activeProfileBodyControlsSupported());
   jw.boolean("euUnlockSupported", activeProfileEuUnlockSupported());
+  jw.boolean("preheatSupported", activeProfilePreheatSupported());
 }
 
 static String vehicleProfileStatusJson() {
@@ -2823,10 +2824,11 @@ static String vehicleProfileStatusJson() {
 static String v3FeaturePolicyJson() {
   const bool doorCancelReported = (activeProfileBodyControlsSupported() || activeProfileIsYl()) && doorOpenCancelEnabled;
   String j;
-  j.reserve(390);
+  j.reserve(420);
   JsonWriterArduino jw(j);
   jw.boolean("ok", true);
   jw.boolean("lab", labMenuEnabled);
+  jw.boolean("preheat", preheatMenuEnabled);
   jw.boolean("doorCancel", doorCancelReported);
   writeProfileCapabilityJson(jw);
   jw.boolean("banned", bannedCar);
@@ -2856,6 +2858,48 @@ static bool httpDecimalU16InRange(const String &raw, uint16_t minimum,
   }
   if (value < minimum) return false;
   out = (uint16_t)value;
+  return true;
+}
+
+// Signed decimal scaled to tenths, for the preheat auto-off target. "20",
+// "20.0" and "0.5" are accepted; at most one fractional digit, because the
+// target is stored in tenths of a degree. The shape is validated explicitly so
+// that garbage is a 400 rather than a silent default - String::toFloat()
+// returns 0.0 for garbage, which is indistinguishable from a real 0.0 C
+// request.
+static bool httpDecimalTenthsInRange(const String &raw, int32_t minimum,
+                                     int32_t maximum, int32_t &out) {
+  if (raw.length() == 0u || raw.length() > 8u) return false;
+  size_t i = 0;
+  int32_t sign = 1;
+  if (raw.charAt(0) == '-') {
+    sign = -1;
+    i = 1;
+  } else if (raw.charAt(0) == '+') {
+    i = 1;
+  }
+  int32_t whole = 0;
+  bool sawWhole = false;
+  for (; i < raw.length(); ++i) {
+    const char ch = raw.charAt(i);
+    if (ch == '.') break;
+    if (ch < '0' || ch > '9') return false;
+    whole = whole * 10 + (int32_t)(ch - '0');
+    if (whole > 1000) return false;
+    sawWhole = true;
+  }
+  if (!sawWhole) return false;
+  int32_t frac = 0;
+  if (i < raw.length()) {
+    // raw.charAt(i) is '.', and exactly one digit must follow it.
+    if (i + 2u != raw.length()) return false;
+    const char ch = raw.charAt(i + 1u);
+    if (ch < '0' || ch > '9') return false;
+    frac = (int32_t)(ch - '0');
+  }
+  const int32_t value = sign * (whole * 10 + frac);
+  if (value < minimum || value > maximum) return false;
+  out = value;
   return true;
 }
 
@@ -3101,6 +3145,29 @@ static void httpFeatureLab() {
 }
 
 
+// Actions-tab visibility toggle. Mirrors httpFeatureLab: the flag is persisted
+// first, then reported back through the shared feature-policy payload.
+// Unlike httpFeatureLab it stops nothing: the tab is presentation, and hiding
+// it leaves the preheat engine exactly as it was (preheat_runtime.h).
+static void httpFeaturePreheat() {
+  bool enabled;
+  if (!httpBoolArg("enabled", enabled)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
+    return;
+  }
+  if (enabled && !activeProfilePreheatSupported()) {
+    server.send(409, "application/json",
+                "{\"ok\":false,\"error\":\"preheat requires the Vehicle/Body CAN\"}");
+    return;
+  }
+  if (!preheatMenuSetEnabled(enabled)) {
+    server.send(500, "application/json",
+                "{\"ok\":false,\"error\":\"Settings could not be saved\"}");
+    return;
+  }
+  server.send(200, "application/json", v3FeaturePolicyJson());
+}
+
 static void httpFeatureDoorCancel() {
   FeatureCfgSnapshot next = featureCfgRuntimeSnapshot();
   if (!activeProfileBodyControlsSupported() && !activeProfileIsYl()) {
@@ -3229,7 +3296,7 @@ static bool resetFirmwareSettingsPreserveProfileAndBle() {
   // old migrations.
   static const char *const clearNamespaces[] = {
     "nag", "summon", "lab3f8", "ulc", "alc293lab", "countrylab", "r79lab", "r79", "lanegraph",
-    "researchcap", "features", "labv3fd"
+    "researchcap", "features", "labv3fd", "preheat"
   };
   bool ok = true;
   for (const char *ns : clearNamespaces) {
@@ -3281,7 +3348,7 @@ static bool resetNvsKeepBleClearApplicationNamespaces() {
   static const char *const clearNamespaces[] = {
     "v3profile", "wifiap", "nag", "summon", "lab3f8", "ulc",
     "alc293lab", "countrylab", "r79lab", "r79", "lanegraph", "researchcap", "features",
-    "canDiag", "t2meta", "labv3fd"
+    "canDiag", "t2meta", "labv3fd", "preheat"
   };
   static_assert(
       sizeof(clearNamespaces) / sizeof(clearNamespaces[0]) ==
@@ -3895,6 +3962,258 @@ static void httpDriverWindowLabOpen() {
   const DriverWindowArmResultPure result = driverWindowLabRequestOpen();
   server.send(result == DRIVER_WINDOW_ARM_OK ? 202 : 409,
               "application/json", driverWindowLabStatsToJson());
+}
+
+// ===========================================================================
+// Battery preheat (Actions tab).
+//
+// The field names below are the contract the tab reads; see
+// docs/actions_tab/README.md. Adding fields is safe,
+// renaming any of them breaks the tab silently.
+// ===========================================================================
+static String preheatStatsToJson() {
+  PreheatRuntimeSnapshot s = {};
+  preheatRuntimeSnapshot((uint32_t)millis(), s);
+
+  String j;
+  j.reserve(1400);
+  JsonWriterArduino jw(j);
+  jw.boolean("ok", true);
+  jw.boolean("supported", s.supported);
+  jw.boolean("enabled", s.enabled);
+  // Auto-off target, in tenths of a degree Celsius rendered with one decimal.
+  // The tab posts it back as targetC, and reads targetReached from the same
+  // predicate the engine switches itself off with - the pack average reaching
+  // the target - so the two cannot disagree.
+  jw.fixed("targetC", (int32_t)s.targetCx10, 1);
+  jw.boolean("targetReached", s.targetReached);
+  // The payload is a fixed constant, so there is no mode to report: the tab reads
+  // lastTxRaw to see what actually went out.
+  jw.boolean("active", s.active);
+  // The live gate, not the history: lastSkipReason still reads BOOT_DELAY
+  // minutes after boot, so a tab that used it could not tell a stalled engine
+  // from a transmitting one. blocked is true exactly when the engine is armed
+  // and a gate is holding it back - the state the strip must never paint as
+  // "Heating" - and blockedReason names that gate. evalAgeMs grows only when the
+  // CAN service stage itself stops running, which the skip counters cannot show
+  // because they freeze along with it.
+  jw.boolean("blocked", s.blocked);
+  jw.string("blockedReason", preheatSkipReasonName(s.evalReason));
+  jw.u32("evalAgeMs", s.evalAgeMs);
+  // The spec declares this field but never defines its threshold, and the car's
+  // own gate (0x212 bit 5) never rises on this firmware - all 268 captured
+  // frames were byte-identical while the pack heated at 8 kW. Reporting false
+  // keeps row 1 on the real state instead of guessing "Battery warm"; the pack
+  // temperature itself is row 2 and the heating state is row 5.
+  jw.boolean("batteryWarm", false);
+  jw.u32("txOk", s.txOk);
+  jw.u32("txFail", s.txFail);
+  jw.u32("lastReason", s.lastReason);
+  jw.boolean("sourceSeen", s.sourceSeen);
+  jw.u32("skipNoSource", s.sourceSkipped);
+  // Witness fields, for a field report that has no CAN log. tripId is the ID the
+  // car's own trip planning was seen on - "0x082", "0x347" on HW4, or "unknown"
+  // until the car has sent one (blockedReason NO_TRIP_ID). srcRaw is the last frame
+  // the car itself sent on it, lastTxRaw the frame this engine sent - a constant
+  // per ID, "AB 50 C8 13 FF 03 8E 14" on 0x082 and "AF 24 9D 1D FF 03 F2 07" on
+  // 0x347, every 100 ms - so the src* booleans describe the car's own claim rather
+  // than a decision this feature made on it.
+  jw.string("tripId", preheatTripIdName(s.tripId));
+  jw.string("srcRaw", s.sourceSeen ? lab3f8RawHex(s.srcRaw, PREHEAT_DLC) : String());
+  jw.u32("srcAgeMs", s.sourceAgeMs);
+  jw.boolean("srcEnergiesValid", s.srcEnergiesValid);
+  jw.boolean("srcRouteBits", s.srcRouteBits);
+  jw.boolean("energyCacheValid", s.energyCacheValid);
+  jw.string("lastTxRaw", s.lastTxValid ? lab3f8RawHex(s.lastTxRaw, PREHEAT_DLC) : String());
+  jw.boolean("packSeen", s.packSeen);
+  jw.fixed("packTempMinC", s.packTempMinCx10, 1);
+  jw.fixed("packTempMaxC", s.packTempMaxCx10, 1);
+  // The car's own average, BMS_thermistorTAvg (0x332 mux 0). It is the number the
+  // auto-off compares AND the one the PACK TEMP cell prints, and the cell
+  // alternates it with the range above. It is read from the car rather than
+  // computed from min/max: across 180 mux-0 frames of the eight captures the
+  // derived pair disagrees with what the car sends in 111 of them, by up to
+  // 0.5 C. The tab does no arithmetic on sensor readings, so it could not be
+  // derived in the browser anyway.
+  jw.fixed("packTempAvgC", s.packAvgCx10, 1);
+  jw.boolean("bmsSeen", s.bmsSeen);
+  jw.boolean("bmsPreconditionAllowed", s.bmsAllowed);
+  jw.boolean("bmsHeatingWorthwhile", s.bmsWorthwhile);
+  jw.boolean("bmsKeepWarmRequest", s.bmsKeepWarm);
+  // 0x252 BMS_maxStationaryHeatPower: what the BMS will ALLOW the pack to be
+  // heated with, not what is flowing. It is a raw telemetry row now rather than
+  // the HEAT POWER cell, because the two are not the same number: a PASSIVE log
+  // read 0.00 kW here in all 1213 of its frames while the drive units held 3.60 kW
+  // each for 34 seconds, and a research capture read 5.00 kW in the
+  // home-route segment where nothing was heating at all. The value is served as
+  // ptHeatLimitKw with the age of the frame it came from.
+  jw.boolean("coolantSeen", s.coolantSeen);
+  jw.fixed("coolantFlowLpm", (int32_t)s.coolantLpmX10, 1);
+  jw.boolean("heatingSeen", s.heatingSeen);
+  // Stator heating, from the drive units' own 10 Hz power frames (0x2E5 front,
+  // 0x266 rear) - the only kW reading of pack heating that decodes on this bus.
+  // The strip prints the two sides as a pair and the HEAT POWER cell as their
+  // sum; statorHeatKw is that sum, computed here so the tab does no arithmetic on
+  // sensor readings.
+  jw.boolean("statorFrontSeen", s.statorFrontSeen);
+  jw.u32("statorFrontAgeMs", s.statorFrontAgeMs);
+  jw.fixed("statorHeatFrontKw", (int32_t)s.statorFrontKwx100, 2);
+  jw.boolean("statorRearSeen", s.statorRearSeen);
+  jw.u32("statorRearAgeMs", s.statorRearAgeMs);
+  jw.fixed("statorHeatRearKw", (int32_t)s.statorRearKwx100, 2);
+  jw.fixed("statorHeatKw",
+           (int32_t)(s.statorFrontKwx100 + s.statorRearKwx100), 2);
+  jw.boolean("heatingActive", s.heatingActive);
+  // Why the engine last switched itself off. The payload is a constant, so a
+  // stator stall is the one failure a field report cannot see in lastTxRaw: the
+  // frame looks correct on the way out and nothing heats. autoOffReason reads
+  // "STATOR_STALL" for exactly that case. This is the ONLY surface of it: the tab
+  // shows the reason in the status chip and paints nothing else -
+  // no red row and no count of the silence - so a stall is read here.
+  jw.string("autoOffReason", preheatAutoOffReasonName(s.autoOffReason));
+  // Per-signal telemetry, each value next to the age of the frame it came from.
+  // The seven signals live in four different IDs, so a single freshness figure
+  // for the card would hide a stale row behind a fresh one.
+  jw.boolean("ptAvgSeen", s.avgSeen);
+  jw.u32("ptAvgAgeMs", s.avgAgeMs);
+  jw.fixed("ptPackAvgC", (int32_t)s.packAvgCx10, 1);
+  jw.boolean("ptMaxPackSeen", s.maxPackSeen);
+  jw.u32("ptMaxPackAgeMs", s.maxPackAgeMs);
+  jw.fixed("ptMaxPackC", (int32_t)s.maxPackCx10, 1);
+  jw.boolean("ptFlowReqSeen", s.flowReqSeen);
+  jw.u32("ptFlowReqAgeMs", s.flowReqAgeMs);
+  jw.fixed("ptFlowReqLpm", (int32_t)s.flowReqLpmX4 * 25, 2);
+  jw.boolean("ptCellTargetSeen", s.cellTargetSeen);
+  jw.u32("ptCellTargetAgeMs", s.cellTargetAgeMs);
+  jw.fixed("ptCellTargetC", (int32_t)s.cellTargetCx4 * 25, 2);
+  jw.boolean("ptHpPowerSeen", s.hpPowerSeen);
+  jw.u32("ptHpPowerAgeMs", s.hpPowerAgeMs);
+  jw.u32("ptHpPowerW", s.hpPowerW);
+  jw.boolean("ptPumpSeen", s.pumpSeen);
+  jw.u32("ptPumpAgeMs", s.pumpAgeMs);
+  jw.u32("ptPumpRpm", s.pumpRpm);
+  // 0x321 byte3 VCFRONT_tempAmbient: the car's own outside-air reading. A witness
+  // for the strip's AMBIENT cell, measured constant per session in the captures
+  // (8.5 C in the reference capture, 11.5 C in a PASSIVE capture).
+  jw.boolean("ptAmbientSeen", s.ambientSeen);
+  jw.u32("ptAmbientAgeMs", s.ambientAgeMs);
+  jw.fixed("ptAmbientC", (int32_t)s.ambientCx10, 1);
+  // 0x252 BMS_maxStationaryHeatPower: a permission from the BMS, not a flow.
+  jw.boolean("ptHeatLimitSeen", s.heatSeen);
+  jw.u32("ptHeatLimitAgeMs", s.heatAgeMs);
+  jw.fixed("ptHeatLimitKw", (int32_t)s.heatKwx100, 2);
+  // Diagnostics past the contract, for the read-only support card.
+  jw.u32("echoCount", s.echoCount);
+  jw.u32("latUs", s.latUs);
+  jw.u32("lastTxAgeMs", s.lastTxAgeMs);
+  jw.u32("maxTxGapMs", s.maxTxGapMs);
+  jw.u32("autoOffCount", s.autoOffCount);
+  jw.string("lastSkipReason", preheatSkipReasonName(s.lastSkipReason));
+  jw.u32("skipDisabled", preheatRuntimeSkipCount(PREHEAT_SKIP_DISABLED));
+  jw.u32("skipUnsupported", preheatRuntimeSkipCount(PREHEAT_SKIP_UNSUPPORTED));
+  jw.u32("skipBootDelay", preheatRuntimeSkipCount(PREHEAT_SKIP_BOOT_DELAY));
+  jw.u32("skipWarmup", preheatRuntimeSkipCount(PREHEAT_SKIP_WARMUP));
+  jw.u32("skipBusSilent", preheatRuntimeSkipCount(PREHEAT_SKIP_BUS_SILENT));
+  jw.u32("skipNoTripId", preheatRuntimeSkipCount(PREHEAT_SKIP_NO_TRIP_ID));
+  // Immediate reassertion, counted per armed session. carConflict is how many of
+  // the car's own trip frames disagreed with ours, replyTx how many of them we
+  // answered, replyLat* how long that took from the car's frame. heatDrops counts
+  // hot->cold edges of the heat witness while transmitting, heatDropsNearCar those
+  // within 3 s of a disagreeing car frame - the field verdict on this revision.
+  jw.u32("carConflict", s.carConflict);
+  jw.u32("replyTx", s.replyTx);
+  jw.u32("replyFail", s.replyFail);
+  jw.u32("replyLatLastMs", s.replyLatLastMs);
+  jw.u32("replyLatMaxMs", s.replyLatMaxMs);
+  jw.u32("heatDrops", s.heatDrops);
+  jw.u32("heatDropsNearCar", s.heatDropsNearCar);
+  // Thermal schematic: the tab's own drawing of the service "Thermal" screen. Each
+  // value carries the age of its source frame (UINT32_MAX = never seen); the tab
+  // prints a dash for anything older than its window (5 s for the 10 Hz frames,
+  // 15 s for the slow ones). C and LPM are x10 fixed point.
+  jw.u32("thVitalsAgeMs", s.thVitalsAgeMs);
+  jw.u32("thPumpBatRpm", s.thPumpBatRpm);
+  jw.u32("thPumpPtRpm", s.thPumpPtRpm);
+  jw.u32("thFanRpm", s.thFanRpm);
+  // Coolant valve, 0x201 index 1: where it is (0 SERIES, 1 PARALLEL, 2 BLEND,
+  // 3 AMBIENT_SOURCE) and what the heat pump asks (2 SERIES_BYPASS, 4 AMBIENT...);
+  // thHeatPump from 0x3A1 says Octovalve (true) or the legacy 4-way valve.
+  jw.u32("thModeAgeMs", s.thModeAgeMs);
+  jw.u32("thValveMode", s.thValveMode);
+  jw.u32("thHpReq", s.thHpReq);
+  jw.u32("thSysAgeMs", s.thSysAgeMs);
+  jw.boolean("thHeatPump", s.thHeatPump);
+  jw.u32("thInletsAgeMs", s.thInletsAgeMs);
+  jw.fixed("thBatInletC", s.thBatInletCx10, 1);
+  jw.fixed("thPtInletC", s.thPtInletCx10, 1);
+  jw.u32("thFlowsAgeMs", s.thFlowsAgeMs);
+  jw.fixed("thFlowBatLpm", (int32_t)s.thFlowBatLpmX10, 1);
+  jw.fixed("thFlowPtLpm", (int32_t)s.thFlowPtLpmX10, 1);
+  jw.u32("thPcsAgeMs", s.thPcsAgeMs);
+  jw.fixed("thDcdcC", s.thDcdcCx10, 1);
+  jw.fixed("thChargerC", s.thChargerCx10, 1);
+  jw.u32("thInvFrontAgeMs", s.thInvFrontAgeMs);
+  jw.i32("thInvFrontC", s.thInvFrontC);
+  jw.u32("thInvRearAgeMs", s.thInvRearAgeMs);
+  jw.i32("thInvRearC", s.thInvRearC);
+  jw.u32("thApAgeMs", s.thApAgeMs);
+  jw.i32("thApC", s.thApC);
+  jw.u32("thInfoAgeMs", s.thInfoAgeMs);
+  jw.i32("thInfoC", s.thInfoC);
+  // True once more answers went out in a second than the car could ever ask for:
+  // a loop, and the engine then runs on the 10 Hz frame alone for the session.
+  jw.boolean("replyBreaker", s.replyBreaker);
+  jw.finish();
+  return j;
+}
+
+static void httpPreheatStats() {
+  server.send(200, "application/json", preheatStatsToJson());
+}
+
+// Accepts enabled, targetC, or both. The two are applied in that order's
+// reverse on purpose: a request that raises the target and enables in one call
+// must not be undone by the auto-shutoff acting on the old target.
+static void httpPreheatSet() {
+  const bool hasEnabled = server.hasArg("enabled");
+  const bool hasTarget = server.hasArg("targetC");
+  if (!hasEnabled && !hasTarget) {
+    server.send(400, "application/json",
+                "{\"ok\":false,\"error\":\"enabled or targetC is required\"}");
+    return;
+  }
+  bool enabled = false;
+  if (hasEnabled && !httpBoolArg("enabled", enabled)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
+    return;
+  }
+  int32_t targetCx10 = 0;
+  if (hasTarget &&
+      !httpDecimalTenthsInRange(server.arg("targetC"), PREHEAT_TARGET_MIN_CX10,
+                                PREHEAT_TARGET_MAX_CX10, targetCx10)) {
+    server.send(400, "application/json",
+                "{\"ok\":false,\"error\":\"targetC must be 20.0..50.0\"}");
+    return;
+  }
+  // Turning the engine off is always allowed, so an unsupported profile can
+  // still be returned to a safe state.
+  if (((hasEnabled && enabled) || hasTarget) &&
+      !activeProfilePreheatSupported()) {
+    server.send(409, "application/json",
+                "{\"ok\":false,\"error\":\"preheat requires the Vehicle/Body CAN\"}");
+    return;
+  }
+  if (hasTarget && !preheatSetTargetCx10(targetCx10)) {
+    server.send(500, "application/json",
+                "{\"ok\":false,\"error\":\"Settings could not be saved\"}");
+    return;
+  }
+  if (hasEnabled && !preheatSetEnabled(enabled)) {
+    server.send(500, "application/json",
+                "{\"ok\":false,\"error\":\"Settings could not be saved\"}");
+    return;
+  }
+  server.send(200, "application/json", preheatStatsToJson());
 }
 
 static String summonHeartbeatOverrideStatsToJson() {
@@ -5595,6 +5914,9 @@ static void webTask(void *arg) {
               httpSummonHeartbeatOverrideUpdate);
     server.on("/api/features/status", HTTP_GET, httpFeatureStatus);
     server.on("/api/features/lab", HTTP_POST, httpFeatureLab);
+    server.on("/api/features/preheat", HTTP_POST, httpFeaturePreheat);
+    server.on("/api/preheat/stats", HTTP_GET, httpPreheatStats);
+    server.on("/api/preheat/set", HTTP_POST, httpPreheatSet);
     server.on("/api/features/door-cancel", HTTP_POST, httpFeatureDoorCancel);
     server.on("/api/features/ap-drive-profile", HTTP_POST, httpFeatureApDriveProfile);
     server.on("/api/features/banned", HTTP_POST, httpFeatureBanned);

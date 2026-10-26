@@ -100,7 +100,8 @@ enum S3xyAction : uint8_t {
   S3XY_ACTION_AUTO_BLINKER_TOGGLE = 9,
   S3XY_ACTION_PERFORMANCE_MODE = 10,
   S3XY_ACTION_LEFT_BLINKER = 11,
-  S3XY_ACTION_RIGHT_BLINKER = 12
+  S3XY_ACTION_RIGHT_BLINKER = 12,
+  S3XY_ACTION_BATTERY_PREHEAT = 13
 };
 
 enum S3xyCommandType : uint8_t {
@@ -242,6 +243,7 @@ static volatile uint32_t s3xyTlsscActionPending = 0;
 static volatile uint32_t s3xyAutoBlinkerActionPending = 0;
 static volatile uint32_t s3xyLeftBlinkerActionPending = 0;
 static volatile uint32_t s3xyRightBlinkerActionPending = 0;
+static volatile uint32_t s3xyPreheatActionPending = 0;
 
 enum S3xyPendingClearScope : uint8_t {
   S3XY_PENDING_CAN_RECOVERY,
@@ -260,6 +262,7 @@ static void s3xyClearPendingActionsLocked(S3xyPendingClearScope scope) {
   s3xyResearchCaptureResetPending = 0;
   s3xyTlsscActionPending = 0;
   s3xyAutoBlinkerActionPending = 0;
+  s3xyPreheatActionPending = 0;
   if (scope == S3XY_PENDING_ALL) {
     s3xyLeftBlinkerActionPending = 0;
     s3xyRightBlinkerActionPending = 0;
@@ -338,6 +341,7 @@ static const char *s3xyActionCode(uint8_t action) {
   if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) return "auto_blinker_toggle";
   if (action == S3XY_ACTION_LEFT_BLINKER) return "left_blinker";
   if (action == S3XY_ACTION_RIGHT_BLINKER) return "right_blinker";
+  if (action == S3XY_ACTION_BATTERY_PREHEAT) return "battery_preheat";
   return "none";
 }
 
@@ -354,6 +358,7 @@ static const char *s3xyActionLabel(uint8_t action) {
   if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) return "Auto Blinker Toggle";
   if (action == S3XY_ACTION_LEFT_BLINKER) return "Left Blinker";
   if (action == S3XY_ACTION_RIGHT_BLINKER) return "Right Blinker";
+  if (action == S3XY_ACTION_BATTERY_PREHEAT) return "Battery Preheating";
   return "None";
 }
 
@@ -363,6 +368,7 @@ static bool s3xyActionSupportedForCurrentProfile(uint8_t action) {
   if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) return activeProfileAdvancedEapSupported();
   if (action == S3XY_ACTION_LEFT_BLINKER || action == S3XY_ACTION_RIGHT_BLINKER)
     return activeTurnSignalVariant != TURN_SIGNAL_UNSET;
+  if (action == S3XY_ACTION_BATTERY_PREHEAT) return activeProfilePreheatSupported();
   return true;
 }
 
@@ -380,6 +386,7 @@ static bool s3xyActionParseKnown(const String &s, uint8_t &out) {
   if (s == "auto_blinker_toggle" || s == "Auto Blinker Toggle") { out = S3XY_ACTION_AUTO_BLINKER_TOGGLE; return true; }
   if (s == "left_blinker" || s == "Left Blinker") { out = S3XY_ACTION_LEFT_BLINKER; return true; }
   if (s == "right_blinker" || s == "Right Blinker") { out = S3XY_ACTION_RIGHT_BLINKER; return true; }
+  if (s == "battery_preheat" || s == "Battery Preheating") { out = S3XY_ACTION_BATTERY_PREHEAT; return true; }
   return false;
 }
 
@@ -1203,6 +1210,7 @@ static void s3xyRunMappedAction(uint8_t slot, uint8_t action, const char *gestur
   else if (action == S3XY_ACTION_AUTO_BLINKER_TOGGLE) s3xyAutoBlinkerActionPending++;
   else if (action == S3XY_ACTION_LEFT_BLINKER) s3xyLeftBlinkerActionPending++;
   else if (action == S3XY_ACTION_RIGHT_BLINKER) s3xyRightBlinkerActionPending++;
+  else if (action == S3XY_ACTION_BATTERY_PREHEAT) s3xyPreheatActionPending++;
   portEXIT_CRITICAL(&s3xyMux);
 #if S3XY_DIAGNOSTICS_ENABLED
   String d = String(gesture ? gesture : "gesture") + " -> " + s3xyActionLabel(action);
@@ -3064,6 +3072,7 @@ static void s3xyMapperTask(void *arg) {
     bool runAction = false, runAccel = false, runPerformance = false, runResearchCapture = false, runResearchReset = false;
     bool runTlsscToggle = false, runAutoBlinkerToggle = false;
     bool runLeftBlinker = false, runRightBlinker = false;
+    bool runPreheatToggle = false;
     uint8_t researchCaptureLabelSlot = RESEARCH_CAPTURE_LABEL_NONE;
     portENTER_CRITICAL(&s3xyMux);
     if (s3xyActionPending > 0) { s3xyActionPending--; runAction = true; }
@@ -3085,6 +3094,7 @@ static void s3xyMapperTask(void *arg) {
     if (s3xyAutoBlinkerActionPending > 0) { s3xyAutoBlinkerActionPending--; runAutoBlinkerToggle = true; }
     if (s3xyLeftBlinkerActionPending > 0) { s3xyLeftBlinkerActionPending--; runLeftBlinker = true; }
     if (s3xyRightBlinkerActionPending > 0) { s3xyRightBlinkerActionPending--; runRightBlinker = true; }
+    if (s3xyPreheatActionPending > 0) { s3xyPreheatActionPending--; runPreheatToggle = true; }
     portEXIT_CRITICAL(&s3xyMux);
     if (runAction) handleS3xySingleAction();
     if (runAccel) requestPedalMapToggleFromButton();
@@ -3093,6 +3103,7 @@ static void s3xyMapperTask(void *arg) {
     if (runAutoBlinkerToggle) toggleAutoBlinkerEnabledFromButton();
     if (runLeftBlinker && !requestTurnSignalPulseFromButton(1)) s3xyLogPush(S3XY_LOG_INFO, "Left Blinker unavailable");
     if (runRightBlinker && !requestTurnSignalPulseFromButton(2)) s3xyLogPush(S3XY_LOG_INFO, "Right Blinker unavailable");
+    if (runPreheatToggle) togglePreheatEnabledFromButton();
     if (runResearchReset) {
       researchCaptureReset();
       s3xyLogPush(S3XY_LOG_INFO, "Research Capture Reset · DONE");

@@ -57,6 +57,7 @@
 #include "nvs_keep_ble_reset_pure.h"
 #include "tsl9_input_scheduler_pure.h"
 #include "driver_window_lab_pure.h"
+#include "preheat_pure.h"
 #include "driver_monitor_capture_pure.h"
 #include "r79_fixed_policy_pure.h"
 #include "r79_dms_composition_pure.h"
@@ -78,6 +79,7 @@
 #include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
 #include "continuous_ap_runtime.h"
+#include "preheat_runtime.h"
 #include "web_api.h"
 #include "can_runtime.h"
 #include "can_usb_logger_task.h"
@@ -211,6 +213,7 @@ void setup() {
   s3xyAutoLoadConfig();
   nvsSchemaFinalize();
   canBusOffPersistenceLoad();
+  preheatMenuLoad();
   if (labMenuEnabled) {
     researchCaptureInit();
     driverMonitorCaptureInit();

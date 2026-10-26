@@ -10,16 +10,9 @@
 // Recovery invalidates only observations owned by the controller that reset.
 // A new global epoch still cancels in-flight TX, while freshness for an
 // unaffected, physically-live bus may cross the local recovery boundary.
-static uint8_t canPhysicalFreshMaskNow(uint32_t now) {
-  uint8_t mask = SUMMON_BUS_NONE;
-  const uint32_t lastA = lastCanAFrameMs;
-  const uint32_t lastB = lastCanBFrameMs;
-  if (lastA != 0 && (uint32_t)(now - lastA) <= RECOVERY_BUS_FRESH_MS)
-    mask = (uint8_t)(mask | SUMMON_BUS_A);
-  if (lastB != 0 && (uint32_t)(now - lastB) <= RECOVERY_BUS_FRESH_MS)
-    mask = (uint8_t)(mask | SUMMON_BUS_B);
-  return mask;
-}
+// canPhysicalFreshMaskNow() itself lives in can_core.h, which is included
+// before the feature runtimes, so battery preheat shares this one definition of
+// "the bus is physically alive" instead of duplicating it.
 
 static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   const uint32_t now = (uint32_t)millis();
@@ -111,6 +104,7 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   tsl9InputRequestCancel(TSL9_INPUT_FAILURE_CAN_UNAVAILABLE_PURE, true);
   continuousApResetForEpoch(barrierLocked ? canTxBarrierState.epoch : 0u);
   driverWindowLabResetRuntimeUnderTxBarrier();
+  preheatRuntimeResetUnderTxBarrier();
   summonHeartbeatOverrideResetUnderTxBarrier();
 
   // These transient feature requests are inexpensive to restart and are cleared
@@ -423,11 +417,19 @@ static void canTaskMcp(void* arg) {
       lastCanAFrameMs = frameNow;
       mcpRxCount++;
       canRxObserve(CAN_RX_BUS_PARTY, frameNow);
-      if (canUsbPassive()) continue;
       // All downstream Model YL decoders and TX decisions expect standard
       // 11-bit DATA frames. Aggregate telemetry still counts rejected frames.
       if ((rxf.can_id & 0xC0000000UL) != 0) continue;
       const uint16_t partyId = (uint16_t)(rxf.can_id & 0x7FF);
+      // Battery preheat: on Standard Body+Chassis profiles the Vehicle/Body bus
+      // is CAN A, and this ingest self-gates on exactly that topology. It is a
+      // passive RX observation that only needs the identifier, so it stays
+      // above the USB-passive bail-out: a listen-only capture must not blind an
+      // engine that is otherwise armed and transmitting.
+      preheatRuntimeIngestCanA(rxf);
+      // Identification remains a passive observation. Only the existing
+      // decoders and TX paths are suppressed by USB passive mode.
+      if (canUsbPassive()) continue;
       continuousApObserveStock(0, partyId, rxf.data, rxf.can_dlc, countryRxEpoch, prefetchedRxMs[bi]);
       canTxMarkFresh(CAN_TX_FRESH_PARTY); // physical CAN A fresh in this recovery epoch
       bootCaptureObservePartyFrame(partyId, rxf.can_dlc, rxf.data);
@@ -607,6 +609,11 @@ static void canTaskTwai(void* arg) {
       }
       lastCanBFrameMs = frameNow;
       canRxObserve(CAN_RX_BUS_VH, frameNow);
+      // Battery preheat: on YL_PARTY_VH the Vehicle/Body bus is CAN B (VH), and
+      // this ingest self-gates on exactly that topology. It only needs the
+      // identifier, so it precedes the USB-passive bail-out: a listen-only
+      // capture must not blind an engine that is otherwise armed.
+      if (!f.extd && !f.rtr) preheatRuntimeIngestCanB(f);
       // Only standard 11-bit DATA frames may reach Tesla decoders or TX paths.
       if (!canUsbPassive() && !f.extd && !f.rtr) {
         canTxMarkFresh(CAN_TX_FRESH_VH);
@@ -710,6 +717,7 @@ static void canTaskTwai(void* arg) {
                                      (uint32_t)millis());
     refreshSummonState();
     driverWindowLabServiceTick();
+    preheatRuntimeTick();
     r79TransportTick();
     // R79 immediate/retry/periodic work always gets first access to the CAN-B
     // TX queue. TSL9 input assistance is intentionally lower priority.

@@ -100,6 +100,7 @@ class BleContracts(unittest.TestCase):
             ('S3XY_ACTION_PERFORMANCE_MODE', 10, 'performance_mode'),
             ('S3XY_ACTION_LEFT_BLINKER', 11, 'left_blinker'),
             ('S3XY_ACTION_RIGHT_BLINKER', 12, 'right_blinker'),
+            ('S3XY_ACTION_BATTERY_PREHEAT', 13, 'battery_preheat'),
         ]
         for name, value, code in expected:
             assert re.search(rf'\b{name}\s*=\s*{value}\b', s3xy), (name, value)

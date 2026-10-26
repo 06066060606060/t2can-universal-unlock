@@ -773,6 +773,22 @@ static constexpr uint32_t RECOVERY_TASK_HEARTBEAT_TIMEOUT_MS = 3000;
 static constexpr uint32_t RECOVERY_TASK_STOP_SETTLE_MS = 50;
 static constexpr uint32_t RECOVERY_TWAI_WAIT_MS = 1800;
 
+// Which physical buses have delivered a frame inside the recovery freshness
+// window. A bus that has never delivered one is excluded, so the 0 timestamp
+// keeps its "never seen" meaning instead of reading as "seen at boot".
+// Shared by the recovery invalidation path (can_runtime.h) and by features that
+// must not transmit onto a silent bus, such as battery preheat.
+static uint8_t canPhysicalFreshMaskNow(uint32_t now) {
+  uint8_t mask = SUMMON_BUS_NONE;
+  const uint32_t lastA = lastCanAFrameMs;
+  const uint32_t lastB = lastCanBFrameMs;
+  if (lastA != 0 && (uint32_t)(now - lastA) <= RECOVERY_BUS_FRESH_MS)
+    mask = (uint8_t)(mask | SUMMON_BUS_A);
+  if (lastB != 0 && (uint32_t)(now - lastB) <= RECOVERY_BUS_FRESH_MS)
+    mask = (uint8_t)(mask | SUMMON_BUS_B);
+  return mask;
+}
+
 static void requestCanSubsystemRestart(uint8_t reason, uint8_t diagReason);
 
 // ═══════════════════════════════════════════════════════════════
