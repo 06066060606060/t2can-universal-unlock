@@ -10,11 +10,16 @@
 
 # T2CAN Universal Unlock v3.29.1
 
-**Major Universal Release**  
+**Major Universal Release for Lilygo T2CAN**  
 **Release date:** 10 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
+### Discord
+Join Discord server for more info:
+https://discord.gg/euPbYG8Npc
+
+---
 
 **v3.28+ **	
 - Continuous AP fix   
@@ -92,11 +97,20 @@
 
 | Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
 |---|:---:|:---:|:---:|:---:|
-| **Model YL · Party + VH** | ✅ | ✅ | ✅ | ✅ |
+| **Model YL · Party + Body** | ✅ | ✅ | ✅ | ✅ |
 | **Standard Model 3/Y · Body + Chassis** | ❌✅ | ✅ | ✅ | ✅ | 
 | **Standard Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
 
 > Model 3 Highland requires selecting the installed turn-control type during profile setup. Other supported profiles automatically use the Stalk configuration.
+
+## 🔧 Hardware Target
+
+This code is adapted for the **LilyGO / T-2Can**.
+
+| Device | CAN Interface | CAN Bus | Function |
+|---|---|---|---| 
+| LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
+| LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
 
 ## 🧩 Main features
 
