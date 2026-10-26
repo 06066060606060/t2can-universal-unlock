@@ -8,10 +8,10 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.29.1
+# T2CAN Universal Unlock v3.29.2
 
 **Major Universal Release for Lilygo T2CAN**  
-**Release date:** 10 October 2026  
+**Release date:** 26 October 2026  
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
@@ -19,7 +19,9 @@
 Join Discord server for more info:
 https://discord.gg/euPbYG8Npc
 
----
+**v3.29.2 **	 
+Added: 
+Actions tab: battery preheat + Thermal view - by 3dfx 
 
 **v3.28+ **	
 - Continuous AP fix   
