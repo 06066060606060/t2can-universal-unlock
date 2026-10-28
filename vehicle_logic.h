@@ -1349,12 +1349,16 @@ static bool r79FreshGearRawLocked(uint32_t now, uint8_t &rawOut) {
 // Fresh one-sided ACA/SPR evidence is used only to avoid entering manual
 // suppression during the first moments of a remote Summon startup. It is not a
 // confirmed Summon session and therefore never labels the dashboard SUMMON.
+// ACA alone is no remote-start evidence. 0x118 bit 50 is DI_autonomyControlActive,
+// set whenever the DI is under autonomous control — TACC and Autopilot included. Counting it here
+// kept R79 injecting after a steering-wheel Autosteer disengage with cruise kept (the manual
+// suppression could never re-enter), which blocked re-engaging Autosteer.
+// SPR (0x3F8 UI_selfParkRequest) only comes from a real Summon / self-park request and stays the
+// evidence; the confirmed Summon session (ACA + latched SPR) is unchanged.
 static bool r79RemoteStartupEvidenceLocked(uint32_t now) {
-  const bool acaEvidence = acaValid && lastAca && lastAcaMillis != 0 &&
-      summonAgeFreshPure(now, lastAcaMillis, SUMMON_ACA_FRESH_MS);
   const bool sprEvidence = sprValid && lastSprRaw != 0 && lastSprMillis != 0 &&
       summonAgeFreshPure(now, lastSprMillis, SUMMON_SPR_FRESH_MS);
-  return acaEvidence || sprEvidence;
+  return sprEvidence;
 }
 
 // stateMux must already be held. Priority never uses the v2.6 compatibility
