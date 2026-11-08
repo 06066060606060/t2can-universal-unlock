@@ -12,7 +12,7 @@ static inline bool continuousApConfigDecodePure(uint32_t raw, ContApConfig &out)
   out.enabled=(raw&4u)!=0; out.method=(ContApMethod)(raw&3u); return true;
 }
 static inline ContApRoute continuousApGestureRoutePure(uint8_t p, uint8_t t, ContApMethod m) {
-  if(!vehicleProfileTopologyValid(p,t)||p==VEHICLE_MODEL_YL) return ContApRoute::None;
+  if(!vehicleProfileTopologyValid(p,t)||vehicleProfileUsesYlTopology(p)) return ContApRoute::None;
   const bool legacy=p==VEHICLE_MODEL_Y_LEGACY||p==VEHICLE_MODEL_3_LEGACY;
   if(legacy) return t==VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS && m==ContApMethod::StalkDouble
       ? ContApRoute::BodyA:ContApRoute::None;

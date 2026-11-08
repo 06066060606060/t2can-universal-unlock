@@ -81,7 +81,7 @@ static String nagCfgToJson() {
   jw.boolean("tsl9LegacyRouteSelectable",
       vehicleProfileLegacyTsl9RouteSelectable(
           activeVehicleProfile, activeVehicleTopology));
-  jw.string("tsl9EffectiveRoute", activeProfileIsYl()
+  jw.string("tsl9EffectiveRoute", activeProfileUsesYlTopology()
       ? "PARTY_0x399" : nagTsl9Body39BSelected()
           ? "BODY_0x39B" : "CHASSIS_0x399");
   jw.boolean("pauseAtZeroSpeed", c.pauseAtZeroSpeed);
@@ -1442,6 +1442,10 @@ static void canTxTraceRawHex(const uint8_t *data, uint8_t dlc,
 static const char *canATxTraceSourceName(uint8_t source, uint16_t id) {
   const char *tagged = canTxTraceSourceName(source);
   if (tagged) return tagged;
+  if (activeProfileIsModelS2017()) {
+    if (id == 0x045u) return "AUTO_BLINKER_STALK";
+    if (id == 0x3EEu) return "R79_SUMMON_TLSSC";
+  }
   if (id == (uint16_t)(nagCfg.targetId & 0x7FFU)) return "NAG";
   switch (id) {
     case 0x293: return "AUTO_LANE_CHANGE_ENABLE";
@@ -2821,7 +2825,7 @@ static String vehicleProfileStatusJson() {
 }
 
 static String v3FeaturePolicyJson() {
-  const bool doorCancelReported = (activeProfileBodyControlsSupported() || activeProfileIsYl()) && doorOpenCancelEnabled;
+  const bool doorCancelReported = (activeProfileBodyControlsSupported() || activeProfileUsesYlTopology()) && doorOpenCancelEnabled;
   String j;
   j.reserve(390);
   JsonWriterArduino jw(j);
@@ -2906,7 +2910,7 @@ static String isaSuppressionControlJson() {
   jw.boolean("enabled", isaSuppressionControlSnapshot());
   jw.boolean("supported", activeProfileIsaSuppressionSupported());
   jw.boolean("active", isaSuppressionControlActive());
-  jw.string("route", activeProfileIsYl()
+  jw.string("route", activeProfileUsesYlTopology()
       ? "PARTY_0x399" : "CHASSIS_0x399");
   jw.u32("modified", modified);
   jw.u32("txOk", txOk);
@@ -3024,7 +3028,7 @@ static void httpProfileSelect() {
   }
 
   uint8_t topology = (uint8_t)vehicleProfileDefaultTopology((uint8_t)profile);
-  if ((uint8_t)profile != VEHICLE_MODEL_YL) {
+  if (!vehicleProfileUsesYlTopology((uint8_t)profile)) {
     if (!server.hasArg("topology")) {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing topology\"}");
       return;
@@ -3103,7 +3107,7 @@ static void httpFeatureLab() {
 
 static void httpFeatureDoorCancel() {
   FeatureCfgSnapshot next = featureCfgRuntimeSnapshot();
-  if (!activeProfileBodyControlsSupported() && !activeProfileIsYl()) {
+  if (!activeProfileBodyControlsSupported() && !activeProfileUsesYlTopology()) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"door cancel requires Body CAN\"}");
     return;
   }

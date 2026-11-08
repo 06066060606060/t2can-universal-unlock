@@ -60,7 +60,7 @@ static void bootCaptureObservePartyFrame(uint16_t id, uint8_t dlc, const uint8_t
   if (id == 0x399 && dlc >= 1)
     bootCaptureMarkOnce(&bootCapFirst399Ms);
 
-  if (id == 0x24A && dlc >= 8)
+  if (id == (activeProfileIsModelS2017() ? 0x249u : 0x24Au) && dlc >= 8)
     bootCaptureMarkOnce(&bootCapFirstParty24AMs);
 
   if (id == 0x370 && dlc >= 4 &&
@@ -891,7 +891,7 @@ static bool nagTsl9Body39BSelected() {
 }
 
 static bool nagTsl9Chassis399Selected() {
-  return !activeProfileIsYl() && activeCanBIsChassis() &&
+  return !activeProfileUsesYlTopology() && activeCanBIsChassis() &&
       activeProfileNagTsl9Supported() && !nagTsl9Body39BSelected();
 }
 
@@ -1704,7 +1704,7 @@ static Tsl9DasTransformResultPure nagTsl9TransformStock(
 }
 
 static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
-  const bool yl399Route = activeProfileIsYl();
+  const bool yl399Route = activeProfileUsesYlTopology();
   const bool legacyBody39BRoute = nagTsl9Body39BSelected();
   const bool handsOnRoute = activeProfileNagTsl9Supported() &&
       (yl399Route || legacyBody39BRoute);
@@ -1784,13 +1784,16 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
 
   (void)nagProcessTsl9Mcp(rxf);
 
-  const bool ylProfile = activeProfileIsYl();
+  const bool ylProfile = activeProfileUsesYlTopology();
   // Model Y L reads DAS/Summon status on CAN A / Party. Standard 3/Y
   // receives the corresponding status from Chassis CAN B regardless of whether
   // CAN A is configured as Body or Party, so only YL runs these handlers here.
   if (ylProfile) {
     switch (id) {
-      case 280: if (dlc >= 7) handle280(rxf.data); break;
+      case 280:
+        if (activeProfileIsModelS2017() ? dlc == 6u : dlc >= 7u)
+          handle280(rxf.data);
+        break;
       case 390: if (dlc >= 8) handle390(rxf.data); break;
       case 921:
         if (dlc >= 6) handle921(rxf.data, dlc);

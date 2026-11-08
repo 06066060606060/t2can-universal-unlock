@@ -26,15 +26,15 @@ static inline SummonRoutePure summonRoutePure(uint8_t profileId, uint8_t topolog
   SummonRoutePure r = {};
   if (!vehicleProfileTopologyValid(profileId, topology)) return r;
 
-  if (profileId == VEHICLE_MODEL_YL && topology == VEHICLE_TOPOLOGY_YL_PARTY_VH) {
+  if (vehicleProfileUsesYlTopology(profileId) && topology == VEHICLE_TOPOLOGY_YL_PARTY_VH) {
     r.valid = true;
     r.gearBusMask = SUMMON_BUS_A;
     r.dasBusMask = SUMMON_BUS_A;
     r.sprBusMask = SUMMON_BUS_B;
-    r.transportBusMask = SUMMON_BUS_B;
+    r.transportBusMask = profileId == VEHICLE_MODEL_S_2017 ? SUMMON_BUS_A : SUMMON_BUS_B;
     // V2.6 compatibility transport: only the bus carrying stock 0x3FD must
     // be fresh when R79 is emitted. Party remains the source of gear/AP state.
-    r.requiredTxFreshMask = SUMMON_BUS_B;
+    r.requiredTxFreshMask = r.transportBusMask;
     // The YL 0x186 samples captured so far do not validate the generic
     // data[2] gear mapping. Keep 0x118 authoritative until separately proven.
     r.allow186Fallback = false;

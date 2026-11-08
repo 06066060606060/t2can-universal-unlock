@@ -162,7 +162,33 @@ static bool r79Hw3Active() {
 }
 
 
-// This helper is only used for physical CAN B clones. Body never overlays CAN B.
+// The twai_message_t here is a payload container; Model S sends it on MCP CAN A.
+static bool autopilotControlTransportReady() {
+  return activeProfileIsModelS2017() ? mcpReady : twaiReady;
+}
+static bool autopilotControlAdmissionOpen() {
+  return activeProfileIsModelS2017() ? mcpReady : twaiNonSummonAdmissionOpen();
+}
+// Caller holds canTxBarrierMutex. Never re-enter the barrier through a send wrapper.
+static esp_err_t autopilotControlTransmitLocked(const twai_message_t *msg, uint16_t waitMs) {
+  if (!activeProfileIsModelS2017()) return twai_transmit(msg, pdMS_TO_TICKS(waitMs));
+  if (!msg || msg->identifier != 0x3EEu || msg->data_length_code != 8u || msg->extd || msg->rtr ||
+      canTxAdministrativeHold || !mcpReady ||
+      !canTxBarrierAllowsMaskedPure(canTxBarrierState, canTxBarrierState.epoch, CAN_TX_FRESH_PARTY))
+    return ESP_ERR_INVALID_STATE;
+  struct can_frame out = {};
+  out.can_id = 0x3EEu;
+  out.can_dlc = 8u;
+  memcpy(out.data, msg->data, 8u);
+  const MCP2515::ERROR result = Can_A.sendMessage(&out);
+  const bool ok = result == MCP2515::ERROR_OK;
+  canATraceRecordTx(&out, ok ? MCP_TX_OK : MCP_TX_SEND_ERROR, result, CAN_TX_TRACE_SOURCE_DEFAULT);
+  if (ok) { ++mcpTxOk; mcpTxFailConsecutive = 0; }
+  else { ++mcpTxFail; if (mcpTxFailConsecutive < 255u) ++mcpTxFailConsecutive; }
+  return ok ? ESP_OK : ESP_FAIL;
+}
+
+// Profile autopilot-control clones: CAN B normally, CAN A on Model S 2017.
 // The display-only/DMS/ULC stock clones use the ordinary epoch/freshness and
 // non-Summon admission rules. They never apply the R79 bit18/19/47 transform.
 static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
@@ -171,25 +197,25 @@ static esp_err_t mux1DisplayTransmit(const twai_message_t *msg,
                                      bool requireVisionChange,
                                      uint32_t receivedMs = (uint32_t)millis(),
                                      bool requireDms = false) {
-  if (!msg || msg->extd || msg->rtr || msg->identifier != 0x3FDu ||
+  if (!msg || msg->extd || msg->rtr || msg->identifier != activeAutopilotControlId() ||
       msg->data_length_code != 8u || readMuxID(msg->data) != 1u) return ESP_ERR_INVALID_ARG;
   const uint32_t displayGeneration = __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
     return ESP_ERR_INVALID_STATE;
   twai_message_t out = *msg;
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
+  if (!canTxAdministrativeHold && autopilotControlTransportReady() &&
       vehicleProfileTopologyValid(activeVehicleProfile, activeVehicleTopology) &&
-      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, requiredFreshMask) &&
-      twaiNonSummonAdmissionOpen()) {
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, expectedEpoch, activeProfileIsModelS2017() ? CAN_TX_FRESH_PARTY : requiredFreshMask) &&
+      autopilotControlAdmissionOpen()) {
     const bool displayGenerationValid = displayGeneration ==
         __atomic_load_n(&r79ApGateGeneration, __ATOMIC_ACQUIRE);
     const bool stockFresh = (uint32_t)((uint32_t)millis() - receivedMs) <= VISION_CONTROL_FRESH_MS_PURE;
     const bool visionChanged = stockFresh && visionControlApplyFinal(out.data, VISION_CONTROL_CHASSIS_PURE);
     const bool dmsChanged = r79DmsApplyFinal(out.data);
     if ((!requireDms || dmsChanged) && (!requireVisionChange || (displayGenerationValid && visionChanged))) {
-      err = twai_transmit(&out, 0);
-      canBTraceRecordTx(&out, err);
+      err = autopilotControlTransmitLocked(&out, 0);
+      if (!activeProfileIsModelS2017()) canBTraceRecordTx(&out, err);
 
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
     }
@@ -977,7 +1003,7 @@ static AutoBlinkerCancelActionPure handleAutoBlinkerCancelToggle(
   }
   if (action == AUTO_BLINKER_CANCEL_REJECTED_PURE) {
     const char *result = !noaOpen ? "BLOCKED: NOA state invalid"
-        : "BLOCKED: 0x24A stale";
+        : (activeProfileIsModelS2017() ? "BLOCKED: 0x249 stale" : "BLOCKED: 0x24A stale");
     ulcSnoozeSetResult(result, 0, false);
     if (source == AUTO_BLINKER_CANCEL_SOURCE_S3XY)
       s3xyLogPush(S3XY_LOG_INFO, result);
@@ -1391,6 +1417,19 @@ static bool r79ApDasFreshLocked(uint32_t now) {
       (uint32_t)(now - lastDASStatusMillis) <= R79_AP_DAS_FRESH_MS;
 }
 
+// stateMux is held. Model S must never inherit the YL unknown-state permission.
+// A fresh P/N is allowed; D/R requires fresh AP, or an explicit manual override.
+static bool r79ModelSStateAuthorizedLocked(uint32_t now) {
+  if (!activeProfileIsModelS2017()) return true;
+  uint8_t gear = TESLA_GEAR_INVALID;
+  if (!r79FreshGearRawLocked(now, gear)) return false;
+  if (gear == TESLA_GEAR_P || gear == TESLA_GEAR_N) return true;
+  if (!r79ApDasFreshLocked(now)) return false;
+  return dasStateApActivePure(true, dasAutopilotState4) ||
+      (r79ApGateConfig.allowManualDriving &&
+       dasStateManualPure(true, dasAutopilotState4));
+}
+
 static R79ApGateDecisionPure r79ApGateDecisionLocked(uint32_t now) {
   return r79ApGateDecisionPure(
       r79ApGateConfig, r79ApGateSession, now, r79ApDasFreshLocked(now),
@@ -1431,7 +1470,8 @@ static void updateR79ManualSuppressionLocked(
   const bool dasValid = dasAutopilotStateValid;
   const bool apActive = dasStateApActivePure(dasValid, dasAutopilotState4);
   const bool manualState = dasStateManualPure(dasValid, dasAutopilotState4);
-  const bool remoteStartupEvidence = r79RemoteStartupEvidenceLocked(now);
+  const bool remoteStartupEvidence = !activeProfileIsModelS2017() &&
+      r79RemoteStartupEvidenceLocked(now);
   r79ApGateObserveLocked(now);
   r79ManualSuppressionUpdatePure(
       r79ManualSuppression,
@@ -1440,7 +1480,8 @@ static void updateR79ManualSuppressionLocked(
       gateSummoning, remoteStartupEvidence);
   const bool authorizationOpen = r79TxDecisionPure(
       apActive, gateSummoning, r79ManualSuppression,
-      r79ApGateConfig.allowManualDriving).txEnabled;
+      r79ApGateConfig.allowManualDriving).txEnabled &&
+      r79ModelSStateAuthorizedLocked(now);
   countryOverrideUpdateR79AuthorizationLocked(
       authorizationOpen, txBarrierAlreadyHeld);
 }
@@ -1492,13 +1533,15 @@ static R79RuntimeStatus r79RuntimeStatusSnapshot(uint32_t now) {
   allowManualDriving = r79ApGateConfig.allowManualDriving;
   out.manualLatchActive = manual.active;
   out.apGate = r79ApGateDecisionLocked(now);
+  const bool modelStateAllowed = r79ModelSStateAuthorizedLocked(now);
   apActive = dasStateApActivePure(out.dasValid, out.dasState4);
   portEXIT_CRITICAL(&stateMux);
 
   out.decision = r79TxDecisionPure(apActive, out.summonSessionActive, manual, allowManualDriving);
+  out.decision.txEnabled = out.decision.txEnabled && modelStateAllowed;
 
   if (canTxAdministrativeHold) out.state = R79_TX_STATE_ADMIN_HOLD;
-  else if (!twaiReady) out.state = R79_TX_STATE_CAN_OFFLINE;
+  else if (!autopilotControlTransportReady()) out.state = R79_TX_STATE_CAN_OFFLINE;
   else if (!stockValid) out.state = R79_TX_STATE_WAIT_TEMPLATE;
   else if (!out.decision.txEnabled) out.state = R79_TX_STATE_SUSPENDED;
   else if (!out.apGate.allowed) {
@@ -1644,7 +1687,7 @@ static bool pedalMapTransmitImmediateFromCache(uint8_t targetRaw) {
   const uint32_t txEpoch = canTxEpochSnapshot();
 
   bool ok = false;
-  if (activeProfileIsYl()) {
+  if (activeProfileUsesYlTopology()) {
     if (!twaiNonSummonAdmissionOpen()) {
       portENTER_CRITICAL(&pedalMapMux); pedalMapBlocked++; portEXIT_CRITICAL(&pedalMapMux);
       return false;
@@ -2043,6 +2086,8 @@ static bool requestBlinkerTx(uint8_t dir, uint8_t source,
 static BlinkerTxConsumeResultPure observe249AndTakeBlinkerRequest(
     const uint8_t *data, uint8_t dlc) {
   BlinkerTxConsumeResultPure consumed = {};
+  if (activeProfileIsModelS2017() &&
+      (dlc != 8u || modelS2017StalkCrc(data) != data[7])) return consumed;
   const uint8_t safeDlc = dlc > 8 ? 8 : dlc;
   portENTER_CRITICAL(&blinkAMux);
   realDlc = safeDlc;
@@ -2053,14 +2098,16 @@ static BlinkerTxConsumeResultPure observe249AndTakeBlinkerRequest(
 
   if (dlc < 3) return consumed;
 
-  const uint8_t cnt = data[1] & 0x0F;
-  const uint8_t turn = data[2] & 0x0F;
-  const uint8_t ck = data[0];
+  const bool modelS = activeProfileIsModelS2017();
+  const uint8_t cnt = modelS ? (data[6] >> 4) : (data[1] & 0x0F);
+  const uint8_t rawTurn = modelS ? (data[2] & 3u) : (data[2] & 0x0F);
+  const uint8_t turn = modelS && rawTurn == 1u ? STALK_DOWN_1 : rawTurn;
+  const uint8_t ck = modelS ? data[7] : data[0];
 
   // The validated Model YL checksum requires all four stock bytes.
   // A short/non-YL frame is still counted/observed, but cannot pass self-test.
   const bool checksumComparable = dlc >= 4;
-  const uint8_t predicted = checksumComparable ? leftStalkChecksum(data, cnt) : 0;
+  const uint8_t predicted = checksumComparable ? (modelS ? modelS2017StalkCrc(data) : leftStalkChecksum(data, cnt)) : 0;
   const uint32_t now = (uint32_t)millis();
 
   portENTER_CRITICAL(&blinkAMux);
@@ -2188,19 +2235,33 @@ static void handle249OnCanA(const uint8_t *data, uint8_t dlc) {
 
 static void sendStalkFrameCanA(uint8_t turn, uint32_t txEpoch, bool directUser) {
   if (!directUser && ulcNoConfirmEnabledSnapshot()) return;
-  uint8_t cnt;
-  uint8_t stockTemplate[4] = {0};
-  const bool haveStockTemplate = stalkFrameSnapshot(cnt, stockTemplate);
-  if (!haveStockTemplate) {
-    stalkFrameRecordBlocked(turn, directUser);
-    return;
-  }
-
   struct can_frame out = {};
-  out.can_id = LEFTSTALK_ID;
-  out.can_dlc = 4;
-  (void)stalkFramePreparePure(stockTemplate, sizeof(stockTemplate), cnt, turn,
-                              out.data);
+  if (activeProfileIsModelS2017()) {
+    uint8_t stock[8] = {}, counter = 0;
+    bool valid;
+    portENTER_CRITICAL(&blinkAMux);
+    valid = seen249 && realDlc == 8u && cksumSelfTest;
+    if (valid) memcpy(stock, realRaw249, 8u);
+    counter = (blinkACounter + 1u) & 0x0Fu;
+    blinkACounter = counter;
+    portEXIT_CRITICAL(&blinkAMux);
+    if (!valid || !modelS2017StalkPrepare(stock, 8u, counter, turnToDir(turn), out.data)) {
+      stalkFrameRecordBlocked(turn, directUser);
+      return;
+    }
+    out.can_id = 0x045u;
+    out.can_dlc = 8u;
+  } else {
+    uint8_t cnt;
+    uint8_t stockTemplate[4] = {0};
+    if (!stalkFrameSnapshot(cnt, stockTemplate)) {
+      stalkFrameRecordBlocked(turn, directUser);
+      return;
+    }
+    out.can_id = LEFTSTALK_ID;
+    out.can_dlc = 4;
+    (void)stalkFramePreparePure(stockTemplate, sizeof(stockTemplate), cnt, turn, out.data);
+  }
   MCP2515::ERROR mcpErr = MCP2515::ERROR_FAIL;
   const uint8_t traceSource = directUser
       ? CAN_TX_TRACE_SOURCE_S3XY_BUTTON
@@ -2518,7 +2579,7 @@ static bool tsl9InputQuiesceForConfig() {
 }
 
 static void handle102LaneChangeCancel(const uint8_t *data, uint8_t dlc) {
-  if (!activeProfileBodyControlsSupported() && !activeProfileIsYl()) return;
+  if (!activeProfileBodyControlsSupported() && !activeProfileUsesYlTopology()) return;
   const bool pressed = doorOpenButtonPressedPure(data, dlc);
   bool previous;
   bool enabled;
@@ -2732,7 +2793,7 @@ static void blinkATxTick() {
   if ((uint32_t)(now - lastTxMs) < BLINKA_TX_PERIOD_MS) return;
   lastTxMs = now;
   if (activeProfileIsYl()) sendStalkFrameCanB(turn, txEpoch, directUser);
-  else if (activeCanAIsBody()) sendStalkFrameCanA(turn, txEpoch, directUser);
+  else if (activeCanAIsBody() || activeProfileIsModelS2017()) sendStalkFrameCanA(turn, txEpoch, directUser);
 }
 
 // Legacy 0x3F8 ULC injection remains removed; LAB provides only the
@@ -2763,9 +2824,12 @@ static void handle280(const uint8_t *data) {
     if (!data) return;
     sumRx280++;
     const uint32_t now = (uint32_t)millis();
-    const uint8_t gear = readVehicleGear(data);
+    const bool modelS = activeProfileIsModelS2017();
+    // Model S DI_torque2: six bytes, DI_gear at LE bits 12..14.
+    // The YL decoder uses bits 21..23 and an ACA flag in byte 6.
+    const uint8_t gear = modelS ? ((data[1] >> 4) & 0x07u) : readVehicleGear(data);
     const int gs = gearState(gear);
-    const bool aca = (data[6] & 0x04) != 0;
+    const bool aca = !modelS && (data[6] & 0x04) != 0;
     int prevGs;
     const bool countryBarrierLocked = countryOverrideAuthorizationBarrierLock();
     portENTER_CRITICAL(&stateMux);
@@ -2774,6 +2838,11 @@ static void handle280(const uint8_t *data) {
         gear118State = (int8_t)gs;
         gear118Raw = gear;
         gear118Ms = now;
+    } else if (modelS) {
+        // An invalid current observation must not reuse a previous P or D.
+        gear118State = -1;
+        gear118Raw = TESLA_GEAR_INVALID;
+        gear118Ms = 0;
     }
 
     SummonV26CompatStatePure compat = {
@@ -2785,8 +2854,8 @@ static void handle280(const uint8_t *data) {
     sprSeen = compat.sprSeen;
     last280Millis = compat.last118Ms;
 
-    acaValid = true;
-    lastAcaMillis = now;
+    acaValid = !modelS;
+    lastAcaMillis = modelS ? 0u : now;
     refreshSummonDerivedStateLocked(now, countryBarrierLocked);
     portEXIT_CRITICAL(&stateMux);
     countryOverrideAuthorizationBarrierUnlock(countryBarrierLocked);
@@ -3387,8 +3456,9 @@ static bool visionControlGateOpen(uint8_t bus, uint32_t now) {
   portENTER_CRITICAL(&stateMux);
   apValid = dasAutopilotStateValid; apState = dasAutopilotState4; apMs = lastDASStatusMillis;
   portEXIT_CRITICAL(&stateMux);
-  const uint8_t mask = bus == 0u ? CAN_TX_FRESH_VH : CAN_TX_FRESH_PARTY;
-  const bool transport = !canTxAdministrativeHold && (bus == 0u ? twaiReady : mcpReady) &&
+  const bool useCanA = bus != 0u || activeProfileIsModelS2017();
+  const uint8_t mask = useCanA ? CAN_TX_FRESH_PARTY : CAN_TX_FRESH_VH;
+  const bool transport = !canTxAdministrativeHold && (useCanA ? mcpReady : twaiReady) &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, stock.epoch, mask);
   const bool stockValid = stock.valid && stock.profile == activeVehicleProfile &&
       stock.topology == activeVehicleTopology;
@@ -3415,7 +3485,7 @@ static void visionControlCfgLoad() {
   if (p.begin("labv3fd", true)) { selection = p.getUShort("selection", 0u); p.end(); }
   if ((selection & (uint16_t)~0x0101u) != 0u) selection = 0u;
   uint8_t bus = (uint8_t)(selection >> 8);
-  if (activeVehicleProfile == VEHICLE_MODEL_YL) bus = VISION_CONTROL_CHASSIS_PURE;
+  if (activeProfileUsesYlTopology()) bus = VISION_CONTROL_CHASSIS_PURE;
   portENTER_CRITICAL(&r79LabMux);
   visionControlRequestDisabledState = (selection & 1u) != 0u;
   visionControlBus = bus;
@@ -3424,11 +3494,11 @@ static void visionControlCfgLoad() {
 
 static bool visionControlApplySettings(bool disabled, uint8_t bus) {
   if (bus > 1u || !visionControlSupported()) return false;
-  if (activeVehicleProfile == VEHICLE_MODEL_YL) bus = VISION_CONTROL_CHASSIS_PURE;
+  if (activeProfileUsesYlTopology()) bus = VISION_CONTROL_CHASSIS_PURE;
   if (!visionControlBusSupported(bus) || !canTxBarrierMutex) return false;
   if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
   if (!visionControlSupported()) { xSemaphoreGive(canTxBarrierMutex); return false; }
-  if (activeVehicleProfile == VEHICLE_MODEL_YL) bus = VISION_CONTROL_CHASSIS_PURE;
+  if (activeProfileUsesYlTopology()) bus = VISION_CONTROL_CHASSIS_PURE;
   if (!visionControlBusSupported(bus)) { xSemaphoreGive(canTxBarrierMutex); return false; }
   Preferences p;
   if (!p.begin("labv3fd", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
@@ -3480,8 +3550,9 @@ static String getVisionControlStatsJson() {
   const bool fresh = valid && age <= VISION_CONTROL_FRESH_MS_PURE;
   const bool apFresh = apValid && (uint32_t)(now - apMs) <= VISION_CONTROL_FRESH_MS_PURE;
   const bool apActive = apValid && apState >= 3u && apState <= 6u;
-  const uint8_t mask = bus == 0u ? CAN_TX_FRESH_VH : CAN_TX_FRESH_PARTY;
-  const bool transport = epoch != 0u && !held && (bus == 0u ? readyB : readyA) &&
+  const bool useCanA = bus != 0u || activeProfileIsModelS2017();
+  const uint8_t mask = useCanA ? CAN_TX_FRESH_PARTY : CAN_TX_FRESH_VH;
+  const bool transport = epoch != 0u && !held && (useCanA ? readyA : readyB) &&
       (freshMask & mask) == mask;
   const bool gate = visionControlGatePure(disabled, true, busSupported,
       transport, apValid, apState, now, apMs, valid, stock.lastMs);
@@ -3492,7 +3563,7 @@ static String getVisionControlStatsJson() {
   jw.boolean("requestDisabled", disabled); jw.u32("bus", bus);
   jw.boolean("supported", supported); jw.boolean("busSupported", busSupported);
   jw.boolean("bodySupported", visionControlBusSupported(1u)); jw.boolean("labEnabled", true);
-  jw.boolean("busSelectorVisible", activeVehicleProfile != VEHICLE_MODEL_YL);
+  jw.boolean("busSelectorVisible", !activeProfileUsesYlTopology());
   jw.boolean("apActive", apActive); jw.boolean("apFresh", apFresh);
   jw.boolean("stockValid", valid); jw.i32("stockBit", raw);
   jw.u32("rxAgeMs", age); jw.u32("rxCount", stock.rx); jw.boolean("gateOpen", gate);
@@ -3683,7 +3754,7 @@ static bool injectUlcSnooze3fdMux1(const twai_message_t &src) {
     setBit(out.data, 36, true); // UI_ulcSnooze
     // DMS is composed only inside final enqueue admission.
 
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!autopilotControlAdmissionOpen()) {
       portENTER_CRITICAL(&ulcSnoozeMux);
       ulcSnoozeTxFail++;
       portEXIT_CRITICAL(&ulcSnoozeMux);
@@ -3750,10 +3821,10 @@ static esp_err_t r79ApGateTransmitGuarded(
 
       const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
       if (r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == expectedGeneration)
-        err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+        err = autopilotControlTransmitLocked(&finalOut, waitMs);
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
 
-      canBTraceRecordTx(&finalOut, err);
+      if (!activeProfileIsModelS2017()) canBTraceRecordTx(&finalOut, err);
     }
   xSemaphoreGive(canTxBarrierMutex);
   return err;
@@ -3762,8 +3833,8 @@ static esp_err_t r79ApGateTransmitGuarded(
 static esp_err_t r79LabDirectTwaiTransmit(
     const twai_message_t *msg, uint16_t waitMs, uint32_t apGeneration) {
   if (!msg) return ESP_ERR_INVALID_ARG;
-  if (canTxAdministrativeHold || !twaiReady) {
-    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
+  if (canTxAdministrativeHold || !autopilotControlTransportReady()) {
+    if (!activeProfileIsModelS2017()) canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
     return ESP_ERR_INVALID_STATE;
   }
   const esp_err_t err = r79ApGateTransmitGuarded(msg, waitMs, apGeneration);
@@ -3776,15 +3847,15 @@ static esp_err_t r79LabDirectTwaiTransmitGuarded(
     uint32_t apGeneration) {
   if (!msg || !generation) return ESP_ERR_INVALID_ARG;
   if (canTxAdministrativeHold) {
-    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
+    if (!activeProfileIsModelS2017()) canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
     return ESP_ERR_INVALID_STATE;
   }
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) {
-    canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
+    if (!activeProfileIsModelS2017()) canBTraceRecordTx(msg, ESP_ERR_INVALID_STATE);
     return ESP_ERR_INVALID_STATE;
   }
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
+  if (!canTxAdministrativeHold && autopilotControlTransportReady() &&
       canTxCancellationGenerationSnapshot(generation) == expectedGeneration &&
       r79ApGateGenerationSnapshot() == apGeneration &&
       r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == apGeneration)
@@ -3795,10 +3866,10 @@ static esp_err_t r79LabDirectTwaiTransmitGuarded(
       const bool visionChanged = visionControlApplyFinal(finalOut.data, VISION_CONTROL_CHASSIS_PURE);
       if (r79FastReactiveGateOpen() && r79ApGateGenerationSnapshot() == apGeneration &&
           canTxCancellationGenerationSnapshot(generation) == expectedGeneration)
-        err = twai_transmit(&finalOut, pdMS_TO_TICKS(waitMs));
+        err = autopilotControlTransmitLocked(&finalOut, waitMs);
       visionControlRecordTx(visionChanged, VISION_CONTROL_CHASSIS_PURE, err == ESP_OK);
 
-      canBTraceRecordTx(&finalOut, err);
+      if (!activeProfileIsModelS2017()) canBTraceRecordTx(&finalOut, err);
     }
   xSemaphoreGive(canTxBarrierMutex);
   return err;
@@ -3812,6 +3883,7 @@ static bool r79Mode1PostMux2GenerationCurrent(uint32_t expectedGeneration) {
 // Immediate timeout recovery shares the authorization barrier with enqueue.
 // A configuration cancellation cannot clear unrelated queued traffic.
 static bool r79ImmediateClearTransmitQueueGuarded(uint32_t expectedApGeneration) {
+  if (activeProfileIsModelS2017()) return false;
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE)
     return false;
   const bool allowed = !canTxAdministrativeHold && twaiReady &&
@@ -3824,6 +3896,7 @@ static bool r79ImmediateClearTransmitQueueGuarded(uint32_t expectedApGeneration)
 
 static bool r79Mode1PostMux2ClearTransmitQueueGuarded(
     uint32_t expectedGeneration) {
+  if (activeProfileIsModelS2017()) return false;
   if (canTxAdministrativeHold || !canTxBarrierMutex ||
       xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return false;
   const bool allowed = !canTxAdministrativeHold && twaiReady &&
@@ -3867,10 +3940,11 @@ static void r79RetrySchedule(
 
 // Minimal authorization gate for the d2 receive-synchronized fast path. This
 // deliberately preserves the existing v3.6 fail-open policy: unknown/stale
-// gear or DAS does not suppress R79. Only the already-established manual D/R
+// gear or DAS does not suppress R79 on existing profiles. Model S additionally
+// requires r79ModelSStateAuthorizedLocked. Only the established manual D/R
 // latch blocks TX, while AP or confirmed Summon wins exactly as before.
 static bool r79FastReactiveGateOpen() {
-  if (canTxAdministrativeHold || !twaiReady) return false;
+  if (canTxAdministrativeHold || !autopilotControlTransportReady()) return false;
 
   bool apActive = false;
   bool summonConfirmed = false;
@@ -3881,7 +3955,9 @@ static bool r79FastReactiveGateOpen() {
   summonConfirmed = gateSummoning;
   manual = r79ManualSuppression;
   allowManualDriving = r79ApGateConfig.allowManualDriving;
-  const bool apGateAllowed = r79ApGateDecisionLocked((uint32_t)millis()).allowed;
+  const uint32_t now = (uint32_t)millis();
+  const bool apGateAllowed = r79ApGateDecisionLocked(now).allowed &&
+      r79ModelSStateAuthorizedLocked(now);
   portEXIT_CRITICAL(&stateMux);
 
   const R79TxDecisionPure decision = r79TxDecisionPure(apActive, summonConfirmed, manual, allowManualDriving);
@@ -3924,7 +4000,7 @@ static bool r79LabTransmitOnce(const uint8_t *stock, uint32_t now,
   }
 
   twai_message_t out = {};
-  out.identifier = 0x3FD;
+  out.identifier = activeAutopilotControlId();
   out.data_length_code = 8;
   out.flags = 0;
   memcpy(out.data, stock, 8);
@@ -4155,7 +4231,7 @@ static bool r79FixedFastEcho(const twai_message_t &src) {
   const uint16_t waitMs = r79Mode1TxWaitMsPure(waitMode);
 
   twai_message_t out = {};
-  out.identifier = 0x3FD;
+  out.identifier = activeAutopilotControlId();
   out.data_length_code = 8;
   out.flags = 0;
   memcpy(out.data, src.data, 8);
@@ -4268,7 +4344,7 @@ static bool r79Mode2FastEcho(const twai_message_t &src) {
   if (!r79FastReactiveGateOpen()) return false;
 
   twai_message_t out = {};
-  out.identifier = 0x3FD;
+  out.identifier = activeAutopilotControlId();
   out.data_length_code = 8;
   out.flags = 0;
   memcpy(out.data, src.data, 8);
@@ -4308,7 +4384,7 @@ static bool r79DmsWorkPendingSnapshot() {
 
 static bool r79DmsOnlyTransmit(const twai_message_t &src) {
   if (src.data_length_code < 8u || readMuxID(src.data) != 1u ||
-      !r79DmsControlActive() || canTxAdministrativeHold || !twaiReady) return false;
+      !r79DmsControlActive() || canTxAdministrativeHold || !autopilotControlTransportReady()) return false;
   twai_message_t out = src;
   out.flags = 0;
   if (!getBit(out.data, R79LAB_ENABLE_CABIN_CAMERA_BIT)) return false;
@@ -4383,7 +4459,7 @@ static void visionControlObserveBody(const struct can_frame &src, uint32_t txEpo
 static void visionControlObserveStock(const twai_message_t &src, uint32_t txEpoch,
                                   bool stockClaimed,
                                   uint32_t receivedMs = (uint32_t)millis()) {
-  if (src.extd || src.rtr || src.identifier != 0x3FDu || src.data_length_code != 8u || readMuxID(src.data) != 1u) return;
+  if (src.extd || src.rtr || src.identifier != activeAutopilotControlId() || src.data_length_code != 8u || readMuxID(src.data) != 1u) return;
   if (stockClaimed || r79DmsWorkPendingSnapshot()) return;
   (void)mux1DisplayTransmit(&src, txEpoch, CAN_TX_FRESH_VH, true, receivedMs);
 }
@@ -4409,7 +4485,7 @@ static void r79Mode2Tick() {
   if (action != R79_MODE2_DELAY_FIRE_PURE || !haveStock) return;
 
   twai_message_t out = {};
-  out.identifier = 0x3FD;
+  out.identifier = activeAutopilotControlId();
   out.data_length_code = 8;
   out.flags = 0;
   memcpy(out.data, stock, 8);
@@ -4621,11 +4697,11 @@ static esp_err_t tlsscTransmitGuarded(const twai_message_t *out,
     uint32_t epoch) {
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return ESP_ERR_INVALID_STATE;
   esp_err_t err = ESP_ERR_INVALID_STATE;
-  if (!canTxAdministrativeHold && twaiReady &&
-      canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch, CAN_TX_FRESH_BOTH) &&
-      twaiNonSummonAdmissionOpen()) {
-    err = twai_transmit(out, 0);
-    canBTraceRecordTx(out, err);
+  if (!canTxAdministrativeHold && autopilotControlTransportReady() &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch, activeProfileIsModelS2017() ? CAN_TX_FRESH_PARTY : CAN_TX_FRESH_BOTH) &&
+      autopilotControlAdmissionOpen()) {
+    err = autopilotControlTransmitLocked(out, 0);
+    if (!activeProfileIsModelS2017()) canBTraceRecordTx(out, err);
   }
   xSemaphoreGive(canTxBarrierMutex);
   return err;
@@ -4686,7 +4762,7 @@ static void injectTLSSC(const twai_message_t &src) {
     if (!tlsscTx) return;
 
     // TLSSC is lower priority than Summon and must never block CAN B RX.
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!autopilotControlAdmissionOpen()) {
       sumTxFail++;
       return;
     }
@@ -4863,7 +4939,7 @@ static void featureCfgLoad() {
     doorOpenCancelEnabled = storedDoor; tlsscRestoreEnabled = storedRestore;
     portENTER_CRITICAL(&blinkAMux);
     blinkerTxMode = blinkerTxStoredModePure(
-        persistedBlinkerTx, activeProfileIsYl());
+        persistedBlinkerTx, activeProfileUsesYlTopology());
     portEXIT_CRITICAL(&blinkAMux);
     apDriveProfileEnabled = activeProfileApDriveProfileSupported() && persistedApDriveProfile;
     apDriveProfileRegenRaw = apDriveRegenRawSelectablePure(persistedApRegen) ? persistedApRegen : AP_DRIVE_REGEN_REDUCED_RAW;
@@ -4877,7 +4953,7 @@ static void featureCfgLoad() {
     nagTsl9RightPeriodicIntervalSeconds =
         apRightScrollIntervalSanitizePure(persistedTsl9Interval);
     portEXIT_CRITICAL(&nagRightScrollMux);
-    if (!activeProfileBodyControlsSupported() && !activeProfileIsYl() && doorOpenCancelEnabled) {
+    if (!activeProfileBodyControlsSupported() && !activeProfileUsesYlTopology() && doorOpenCancelEnabled) {
       // Door-open cancel consumes Body CAN on Standard 3/Y. A topology change
       // to Party+Chassis must not retain an enabled-but-unreachable feature.
       doorOpenCancelEnabled = false;
@@ -4947,7 +5023,7 @@ static bool featureCfgPersistCandidate(const FeatureCfgSnapshot &v) {
   const uint16_t tsl9Interval = apRightScrollIntervalSanitizePure(v.tsl9Interval);
   const uint8_t bytes[14] = {1u, (uint8_t)v.lab,
       (uint8_t)(activeProfileBannedCarSupported() && v.banned),
-      (uint8_t)((activeProfileBodyControlsSupported() || activeProfileIsYl()) && v.door),
+      (uint8_t)((activeProfileBodyControlsSupported() || activeProfileUsesYlTopology()) && v.door),
       (uint8_t)(activeProfileBannedCarSupported() && v.banned &&
                 activeProfileTlsscRestoreSupported() && v.restore),
       (uint8_t)(activeProfileApDriveProfileSupported() && v.apDrive),

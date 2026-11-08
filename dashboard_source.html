@@ -499,6 +499,7 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="setupSub" id="setupSub">A vehicle profile is required before T-2CAN can initialize CAN functions. Choose the exact vehicle family below.</div>
 <div class="setupSafety"><div class="setupSafetyDot"></div><div><div class="setupSafetyTitle">VEHICLE FUNCTIONS PAUSED</div><div class="setupSafetyText">Vehicle functions start only after you save the setup and T-2CAN restarts.</div></div></div>
 <div class="vehicleChooser" id="vehicleChooser">
+<button class="vehicleChoice" data-vehicle="MODEL_S_2017"><div class="vehicleChoiceName">Model S 2017</div><div class="vehicleChoiceMeta">Fixed · Party CAN + VH CAN</div><span class="vehicleChoiceBadge">S</span></button>
 <button class="vehicleChoice" data-vehicle="MODEL_YL"><div class="vehicleChoiceName">Model Y L</div><div class="vehicleChoiceMeta">Fixed · Party CAN + VH CAN</div><span class="vehicleChoiceBadge">YL</span></button>
 <button class="vehicleChoice" data-vehicle="MODEL_Y_JUNIPER"><div class="vehicleChoiceName">Model Y Juniper</div><div class="vehicleChoiceMeta">Choose CAN connection next<br/>Body + Chassis or Party + Chassis</div><span class="vehicleChoiceBadge">YJ</span></button>
 <button class="vehicleChoice" data-vehicle="MODEL_Y_LEGACY"><div class="vehicleChoiceName">Model Y Legacy</div><div class="vehicleChoiceMeta">Choose CAN connection next<br/>Body + Chassis or Party + Chassis</div><span class="vehicleChoiceBadge">Y</span></button>
@@ -1250,7 +1251,7 @@ function renderVisionControlLab(s){
   $('visionControlDisableToggle').disabled=visionControlSaving||!available||!route;$('visionControlBusWrap').classList.toggle('tuUiHidden',!visible);$('visionControlBus').disabled=visionControlSaving||!available||!visible;$('visionControlBus').querySelector('option[value="1"]').disabled=s.bodySupported!==true;
   if(!visionControlSaving){$('visionControlDisableToggle').checked=selected;$('visionControlBus').value=String(bus)}$('visionControlBusUnavailable').classList.toggle('tuUiHidden',!visible||bus!==1||route);$('visionControlRowState').textContent=selected?'ON':'OFF';
   $('visionControlState').textContent=!available||!route?'UNSUPPORTED':!selected?'OFF · STOCK':s.state==='WAIT_STOCK'?'Waiting for stock':s.state==='WAIT_AP'?'Waiting for AP':s.state==='STOCK_ZERO'?'Stock already 0 · no TX':gate?'READY · AP ACTIVE':'BLOCKED';
-  $('visionControlStock').textContent=(valid?stock:'—')+' → '+(valid?(gate?0:stock):'—');const age=Number(s.rxAgeMs);$('visionControlRoute').textContent=(visible?(bus?'BODY':'CHASSIS'):'VH')+' · RX '+(s.rxCount||0)+' · '+(valid&&Number.isFinite(age)&&age<999999?fmtMs(age):'—');$('visionControlTx').textContent=(s.txOk||0)+' / '+(s.txFail||0);
+  $('visionControlStock').textContent=(valid?stock:'—')+' → '+(valid?(gate?0:stock):'—');const age=Number(s.rxAgeMs);$('visionControlRoute').textContent=(Number(window.__t2ProfileId)===6?'PARTY · CAN A':(visible?(bus?'BODY':'CHASSIS'):'VH'))+' · RX '+(s.rxCount||0)+' · '+(valid&&Number.isFinite(age)&&age<999999?fmtMs(age):'—');$('visionControlTx').textContent=(s.txOk||0)+' / '+(s.txFail||0);
 }
 async function fetchVisionControlLab(){const epoch=visionControlEpoch;try{const s=await jget('/api/vision-control/stats');if(epoch!==visionControlEpoch||visionControlSaving)return;visionControlSaved=s;renderVisionControlLab(s);$('visionControlSaveState').textContent='Settings ready'}catch(e){if(!visionControlSaved)$('visionControlSaveState').textContent='Settings unavailable · retrying'}}
 async function updateVisionControlLab(key='disabled'){
@@ -1724,6 +1725,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
 <script>(() => {
   const q=id=>document.getElementById(id);
   const PROFILES={
+    6:{id:6,key:'MODEL_S_2017',name:'Model S 2017',badge:'S',target:'Model S 2017'},
     1:{id:1,key:'MODEL_YL',name:'Model Y L',badge:'YL',target:'Model Y L'},
     2:{id:2,key:'MODEL_Y_JUNIPER',name:'Model Y Juniper',badge:'YJ',target:'Model Y Juniper'},
     3:{id:3,key:'MODEL_Y_LEGACY',name:'Model Y Legacy',badge:'Y',target:'Model Y Legacy'},
@@ -1741,7 +1743,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   let profileStatusReady=false,profileReadBusy=false,profileSaveBusy=false,profileSaveUncertain=false,profileRebootPending=false,profileRetryTimer=0;
   const choices=[...document.querySelectorAll('.vehicleChoice')],topologyChoices=[...document.querySelectorAll('.topologyChoice')],turnChoices=[...document.querySelectorAll('.turnChoice')];
   function openModal(id){q(id)?.classList.add('show')} function closeModal(id){q(id)?.classList.remove('show')}
-  function turnText(t){return Number(t)===2?'STALKLESS · 0x3C2':Number(t)===1?'STALK · 0x249':'N/A';}
+  function turnText(t,p=Number(profileStatus?.profile)){if(p===6&&Number(t)===1)return 'STALK · 0x045';return Number(t)===2?'STALKLESS · 0x3C2':Number(t)===1?'STALK · 0x249':'N/A';}
   function capabilityText(t){return `NAG ${t?.nag?'✓':'—'} · ADV EAP ${t?.adv?'✓':'—'} · EU UNLOCK ${t?.eu?'✓':'—'}`;}
   function resolvedSetupTurn(){if(pendingTopology===3)return 0;if(pendingProfile===4&&pendingTopology===2)return pendingTurn;return pendingProfile&&pendingTopology?1:0;}
   function setupMessage(text='',retry=false){
@@ -1764,7 +1766,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
     choices.forEach(b=>b.classList.toggle('selected',KEY_TO_ID[b.dataset.vehicle]===pendingProfile));
     topologyChoices.forEach(b=>b.classList.toggle('selected',TOPOLOGY_KEY_TO_ID[b.dataset.topology]===pendingTopology));
     turnChoices.forEach(b=>b.classList.toggle('selected',(b.dataset.turn==='STALKLESS'?2:1)===pendingTurn));
-    const p=PROFILES[pendingProfile],t=TOPOLOGIES[pendingTopology],isYl=pendingProfile===1;
+    const p=PROFILES[pendingProfile],t=TOPOLOGIES[pendingTopology],isYl=(pendingProfile===1||pendingProfile===6);
     q('topologyStep')?.classList.toggle('show',!!p&&!isYl);
     const highlandBody=pendingProfile===4&&pendingTopology===2;
     q('highlandTurnStep')?.classList.toggle('show',highlandBody);
@@ -1775,7 +1777,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   function enterSetup(change=false,preserve=false){
     profileChange=change;
     if(change&&profileStatus?.profile){
-      pendingProfile=Number(profileStatus.profile);pendingTopology=Number(profileStatus.topology)||(pendingProfile===1?1:2);pendingTurn=Number(profileStatus.turn)||0;
+      pendingProfile=Number(profileStatus.profile);pendingTopology=Number(profileStatus.topology)||((pendingProfile===1||pendingProfile===6)?1:2);pendingTurn=Number(profileStatus.turn)||0;
     }else if(!preserve){pendingProfile=0;pendingTopology=0;pendingTurn=0}
     q('setupEyebrow').textContent=change?'FIRMWARE PROFILE':'FIRST BOOT';q('setupTitle').textContent=change?'Change vehicle profile.':'Select your vehicle.';
     q('setupSub').textContent=change?'Changing the vehicle profile is applied only at the next boot. CAN TX is blocked before the new profile is committed and T-2CAN reboots.':'Select the exact vehicle family, then choose the CAN topology physically connected to T-2CAN.';
@@ -1797,7 +1799,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   async function saveProfile(){
     if(q('saveProfileBtn').disabled)return;
     const p=PROFILES[pendingProfile],t=TOPOLOGIES[pendingTopology];if(!p||!t)return;const highlandBody=pendingProfile===4&&pendingTopology===2;const turn=resolvedSetupTurn();if(highlandBody&&turn!==1&&turn!==2)return;
-    q('profileConfirmSummary').textContent=p.name+'\n'+t.canA+' / '+t.canB+'\n'+capabilityText(t)+'\nTURN · '+turnText(turn);openModal('profileConfirmModal');
+    q('profileConfirmSummary').textContent=p.name+'\n'+t.canA+' / '+t.canB+'\n'+capabilityText(t)+'\nTURN · '+turnText(turn,pendingProfile);openModal('profileConfirmModal');
   }
   q('cancelProfileSave').onclick=()=>closeModal('profileConfirmModal');
   q('confirmProfileSave').onclick=async()=>{
@@ -1823,7 +1825,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   };
   q('setupFactoryResetBtn').onclick=()=>{if(profileStatus?.nvsError)openModal('factoryWarningModal')};
   q('retryProfileStatusBtn').onclick=()=>boot();
-  choices.forEach(b=>b.onclick=()=>{pendingProfile=KEY_TO_ID[b.dataset.vehicle];if(pendingProfile===1){pendingTopology=1;pendingTurn=1}else{pendingTopology=0;pendingTurn=0}setupUpdate()});
+  choices.forEach(b=>b.onclick=()=>{pendingProfile=KEY_TO_ID[b.dataset.vehicle];if((pendingProfile===1||pendingProfile===6)){pendingTopology=1;pendingTurn=1}else{pendingTopology=0;pendingTurn=0}setupUpdate()});
   topologyChoices.forEach(b=>b.onclick=()=>{pendingTopology=TOPOLOGY_KEY_TO_ID[b.dataset.topology]||0;if(pendingTopology===2)pendingTurn=pendingProfile===4?0:1;else pendingTurn=0;setupUpdate()});
   turnChoices.forEach(b=>b.onclick=()=>{pendingTurn=b.dataset.turn==='STALKLESS'?2:1;setupUpdate()});q('saveProfileBtn').onclick=saveProfile;q('cancelProfileChangeBtn').onclick=()=>{document.body.classList.remove('setup-active');pendingProfile=0;pendingTopology=0;pendingTurn=0};q('changeProfileBtn').onclick=()=>enterSetup(true);
 

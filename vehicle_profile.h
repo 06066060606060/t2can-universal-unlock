@@ -9,8 +9,38 @@ enum VehicleProfileId : uint8_t {
   VEHICLE_MODEL_Y_JUNIPER = 2,
   VEHICLE_MODEL_Y_LEGACY = 3,
   VEHICLE_MODEL_3_HIGHLAND = 4,
-  VEHICLE_MODEL_3_LEGACY = 5
+  VEHICLE_MODEL_3_LEGACY = 5,
+  VEHICLE_MODEL_S_2017 = 6
 };
+
+// Shared wiring only; Model S has separate message IDs and stalk encoding.
+static inline bool vehicleProfileUsesYlTopology(uint8_t id) {
+  return id == VEHICLE_MODEL_YL || id == VEHICLE_MODEL_S_2017;
+}
+
+// Model S 2017: legacy STW_ACTN_RQ layout, physical ID 0x045 on CAN A.
+// CRC matches all 15 distinct idle payloads in log-model s2.csv.
+static inline uint8_t modelS2017StalkCrc(const uint8_t *data) {
+  uint8_t crc = 0xFFu;
+  for (uint8_t i = 0; i < 7; ++i) {
+    crc ^= data[i];
+    for (uint8_t bit = 0; bit < 8; ++bit)
+      crc = (uint8_t)((crc << 1) ^ ((crc & 0x80u) ? 0x1Du : 0u));
+  }
+  return crc ^ 0xFFu;
+}
+
+static inline bool modelS2017StalkPrepare(const uint8_t *stock, uint8_t dlc,
+                                         uint8_t counter, uint8_t direction,
+                                         uint8_t *out) {
+  if (!stock || !out || dlc != 8u || direction > 2u ||
+      modelS2017StalkCrc(stock) != stock[7]) return false;
+  for (uint8_t i = 0; i < 8; ++i) out[i] = stock[i];
+  out[2] = (uint8_t)((out[2] & 0xFCu) | direction);
+  out[6] = (uint8_t)((out[6] & 0x0Fu) | ((counter & 0x0Fu) << 4));
+  out[7] = modelS2017StalkCrc(out);
+  return true;
+}
 
 enum VehicleCanTopology : uint8_t {
   VEHICLE_TOPOLOGY_NONE = 0,
@@ -35,6 +65,7 @@ struct VehicleProfileSpec {
 
 static inline const VehicleProfileSpec *vehicleProfileSpec(uint8_t id) {
   static const VehicleProfileSpec specs[] = {
+    {VEHICLE_MODEL_S_2017, "Model S 2017", VEHICLE_TOPOLOGY_YL_PARTY_VH, TURN_SIGNAL_STALK, false},
     {VEHICLE_MODEL_YL, "Model Y L", VEHICLE_TOPOLOGY_YL_PARTY_VH, TURN_SIGNAL_STALK, false},
     {VEHICLE_MODEL_Y_JUNIPER, "Model Y Juniper", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
     {VEHICLE_MODEL_Y_LEGACY, "Model Y Legacy", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
@@ -56,7 +87,7 @@ static inline VehicleCanTopology vehicleProfileDefaultTopology(uint8_t id) {
 
 static inline bool vehicleProfileTopologyValid(uint8_t id, uint8_t topology) {
   if (!vehicleProfileValid(id)) return false;
-  if (id == VEHICLE_MODEL_YL)
+  if (vehicleProfileUsesYlTopology(id))
     return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
   return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
          topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS;
@@ -89,7 +120,7 @@ static inline bool vehicleProfileCanBIsChassis(uint8_t id, uint8_t topology) {
 
 static inline bool vehicleProfileTsl9InputSupported(uint8_t id, uint8_t topology) {
   return vehicleProfileTopologyValid(id, topology) &&
-         (id == VEHICLE_MODEL_YL || vehicleProfileCanBIsChassis(id, topology));
+         (vehicleProfileUsesYlTopology(id) || vehicleProfileCanBIsChassis(id, topology));
 }
 
 // Standard Body+Chassis profiles use the Body CAN scroll control. Model YL
@@ -112,7 +143,7 @@ static inline bool vehicleProfileIsaSuppressionSupported(uint8_t id,
 
 static inline bool vehicleProfileNagTsl9Supported(uint8_t id, uint8_t topology) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
-  return id == VEHICLE_MODEL_YL || vehicleProfileCanAIsBody(id, topology);
+  return vehicleProfileUsesYlTopology(id) || vehicleProfileCanAIsBody(id, topology);
 }
 
 // Only pre-refresh Legacy 3/Y uses the gateway-translated DAS_status 0x39B
@@ -153,7 +184,7 @@ static inline bool vehicleProfileAdvancedEapSupported(uint8_t id, uint8_t topolo
   if (!vehicleProfileTopologyValid(id, topology)) return false;
   // YL keeps its existing Party+VH split-bus implementation. Standard 3/Y
   // requires Body CAN on CAN A for Advanced EAP/Auto Blinker.
-  return id == VEHICLE_MODEL_YL || topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileUsesYlTopology(id) || topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
 }
 
 static inline bool vehicleProfileEuUnlockSupported(uint8_t id, uint8_t topology) {
@@ -181,7 +212,7 @@ static inline bool vehicleProfileBodyControlsSupported(uint8_t id, uint8_t topol
 // wired as Body. Party+Chassis intentionally has no Body 0x334 path.
 static inline bool vehicleProfilePedalMapSupported(uint8_t id, uint8_t topology) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
-  if (id == VEHICLE_MODEL_YL) return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
+  if (vehicleProfileUsesYlTopology(id)) return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
   return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
 }
 
@@ -217,7 +248,7 @@ static inline bool vehicleProfileTlsscRestoreSupported(uint8_t id) {
 // Keep this separate from TLSSC Restore capability so it can be re-enabled
 // deliberately later without weakening the current backend guard.
 static inline bool vehicleProfileBannedCarSupported(uint8_t id) {
-  return id != VEHICLE_MODEL_YL && vehicleProfileTlsscRestoreSupported(id);
+  return !vehicleProfileUsesYlTopology(id) && vehicleProfileTlsscRestoreSupported(id);
 }
 
 static inline bool vehicleProfileTurnValid(uint8_t id, uint8_t topology, uint8_t turn) {
@@ -288,6 +319,16 @@ static volatile bool vehicleProfileNvsError = false;
 
 static inline bool activeProfileIsYl() {
   return activeVehicleProfile == VEHICLE_MODEL_YL;
+}
+
+static inline bool activeProfileIsModelS2017() {
+  return activeVehicleProfile == VEHICLE_MODEL_S_2017;
+}
+static inline bool activeProfileUsesYlTopology() {
+  return vehicleProfileUsesYlTopology(activeVehicleProfile);
+}
+static inline uint16_t activeAutopilotControlId() {
+  return activeProfileIsModelS2017() ? 0x3EEu : 0x3FDu;
 }
 
 static inline bool activeCanAIsParty() {
