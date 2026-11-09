@@ -132,6 +132,8 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   visualBehaviorType = 0;
   visualDebugLastMs = 0;
   seen249 = false;
+  modelS238Valid = false;
+  modelS238LastMs = 0;
   realDlc = 0;
   cksumSelfTest = false;
   memset(realRaw249, 0, sizeof(realRaw249));
@@ -168,7 +170,10 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
     uiAutoLaneChangeStockBValid = false;
     uiAutoLaneChangeStockBMs = 0;
     portEXIT_CRITICAL(&autoLc293Mux);
+  }
+  if ((invalidatedBusMask & (activeProfileIsModelS2017() ? SUMMON_BUS_A : SUMMON_BUS_B)) != 0) {
     portENTER_CRITICAL(&lab3f8Mux);
+    if (activeProfileIsModelS2017()) lab3f8CanBValid = false;
     uiDriverAssistLastRxMs = 0;
     uiUlcBlindSpotConfig = 0;
     uiAlcOffHighwayEnable = false;
@@ -433,12 +438,22 @@ static void canTaskMcp(void* arg) {
       bootCaptureObservePartyFrame(partyId, rxf.can_dlc, rxf.data);
       researchCaptureObserveParty(partyId, rxf.can_dlc, rxf.data);
       driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_A, partyId, rxf.can_dlc, rxf.data);
-      if (partyId == UI_CHASSIS_CONTROL_ID && rxf.can_dlc >= 8)
+      if (partyId == (activeProfileIsModelS2017() ? 0x218u : UI_CHASSIS_CONTROL_ID) && rxf.can_dlc >= 8)
         uiAutoLaneChangeObserveAndInjectCanA(rxf);
       if (partyId == 0x7FF && rxf.can_dlc == 8)
         countryOverrideObserve7ffCanA(rxf, countryRxEpoch);
       if (partyId == 0x238 && rxf.can_dlc == 8)
         countryOverrideObserve238CanA(rxf, countryRxEpoch);
+      if (activeProfileIsModelS2017() && partyId == 0x3E8u && rxf.can_dlc == 8u) {
+        twai_message_t stock = {}; // Payload container only; TX remains on CAN A.
+        stock.identifier = 0x3E8u;
+        stock.data_length_code = 8u;
+        memcpy(stock.data, rxf.data, 8u);
+        handle1016(stock.data, 8u);
+        lab3f8FrameRxMs = prefetchedRxMs[bi];
+        lab3f8FrameRxEpoch = countryRxEpoch;
+        injectDriverAssistControl(stock);
+      }
       if (activeProfileIsModelS2017() && partyId == 0x045u && rxf.can_dlc == 8u)
         handle249OnCanA(rxf.data, rxf.can_dlc);
       if (activeProfileIsModelS2017() && partyId == 0x3EEu && rxf.can_dlc == 8u) {
@@ -683,6 +698,8 @@ static void canTaskTwai(void* arg) {
           break;
         // Model YL/public-DBC reference: UI_driverAssistMapData road context.
         case 0x238:
+          if (activeProfileIsModelS2017() && activeTurnSignalVariant == TURN_SIGNAL_STALK)
+            handleModelS238OnCanB(f.data, f.data_length_code);
           if (f.data_length_code >= 5) handleRoadContext238(f.data, f.data_length_code);
           countryOverrideObserve238CanB(f, countryRxEpoch);
           break;
@@ -692,6 +709,7 @@ static void canTaskTwai(void* arg) {
 
         // 1016 (SPR) is read on CAN B for both models.
         case DRIVER_ASSIST_ID:
+          if (activeProfileIsModelS2017()) break;
           // Always retain stock telemetry before applying the production/research overlay.
           handle1016(f.data, f.data_length_code);
           lab3f8FrameRxMs = stockRxMs;

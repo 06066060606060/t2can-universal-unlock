@@ -53,3 +53,19 @@ static inline bool uiAutoLaneChangeFinalizePure(uint8_t *data, uint8_t dlc) {
   data[7] = ui293ChecksumPure(data);
   return true;
 }
+
+// Model S: MCU_chassisControl (CH 0x218, ETH 0x050), CAN A capture.
+// DBC: enable bits 50..51, counter 52..55, checksum 56..63.
+// The 20 CAN-A samples retain additive seed 0x50, not physical CAN ID 0x218.
+static inline uint8_t modelS218AutoLaneChangeRawPure(const uint8_t *data, uint8_t dlc) {
+  if (!data || dlc != 8u) return 0xFFu;
+  return (uint8_t)((data[6] >> 2) & 3u);
+}
+static inline bool modelS218AutoLaneChangeFinalizePure(uint8_t *data, uint8_t dlc) {
+  if (!data || dlc != 8u || data[7] != teslaAdditiveChecksumPure(0x050u, data)) return false;
+  data[6] = (uint8_t)((data[6] & 0xF3u) | (UI_AUTO_LANE_CHANGE_ON_PURE << 2));
+  const uint8_t counter = (uint8_t)(((data[6] >> 4) + 1u) & 0x0Fu);
+  data[6] = (uint8_t)((data[6] & 0x0Fu) | (counter << 4));
+  data[7] = teslaAdditiveChecksumPure(0x050u, data);
+  return true;
+}

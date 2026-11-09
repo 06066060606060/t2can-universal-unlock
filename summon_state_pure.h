@@ -30,7 +30,7 @@ static inline SummonRoutePure summonRoutePure(uint8_t profileId, uint8_t topolog
     r.valid = true;
     r.gearBusMask = SUMMON_BUS_A;
     r.dasBusMask = SUMMON_BUS_A;
-    r.sprBusMask = SUMMON_BUS_B;
+    r.sprBusMask = profileId == VEHICLE_MODEL_S_2017 ? SUMMON_BUS_A : SUMMON_BUS_B;
     r.transportBusMask = profileId == VEHICLE_MODEL_S_2017 ? SUMMON_BUS_A : SUMMON_BUS_B;
     // V2.6 compatibility transport: only the bus carrying stock 0x3FD must
     // be fresh when R79 is emitted. Party remains the source of gear/AP state.

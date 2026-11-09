@@ -736,6 +736,11 @@ static volatile uint8_t realTurn = 0;
 static volatile uint8_t realCksum = 0;
 static volatile bool cksumSelfTest = true;
 static volatile bool seen249 = false;
+// Model S Auto Blinker uses its own CAN-B template; S3XY keeps CAN A.
+static bool modelS238Valid = false;
+static uint8_t modelS238Stock[8] = {};
+static uint8_t modelS238Counter = 0;
+static uint32_t modelS238LastMs = 0;
 static volatile uint8_t blinkACounter = 0;
 static volatile uint8_t realDlc = 0;
 static uint8_t realRaw249[8] = {0};
@@ -2120,6 +2125,11 @@ static BlinkerTxConsumeResultPure observe249AndTakeBlinkerRequest(
   if (activeTurn == STALK_IDLE) blinkACounter = cnt;
   const uint8_t pendingDir = blinkerTxRequestState.pendingDir;
   const uint8_t pendingSource = blinkerTxRequestState.pendingSource;
+  // Model S CAN-A stock must not consume an Auto Blinker request for CAN B.
+  if (modelS && pendingSource == BLINKER_TX_SOURCE_AUTO_PURE) {
+    portEXIT_CRITICAL(&blinkAMux);
+    return consumed;
+  }
   consumed = blinkerTxConsumeStockPure(
       blinkerTxRequestState, now, turn == STALK_IDLE,
       BLINKA_S3XY_STOCK_TIMEOUT_MS);
@@ -2196,6 +2206,30 @@ static void stalkFrameRecordResult(uint8_t turn, bool directUser,
 // validated full-payload CRC is recalculated.
 static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser) {
   if (!directUser && ulcNoConfirmEnabledSnapshot()) return;
+  if (activeProfileIsModelS2017()) {
+    if (directUser) return; // S3XY requests retain their CAN-A route.
+    twai_message_t out = {};
+    uint8_t stock[8] = {}, counter;
+    const uint32_t now = (uint32_t)millis();
+    portENTER_CRITICAL(&blinkAMux);
+    const bool valid = modelS238Valid &&
+        (uint32_t)(now - modelS238LastMs) <= BLINKA_S3XY_STOCK_TIMEOUT_MS;
+    memcpy(stock, modelS238Stock, sizeof(stock));
+    counter = (modelS238Counter + 1u) & 0x0Fu;
+    modelS238Counter = counter;
+    portEXIT_CRITICAL(&blinkAMux);
+    if (!valid || !modelS2017StalkPrepare(stock, 8u, counter, turnToDir(turn), out.data)) {
+      stalkFrameRecordBlocked(turn, false);
+      return;
+    }
+    out.identifier = 0x238u;
+    out.data_length_code = 8u;
+    esp_err_t err = ESP_ERR_TIMEOUT;
+    if (twaiNonSummonAdmissionOpen())
+      err = canTxTwaiTransmitTagged(&out, txEpoch, CAN_TX_TRACE_SOURCE_AUTO_BLINKER);
+    stalkFrameRecordResult(turn, false, err == ESP_OK, false);
+    return;
+  }
   uint8_t cnt;
   uint8_t stockTemplate[4] = {0};
   const bool haveStockTemplate = stalkFrameSnapshot(cnt, stockTemplate);
@@ -2222,6 +2256,30 @@ static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser) 
   if (twaiNonSummonAdmissionOpen())
     err = canTxTwaiTransmitTagged(&out, txEpoch, traceSource);
   stalkFrameRecordResult(turn, directUser, err == ESP_OK, false);
+}
+
+// Only validated Model S CAN-B stock may trigger the Auto Blinker overlay.
+static void handleModelS238OnCanB(const uint8_t *data, uint8_t dlc) {
+  if (dlc != 8u || modelS2017StalkCrc(data) != data[7]) return;
+  const uint32_t now = (uint32_t)millis();
+  BlinkerTxConsumeResultPure request = {};
+  portENTER_CRITICAL(&blinkAMux);
+  memcpy(modelS238Stock, data, 8u);
+  modelS238Valid = true;
+  modelS238LastMs = now;
+  if (activeTurn == STALK_IDLE) modelS238Counter = data[6] >> 4;
+  if (blinkerTxRequestState.pendingSource == BLINKER_TX_SOURCE_AUTO_PURE) {
+    const uint8_t dir = blinkerTxRequestState.pendingDir;
+    request = blinkerTxConsumeStockPure(blinkerTxRequestState, now,
+        (data[2] & 3u) == 0u, BLINKA_S3XY_STOCK_TIMEOUT_MS);
+    if (dir && !request.transmit) {
+      blinkerTxBlockedCount++;
+      blinkerTxRecordLocked(dir, BLINKER_TX_SOURCE_AUTO_PURE, 4);
+    }
+  }
+  portEXIT_CRITICAL(&blinkAMux);
+  if (request.transmit)
+    sendStalkFrameCanB(dirToTurn(request.dir), canTxEpochSnapshot(), false);
 }
 
 static void handle249OnCanA(const uint8_t *data, uint8_t dlc) {
@@ -2792,7 +2850,8 @@ static void blinkATxTick() {
   if (activeTurnSignalVariant == TURN_SIGNAL_STALKLESS) return; // 0x3C2 echoes on each live mux1 RX
   if ((uint32_t)(now - lastTxMs) < BLINKA_TX_PERIOD_MS) return;
   lastTxMs = now;
-  if (activeProfileIsYl()) sendStalkFrameCanB(turn, txEpoch, directUser);
+  if (activeProfileIsYl() || (activeProfileIsModelS2017() && !directUser))
+    sendStalkFrameCanB(turn, txEpoch, directUser);
   else if (activeCanAIsBody() || activeProfileIsModelS2017()) sendStalkFrameCanA(turn, txEpoch, directUser);
 }
 
@@ -2976,9 +3035,9 @@ static void handle1016(const uint8_t *data, uint8_t dlc) {
         // UI_ulcOffHighway: bit 15.
         // UI_ulcBlindSpotConfig: bits 52-53.
         // UI_alcOffHighwayEnable: bit 56.
-        uiUlcOffHighway = getBit(data, 15);
-        uiUlcBlindSpotConfig = (uint8_t)readBitsLE(data, 52, 2);
-        uiAlcOffHighwayEnable = getBit(data, 56);
+        uiUlcOffHighway = getBit(data, activeProfileIsModelS2017() ? 56 : 15);
+        uiUlcBlindSpotConfig = (uint8_t)readBitsLE(data, activeProfileIsModelS2017() ? 50 : 52, 2);
+        uiAlcOffHighwayEnable = getBit(data, activeProfileIsModelS2017() ? 54 : 56);
         uiDriverAssistLastRxMs = now;
     }
 
@@ -3047,8 +3106,9 @@ static bool tlsscHighwayGateBlocked(uint32_t now) {
 
 static bool ulcNoConfirmGateOpen();
 
+// Legacy CanB storage names hold the selected driver-assist route (Model S: CAN A).
 static void lab3f8ObserveCanB(const twai_message_t &src) {
-    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr)) return;
+    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr, activeProfileIsModelS2017())) return;
     const uint32_t now = lab3f8FrameRxMs;
     portENTER_CRITICAL(&lab3f8Mux);
     if (lab3f8CanBLastMs) lab3f8CanBPeriodMs = (uint32_t)(now - lab3f8CanBLastMs);
@@ -3103,8 +3163,12 @@ static bool uiAutoLaneChangeGateOpen() {
 
 static void uiAutoLaneChangeObserveAndInjectCanA(const struct can_frame &src) {
     if ((src.can_id & 0xC0000000UL) != 0 || src.can_dlc < 8) return;
+    const bool modelS = activeProfileIsModelS2017();
+    const uint16_t expectedId = modelS ? 0x218u : UI_CHASSIS_CONTROL_ID;
+    if (src.can_id != expectedId || (modelS && src.can_dlc != 8u)) return;
     const uint32_t now = (uint32_t)millis();
-    const uint8_t raw = uiAutoLaneChangeReadRawPure(src.data, src.can_dlc);
+    const uint8_t raw = modelS ? modelS218AutoLaneChangeRawPure(src.data, src.can_dlc)
+                              : uiAutoLaneChangeReadRawPure(src.data, src.can_dlc);
     bool enabled;
     uint8_t targetBus;
     portENTER_CRITICAL(&autoLc293Mux);
@@ -3124,10 +3188,11 @@ static void uiAutoLaneChangeObserveAndInjectCanA(const struct can_frame &src) {
     if (raw == UI_AUTO_LANE_CHANGE_ON_PURE) return;
 
     struct can_frame out = {};
-    out.can_id = UI_CHASSIS_CONTROL_ID;
+    out.can_id = expectedId;
     out.can_dlc = 8;
     memcpy(out.data, src.data, 8);
-    if (!uiAutoLaneChangeFinalizePure(out.data, out.can_dlc)) return;
+    if (modelS ? !modelS218AutoLaneChangeFinalizePure(out.data, out.can_dlc)
+               : !uiAutoLaneChangeFinalizePure(out.data, out.can_dlc)) return;
     const uint32_t txEpoch = canTxEpochSnapshot();
     MCP2515::ERROR mcpErr = MCP2515::ERROR_FAIL;
     const bool attempted = canTxMcpSend(&out, txEpoch, mcpErr, nullptr);
@@ -3148,6 +3213,7 @@ static void uiAutoLaneChangeObserveAndInjectCanA(const struct can_frame &src) {
 }
 
 static void uiAutoLaneChangeObserveAndInjectCanB(const twai_message_t &src) {
+    if (activeProfileIsModelS2017()) return; // CAN-B 0x218 has a different payload in the capture.
     if (src.extd || src.rtr || src.data_length_code < 8) return;
     const uint32_t now = (uint32_t)millis();
     const uint8_t raw = uiAutoLaneChangeReadRawPure(src.data, src.data_length_code);
@@ -3598,7 +3664,7 @@ static bool lab3f8FinalValidate(twai_message_t *out, void *opaque) {
       return false;
     const uint32_t now = (uint32_t)millis();
     if ((uint32_t)(now - context.receivedMs) > LAB3F8_FRESH_MS_PURE ||
-        !twaiNonSummonAdmissionOpen()) return false;
+        !autopilotControlAdmissionOpen()) return false;
     bool valid; uint8_t state;
     portENTER_CRITICAL(&stateMux);
     valid = dasAutopilotStateValid; state = dasAutopilotState4;
@@ -3612,14 +3678,23 @@ static bool lab3f8FinalValidate(twai_message_t *out, void *opaque) {
             context.selected.confirmFreeEnabled, context.confirmTiming, valid, state),
         labMenuEnabled && summonHeartbeatOverrideSupported()};
     *out = context.stock; out->flags = 0;
-    context.result = ulcCompose3f8Pure(out->data, out->data_length_code, context.selected, gates);
+    context.result = ulcCompose3f8Pure(out->data, out->data_length_code, context.selected, gates, activeProfileIsModelS2017());
     context.finalComposed = context.result.changed;
     return context.result.changed;
 }
 
+// Adapter preserves final composition/cancellation under the existing MCP TX barrier.
+static bool lab3e8FinalValidateCanA(struct can_frame *out, void *opaque) {
+    if (!activeProfileIsModelS2017() || out->can_id != 0x3E8u) return false;
+    twai_message_t composed = {};
+    if (!lab3f8FinalValidate(&composed, opaque) || composed.identifier != 0x3E8u) return false;
+    memcpy(out->data, composed.data, 8u);
+    return true;
+}
+
 static void injectDriverAssistControl(const twai_message_t &src) {
     lab3f8ObserveCanB(src);
-    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr)) return;
+    if (!lab3f8FrameValidPure(src.identifier, src.data_length_code, src.extd, src.rtr, activeProfileIsModelS2017())) return;
     const uint32_t generation = canTxCancellationGenerationSnapshot(&lab3f8Generation);
 
     UlcCompositeSelectionPure selected = {};
@@ -3686,10 +3761,10 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     twai_message_t out = src;
     out.flags = 0;
     UlcCompositeResultPure result =
-        ulcCompose3f8Pure(out.data, out.data_length_code, selected, gates);
+        ulcCompose3f8Pure(out.data, out.data_length_code, selected, gates, activeProfileIsModelS2017());
     if (!result.changed) return;
 
-    if (!twaiNonSummonAdmissionOpen()) {
+    if (!autopilotControlAdmissionOpen()) {
         portENTER_CRITICAL(&lab3f8Mux);
         lab3f8TxFail++;
         if (result.ulcOffHighwayChanged) ulcOffHighwayTxFail++;
@@ -3705,18 +3780,35 @@ static void injectDriverAssistControl(const twai_message_t &src) {
     const uint32_t now = (uint32_t)millis();
     const uint32_t txEpoch = lab3f8FrameRxEpoch;
     Lab3f8FinalContext context = {src, selected, confirmTiming, generation, lab3f8FrameRxMs, result};
-    const esp_err_t err = canTxTwaiTransmitValidated(
-        &out, txEpoch, CAN_TX_FRESH_BOTH, lab3f8FinalValidate, &context);
+    esp_err_t err;
+    if (activeProfileIsModelS2017()) {
+        struct can_frame canAOut = {};
+        canAOut.can_id = 0x3E8u;
+        canAOut.can_dlc = 8u;
+        memcpy(canAOut.data, out.data, 8u);
+        MCP2515::ERROR mcpErr = MCP2515::ERROR_FAIL;
+        const bool attempted = canTxMcpSendValidated(
+            &canAOut, txEpoch, lab3e8FinalValidateCanA, &context, mcpErr);
+        err = attempted && mcpErr == MCP2515::ERROR_OK ? ESP_OK : ESP_FAIL;
+        memcpy(out.data, canAOut.data, 8u);
+        if (attempted) {
+            if (err == ESP_OK) { ++mcpTxOk; mcpTxFailConsecutive = 0; }
+            else { ++mcpTxFail; if (mcpTxFailConsecutive < 255u) ++mcpTxFailConsecutive; }
+        }
+    } else {
+        err = canTxTwaiTransmitValidated(
+            &out, txEpoch, CAN_TX_FRESH_BOTH, lab3f8FinalValidate, &context);
+    }
     // Admission rejection counts initially prepared requests. Once final
     // composition succeeds, transport results belong only to surviving fields.
     if (context.finalComposed) result = context.result;
-    researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code, out.data, err == ESP_OK);
+    if (!activeProfileIsModelS2017()) researchCaptureObserveTxVh((uint16_t)out.identifier, out.data_length_code, out.data, err == ESP_OK);
     portENTER_CRITICAL(&lab3f8Mux);
     if (err == ESP_OK) lab3f8TxOk++;
     else               lab3f8TxFail++;
     if (result.ulcOffHighwayChanged) {
       ulcOffHighwayLastTxValid = true;
-      ulcOffHighwayLastTxRaw = uiUlcOffHighwayReadRawPure(out.data, out.data_length_code);
+      ulcOffHighwayLastTxRaw = uiUlcOffHighwayReadRawPure(out.data, out.data_length_code, activeProfileIsModelS2017());
       ulcOffHighwayLastTxMs = now;
       if (err == ESP_OK) ulcOffHighwayTxOk++; else ulcOffHighwayTxFail++;
     }

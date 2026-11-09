@@ -849,7 +849,9 @@ static String ulcStatsToJson() {
   jw.boolean("stalkConfirmEnabled", noConfirmEnabled);
   jw.i32("stalkConfirmTimingMode", (int32_t)(noConfirmTimingMode));
   jw.boolean("stalkConfirmGateOpen", noConfirmGate);
-  jw.string("stalkConfirmRoute", "CAN B / Chassis");
+  jw.string("stalkConfirmRoute", activeProfileIsModelS2017() ? "CAN A / Party / 0x3E8" : "CAN B / Chassis");
+  jw.string("stalkConfirmCanAName", activeProfileCanAName());
+  jw.u32("driverAssistPhysicalBus", activeProfileIsModelS2017() ? 1u : 2u);
   jw.string("stalkConfirmCanBName", canBName);
   jw.boolean("stockStalkConfirmValid", stockStalkConfirmValid);
   jw.i32("stockStalkConfirm", stockStalkConfirmValid ? (stockStalkConfirm ? 1 : 0) : -1);
@@ -1445,6 +1447,7 @@ static const char *canATxTraceSourceName(uint8_t source, uint16_t id) {
   if (activeProfileIsModelS2017()) {
     if (id == 0x045u) return "AUTO_BLINKER_STALK";
     if (id == 0x3EEu) return "R79_SUMMON_TLSSC";
+    if (id == 0x3E8u) return "DRIVER_ASSIST_OVERLAY";
   }
   if (id == (uint16_t)(nagCfg.targetId & 0x7FFU)) return "NAG";
   switch (id) {

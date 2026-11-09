@@ -65,7 +65,7 @@
 #include "text_format_arduino.h"
 #include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.29.1"
+#define FW_VERSION "v3.29.1S"
 
 #include "continuous_ap_fsm_pure.h"
 #include "t2can_core_state.h"

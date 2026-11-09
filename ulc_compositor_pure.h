@@ -6,9 +6,9 @@
 // ulc policy pure
 static constexpr uint8_t UI_ULC_POLICY_STOCK_PURE = 0xFFu;
 
-static inline uint8_t uiUlcOffHighwayReadRawPure(const uint8_t *data, uint8_t dlc) {
-  if (!data || dlc < 2) return UI_ULC_POLICY_STOCK_PURE;
-  return (uint8_t)((data[1] >> 7) & 0x01u);  // bit 15
+static inline uint8_t uiUlcOffHighwayReadRawPure(const uint8_t *data, uint8_t dlc, bool modelS = false) {
+  if (!data || dlc < (modelS ? 8u : 2u)) return UI_ULC_POLICY_STOCK_PURE;
+  return modelS ? (uint8_t)(data[7] & 1u) : (uint8_t)((data[1] >> 7) & 1u);
 }
 
 static inline bool ulcPolicyApGateOpenPure(bool selectionActive,
@@ -47,8 +47,8 @@ static inline bool ulcNoConfirmGateOpenWithTimingPure(bool profileAvailable,
 // ulc compositor pure
 static constexpr uint8_t ULC_COMPOSITE_STOCK_PURE = 0xFFu;
 static constexpr uint32_t LAB3F8_FRESH_MS_PURE = 3000u;
-static inline bool lab3f8FrameValidPure(uint32_t id, uint8_t dlc, bool extended, bool remote) {
-  return id == 0x3F8u && dlc == 8u && !extended && !remote;
+static inline bool lab3f8FrameValidPure(uint32_t id, uint8_t dlc, bool extended, bool remote, bool modelS = false) {
+  return id == (modelS ? 0x3E8u : 0x3F8u) && dlc == 8u && !extended && !remote;
 }
 
 struct UlcCompositeSelectionPure {
@@ -78,7 +78,7 @@ struct UlcCompositeResultPure {
 
 static inline UlcCompositeResultPure ulcCompose3f8Pure(
     uint8_t *data, uint8_t dlc, const UlcCompositeSelectionPure &selected,
-    const UlcCompositeGatesPure &gates) {
+    const UlcCompositeGatesPure &gates, bool modelS = false) {
   UlcCompositeResultPure result = {};
   if (!data || dlc < 8 ||
       (selected.ulcOffHighwayMode != ULC_COMPOSITE_STOCK_PURE &&
@@ -90,29 +90,38 @@ static inline UlcCompositeResultPure ulcCompose3f8Pure(
     return result;
   }
 
+  // Model S 0x3E8 DBC: ALC bit54, ULC bit56, blind-spot bits50..51.
+  // Stalk confirmation (bit1) and heartbeat (bits2..3) are unchanged.
+  const uint8_t alcByte = modelS ? 6u : 7u;
+  const uint8_t alcMask = modelS ? 0x40u : 0x01u;
+  const uint8_t ulcByte = modelS ? 7u : 1u;
+  const uint8_t ulcMask = modelS ? 0x01u : 0x80u;
+  const uint8_t blindShift = modelS ? 2u : 4u;
+  const uint8_t blindMask = (uint8_t)(3u << blindShift);
+
   if (selected.alcOffHighwayEnabled && gates.alcAutosteerOpen &&
-      (data[7] & 0x01u) == 0) {
-    data[7] = (uint8_t)(data[7] | 0x01u);
+      (data[alcByte] & alcMask) == 0) {
+    data[alcByte] = (uint8_t)(data[alcByte] | alcMask);
     result.alcOffHighwayChanged = true;
   }
 
   if (selected.ulcOffHighwayMode != ULC_COMPOSITE_STOCK_PURE &&
       gates.ulcApOpen) {
-    const uint8_t stock = (uint8_t)((data[1] >> 7) & 0x01u);
+    const uint8_t stock = (uint8_t)((data[ulcByte] & ulcMask) != 0u);
     if (stock != selected.ulcOffHighwayMode) {
       if (selected.ulcOffHighwayMode != 0)
-        data[1] = (uint8_t)(data[1] | 0x80u);
+        data[ulcByte] = (uint8_t)(data[ulcByte] | ulcMask);
       else
-        data[1] = (uint8_t)(data[1] & (uint8_t)~0x80u);
+        data[ulcByte] = (uint8_t)(data[ulcByte] & (uint8_t)~ulcMask);
       result.ulcOffHighwayChanged = true;
     }
   }
 
   if (selected.blindSpotMode != ULC_COMPOSITE_STOCK_PURE && gates.ulcApOpen) {
-    const uint8_t stock = (uint8_t)((data[6] >> 4) & 0x03u);
+    const uint8_t stock = (uint8_t)((data[6] >> blindShift) & 0x03u);
     if (stock != selected.blindSpotMode) {
-      data[6] = (uint8_t)((data[6] & (uint8_t)~0x30u) |
-                          (uint8_t)(selected.blindSpotMode << 4));
+      data[6] = (uint8_t)((data[6] & (uint8_t)~blindMask) |
+                          (uint8_t)(selected.blindSpotMode << blindShift));
       result.blindSpotChanged = true;
     }
   }

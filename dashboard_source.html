@@ -1105,9 +1105,9 @@ async function fetchLab(prefetched=null){try{const s=prefetched||await jget('/ap
   if($('labUlcNoConfirmToggle')){$('labUlcNoConfirmToggle').checked=noConfirmEnabled;$('labUlcNoConfirmToggle').disabled=!noConfirmSupported}
   if($('labUlcNoConfirmPreApToggle')){$('labUlcNoConfirmPreApToggle').checked=noConfirmTiming===1;$('labUlcNoConfirmPreApToggle').disabled=!noConfirmSupported}
   if($('labUlcNoConfirmTimingDesc'))$('labUlcNoConfirmTimingDesc').textContent=noConfirmTiming===1?'ON · PRE-AP + AP ACTIVE · AP state gate bypassed':'OFF · AP ACTIVE ONLY · current/default behavior';
-  const canAName=s.stalkConfirmCanAName||'CAN A',canBName=s.stalkConfirmCanBName||'CAN B';
-  if($('lab3f8CanBLabel'))$('lab3f8CanBLabel').textContent='CAN B · '+canBName+' · bit1 / Hz / age / RX';
-  if($('lab3f8CanBRawLabel'))$('lab3f8CanBRawLabel').textContent='CAN B · '+canBName+' · raw';
+  const canAName=s.stalkConfirmCanAName||'CAN A',canBName=s.stalkConfirmCanBName||'CAN B';const driverAssistRoute=Number(s.driverAssistPhysicalBus)===1?('CAN A · '+canAName):('CAN B · '+canBName);
+  if($('lab3f8CanBLabel'))$('lab3f8CanBLabel').textContent=driverAssistRoute+' · bit1 / Hz / age / RX';
+  if($('lab3f8CanBRawLabel'))$('lab3f8CanBRawLabel').textContent=driverAssistRoute+' · raw';
   if($('labUlcNoConfirmGate')){const gateText=!noConfirmEnabled?'OFF':noConfirmTiming===1?(noConfirmGate?'PRE-AP · OPEN':'PRE-AP · BLOCKED'):(noConfirmGate?'AP ONLY · OPEN':'AP ONLY · BLOCKED');$('labUlcNoConfirmGate').textContent=gateText;$('labUlcNoConfirmGate').className='labValueV '+(noConfirmGate?'good':'')}
   if($('labUlcNoConfirmStock'))$('labUlcNoConfirmStock').textContent=(s.stockStalkConfirmValid?String(s.stockStalkConfirm):'—')+' / 0';
   if($('labUlcNoConfirmTxB'))$('labUlcNoConfirmTxB').textContent=(s.stalkConfirmTxBOk||0)+' / '+(s.stalkConfirmTxBFail||0);
