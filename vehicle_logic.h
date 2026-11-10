@@ -2222,7 +2222,7 @@ static void sendStalkFrameCanB(uint8_t turn, uint32_t txEpoch, bool directUser) 
       stalkFrameRecordBlocked(turn, false);
       return;
     }
-    out.identifier = 0x238u;
+    out.identifier = 0x238u; // Model S CAN-B stock and injection use the same ID.
     out.data_length_code = 8u;
     esp_err_t err = ESP_ERR_TIMEOUT;
     if (twaiNonSummonAdmissionOpen())
@@ -2278,8 +2278,12 @@ static void handleModelS238OnCanB(const uint8_t *data, uint8_t dlc) {
     }
   }
   portEXIT_CRITICAL(&blinkAMux);
-  if (request.transmit)
-    sendStalkFrameCanB(dirToTurn(request.dir), canTxEpochSnapshot(), false);
+  if (request.transmit) {
+    const uint32_t epoch = canTxEpochSnapshot();
+    const uint8_t turn = dirToTurn(request.dir);
+    sendStalkFrameCanA(turn, epoch, false);
+    sendStalkFrameCanB(turn, epoch, false);
+  }
 }
 
 static void handle249OnCanA(const uint8_t *data, uint8_t dlc) {
@@ -2850,7 +2854,10 @@ static void blinkATxTick() {
   if (activeTurnSignalVariant == TURN_SIGNAL_STALKLESS) return; // 0x3C2 echoes on each live mux1 RX
   if ((uint32_t)(now - lastTxMs) < BLINKA_TX_PERIOD_MS) return;
   lastTxMs = now;
-  if (activeProfileIsYl() || (activeProfileIsModelS2017() && !directUser))
+  if (activeProfileIsModelS2017() && !directUser) {
+    sendStalkFrameCanA(turn, txEpoch, false);
+    sendStalkFrameCanB(turn, txEpoch, false);
+  } else if (activeProfileIsYl())
     sendStalkFrameCanB(turn, txEpoch, directUser);
   else if (activeCanAIsBody() || activeProfileIsModelS2017()) sendStalkFrameCanA(turn, txEpoch, directUser);
 }
