@@ -15,61 +15,23 @@
 **code entirely rewritten by LP_YL**  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
-### Discord
-Join Discord server for more info:
-https://discord.gg/euPbYG8Npc
-
----
-
-**v3.28+ **	
-- Continuous AP fix   
-- Independent ISA chime Suppression 
-- Increased OTA receive idle timeout from 5 to 30 seconds.
-- Added detailed upload errors and improved retry handling.
-- Prevented duplicate uploads and false success messages.
-- The new timeout applies after installing and booting this version.  
-- Clearer feature names and short descriptions  
-
-**v3.26** 
- - Fixed initial setup recovery, added clear save-error messages, and prevented duplicate saves.
- - Added USB CAN logging and a persistent listen-only mode. (not for everyone)
- - Added a LAB control for the Summon heartbeat value.
- - Made ISA Suppression independent of Nag Killer.
- - Improved long diagnostic text layout on mobile screens.
-
-**v3.23**  
- - Improved CAN reliability, including safer BUS-OFF recovery and expanded error diagnostics.  
- - Simplified CAN A reception with immediate single-frame processing.  
- - Removed completed or obsolete LAB tools, including Lane Graph, Parked 0x3FD Injection, and Blind Spot Injection Monitor.  
- - Fixed dashboard API recovery and mobile dropdown touch handling.  
- - Made Disable Driver Monitoring a standalone production feature, independent of Nag Killer.  
- - Promoted Visual Speed Control from LAB to Settings and removed 0x3FD from its name.  
- - Preserved existing AP, CAN health, signal freshness, routing, and transport safety checks.  
- - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
-
-
-## 📋3.0 Release Highlights  
-
+--- 
 - **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
 - **multiple operating modes:**  
   - Nag-killer + Eu-Unlock  
   - Advanced EAP + Eu-Unlock 
   - Nag-killer + Advanced EAP + Eu-Unlock (Model YL only)
+
 - **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.
 - **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.
-- **Runtime Bluetooth Master ON/OFF without MCU reboot**, while preserving saved devices, bonds, mappings, and Auto Connect settings.
-- **Reworked Auto Blinker** with profile-aware routing and direction-specific ALC availability gating.
-- **Independent R79 engine** with immediate reassertion and independent periodic refresh.
-- **Summon Monitor** separated from R79 ownership.
 - **Off-Highway ALC BETA** added as a normal vehicle feature.
+- **ISA chime Suppression** 
 - **TLSSC Highway Block** added: TLSSC can optionally turn **OFF on highways / controlled-access roads**.
 - **CAN Research Capture** with Snapshot, RAW Transition, and Auto ALC Transition modes.
-- **Dedicated LAB research area** for R79, ULC Blind Spot, ACC Follow Distance, and CAN capture.
-- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB.
-- **Configurable Wi-Fi AP**, tiered reset behavior, and expanded CAN/BLE diagnostics.
-- **Stronger CAN recovery safety** through the new TX recovery barrier / epoch model.
-- **Added optional Pause NAG at 0 km/h** — default OFF   
-- **Added topology-aware feature gating** for Advanced EAP, Body controls, NAG and EU Unlock  
+- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB. [Android APP](https://github.com/06066060606060/t2can-universal-unlock/releases/tag/android_1.2.1)
+ - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
+
+# Main Features:
 
 **Advanced EAP**
 - Automatically activates the turn signal.
