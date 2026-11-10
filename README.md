@@ -74,7 +74,6 @@ This code is adapted for the **LilyGO / T-2Can**.
 | LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
 | LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
 
-## 🧩 Main features
 
 ### 🛡️ Vehicle-profile safety
 
