@@ -22,14 +22,15 @@
   - Advanced EAP + Eu-Unlock 
   - Nag-killer + Advanced EAP + Eu-Unlock (Model YL only)
 
-- **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.
-- **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.
-- **Off-Highway ALC BETA** added as a normal vehicle feature.
-- **ISA chime Suppression** 
-- **TLSSC Highway Block** added: TLSSC can optionally turn **OFF on highways / controlled-access roads**.
-- **CAN Research Capture** with Snapshot, RAW Transition, and Auto ALC Transition modes.
-- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB. [Android APP](https://github.com/06066060606060/t2can-universal-unlock/releases/tag/android_1.2.1)
- - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
+- **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.  
+- **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.  
+- **Off-Highway ALC BETA** added as a normal vehicle feature.  
+- **ISA chime Suppression**  
+- **New Nag-killer TSL9 mode for Chassis/Body topology** (doesn't work in all regions)  
+- **TLSSC Highway Block** added: TLSSC can optionally turn **OFF on highways / controlled-access roads**.  
+- **CAN Research Capture** with Snapshot, RAW Transition, and Auto ALC Transition modes.  
+- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB. [Android APP](https://github.com/06066060606060/t2can-universal-unlock/releases/tag/android_1.2.1)  
+ - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)  
 
 # Main Features:
 
