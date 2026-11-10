@@ -3,7 +3,7 @@
 
 ## Download
 
-[**Download Android APK — v1.2.1**](https://github.com/OWNER/REPOSITORY/releases/download/android-v1.2.1/Tesla-Unlock-1.2.1.apk)
+[**Download Android APK — v1.2.1**](https://github.com/06066060606060/t2can-universal-unlock/releases/tag/android_1.2.1)
 
 [Release notes, source code, and checksums](https://github.com/OWNER/REPOSITORY/releases/tag/android-v1.2.1)
 
