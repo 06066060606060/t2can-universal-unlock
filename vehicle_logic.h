@@ -1357,6 +1357,19 @@ static bool r79RemoteStartupEvidenceLocked(uint32_t now) {
   return acaEvidence || sprEvidence;
 }
 
+// Manual-suppression entry must not count ACA. 0x118 bit 50 is DI_autonomyControlActive, set
+// whenever the DI is under autonomous control — TACC and Autopilot included. Counting it keeps R79
+// injecting after a steering-wheel Autosteer disengage with cruise kept (the suppression can never
+// re-enter), which blocks re-engaging Autosteer until cruise is cancelled. SPR (0x3F8
+// UI_selfParkRequest) only comes from a real Summon / self-park request and is the only entry veto.
+// ACA keeps its role in the CAN B transport priority (summonPriorityStateLocked): READY throughout
+// autonomy, so R79 keeps its emergency queue flush and retries while Autopilot drives. The confirmed
+// Summon session (ACA + latched SPR) is unchanged.
+static bool r79ManualSuppressionEvidenceLocked(uint32_t now) {
+  return sprValid && lastSprRaw != 0 && lastSprMillis != 0 &&
+      summonAgeFreshPure(now, lastSprMillis, SUMMON_SPR_FRESH_MS);
+}
+
 // stateMux must already be held. Priority never uses the v2.6 compatibility
 // gateParked fallback; PARK_STANDBY requires a fresh decoded real gear source.
 static uint8_t summonPriorityStateLocked(uint32_t now) {
@@ -1431,7 +1444,7 @@ static void updateR79ManualSuppressionLocked(
   const bool dasValid = dasAutopilotStateValid;
   const bool apActive = dasStateApActivePure(dasValid, dasAutopilotState4);
   const bool manualState = dasStateManualPure(dasValid, dasAutopilotState4);
-  const bool remoteStartupEvidence = r79RemoteStartupEvidenceLocked(now);
+  const bool remoteStartupEvidence = r79ManualSuppressionEvidenceLocked(now);
   r79ApGateObserveLocked(now);
   r79ManualSuppressionUpdatePure(
       r79ManualSuppression,
