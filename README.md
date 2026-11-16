@@ -76,7 +76,7 @@ This code is adapted for the **LilyGO / T-2Can**.
 | LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
 | LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
 
-*Invert CAN A & CAN B on Model YL & Model S/X  
+*Invert CAN A & CAN B wire on Model YL & Model S/X  
 
 
 ### 🛡️ Vehicle-profile safety
@@ -209,3 +209,7 @@ This Universal release is based on source-level comparison and consolidation of:
 - LP_YL V2.0
 - Advanced EAP & EU-Unlock V2.6.0 for T-2CAN
 - T2CAN Universal v3.x
+
+## License
+
+GNU GPL v3 or later. See [LICENSE](LICENSE).
