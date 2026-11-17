@@ -17,10 +17,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Arduino CLI
-        uses: arduino/setup-arduino-cli@v1
-        with:
-          version: '1.6.0'
+      - name: Install Arduino CLI 1.6.0
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://downloads.arduino.cc/arduino-cli/arduino-cli_1.6.0_Linux_64bit.tar.gz \
+            -o /tmp/arduino-cli.tar.gz
+          tar -xzf /tmp/arduino-cli.tar.gz -C "$HOME/.local/bin" arduino-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/arduino-cli" version
 
       - name: Install ESP32 core 3.3.12
         run: |
