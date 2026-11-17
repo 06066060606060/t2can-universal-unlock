@@ -57,6 +57,20 @@
 - **Model YL / Model S/X 需要按上游 README 反接 CAN A/B**；接线错误会导致功能异常，甚至无法收到关键帧。
 - 如从旧的 `t2can-monitor` 固件切换，请重新核对接线：旧项目使用 CAN A=Chassis、CAN B=Vehicle，和 Universal 的默认约定不同。
 
+### T-2CAN V1.0 原理图核对（重要）
+
+根据 LILYGO T-2CAN V1.0 原理图：
+
+- **MCP2515 晶振为 16 MHz**（X1），与 autowp-mcp2515 默认时钟和 Universal 的 `MCP_16MHZ` 一致；不存在“8 MHz 板”问题。
+- **P2 = CAN A（MCP2515）**，**P1 = CAN B（ESP32 TWAI）**；4 芯接口包含 CANH / CANL / SGND / DGND，具体针序以板子丝印/原理图为准。
+- 每路 CAN 都有板载 **120 Ω 终端**（RZ1 / RZ2）以及 1 MΩ / 1000 pF 隔离网络。接入已两端终端的车辆总线前，确认是否需要拆掉板载 120 Ω，避免总线阻抗过低。
+- CAN A/B 使用 **TD501MCAN 隔离收发器**（U1/U2）；CAN B 经 MS4553S 电平转换。隔离侧 SGND 与板内 DGND 不要随意短接。
+- **原生 Type-C USB**，无 USB 转串口芯片；烧录/串口使用 ESP32-S3 原生 USB，构建时保持 `CDCOnBoot=cdc`。
+- ESP32-S3-WROOM-1U 使用 **IPEX 天线接口**；不接 2.4 GHz 天线会导致 Wi-Fi 热点/BLE 距离极短甚至不可用。
+- 原理图上 ESP32 GPIO6/7 标为 `TXB_CAN/RXB_CAN`，与官方 `pin_config.h` 的 TWAI TX=7/RX=6 看起来相反；上游 Universal 按 7/6 使用，若 CAN B 完全无帧可先检查这一点。
+
+> 上板前建议先刷只读的 [板级自检固件](extras/bench-bringup/README.md)：双路 listen-only、不发送/不 ACK，通过网页查看 P1/P2 的原始帧。
+
 ## 下载与烧录
 
 ### 从旧固件切换：USB 整片烧录（推荐）

@@ -1,0 +1,3 @@
+
+# Arduino CLI local build output for helper sketches
+extras/**/build/
