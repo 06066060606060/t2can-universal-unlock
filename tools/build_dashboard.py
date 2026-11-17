@@ -11,7 +11,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "dashboard_source.html"
 HEADER = ROOT / "index_html.h"
-MAX_EMBEDDED_GZIP_BYTES = 100_000
+MAX_EMBEDDED_GZIP_BYTES = 120_000
 
 def minify_css(css: str) -> str:
     out = []
