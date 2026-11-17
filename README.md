@@ -1,220 +1,155 @@
-> ⚠️ **Research / educational firmware only**
->
-> This project interacts with a Tesla vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.
->
-> It sends signals directly to vehicle controllers; it is **not** a physical steering-wheel command. **Do not use it on public roads or in any situation where unsafe behavior could put people or property at risk.**
->
-> You are responsible for your own testing, wiring, configuration, and compliance with local laws.
+# T2CAN Universal v3.29.1 · 中文 Dashboard
 
---- 
+[![Build and release](https://github.com/bi4nbn/t2can-universal-unlock/actions/workflows/build-release.yml/badge.svg)](https://github.com/bi4nbn/t2can-universal-unlock/actions/workflows/build-release.yml)
 
-# T2CAN Universal Unlock v3.29.1
+> 基于上游 [06066060606060/t2can-universal-unlock](https://github.com/06066060606060/t2can-universal-unlock) v3.29.1 的 fork。
+> 本仓库在**不修改 CAN 注入逻辑**的前提下，把网页控制台（Dashboard）完整中文化，并提供 GitHub Actions 自动编译与 Release 发布。
 
-**Major Universal Release for Lilygo T2CAN**  
-**Release date:** 10 October 2026  
-**code entirely rewritten by LP_YL**  
-**[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
+> ⚠️ **研究 / 教育用途**：本项目会直接向特斯拉 CAN 总线注入信号，作者与上游均明确说明**未经过台架/实车验证**。只能在隔离台架或封闭场地研究，**不要用于公共道路**。风险与合规责任由使用者自行承担。
 
---- 
-- **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
-- **multiple operating modes:**  
-  - Nag-killer + Eu-Unlock  
-  - Advanced EAP + Eu-Unlock 
-  - Nag-killer + Advanced EAP + Eu-Unlock (Model YL only)
+## 中文界面预览
 
-- **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.  
-- **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.  
-- **Off-Highway ALC BETA** added as a normal vehicle feature.  
-- **ISA chime Suppression**  
-- **New Nag-killer TSL9 mode for Chassis/Body topology** (doesn't work in all regions)  
-- **TLSSC Highway Block** added: TLSSC can optionally turn **OFF on highways / controlled-access roads**. 
-- **toggle to restore Confirm free lane change setting (doesn't work in EU use auto blinker)**.  
-- **CAN Research Capture** with Snapshot, RAW Transition, and Auto ALC Transition modes.  
-- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB. [Android APP](https://github.com/06066060606060/t2can-universal-unlock/releases/tag/android_1.2.1)  
- - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)  
+以下截图来自本地离线预览（模拟数据，未连接车辆），用于展示中文 Dashboard 的布局与文案：
 
-# Main Features:
+| 首页 | 设置 |
+| --- | --- |
+| <img src="docs/images/zh/home.png" width="300" alt="中文首页"> | <img src="docs/images/zh/settings.png" width="300" alt="中文设置页"> |
 
-**Advanced EAP**
-- Automatically activates the turn signal.
-- Delay can be configured from the dashboard.
-- All lane-change safety features are maintained.
-- The turn signal starts only when the vehicle requests a lane change.
-- Lane changes can always be cancelled: On screen, using the open-door button or using s3xy button.
+| 防打扰（NAG） | 实验室（LAB） |
+| --- | --- |
+| <img src="docs/images/zh/nag.png" width="300" alt="中文防打扰页"> | <img src="docs/images/zh/lab.png" width="300" alt="中文实验室页"> |
 
-**EU Unlock**
-- Bypass R79 EU restriction in AP.
-- Expand Summon range to ±85 m.
-- Expanded lateral acceleration limits.  
-- Lane changes near forks are not disabled (EAP).  
-- Instantaneous lane change on blinker (EAP).  
-- No lane-change timeout once initiated (EAP).  
-- Automatically takes forks and exits (EAP).  
-- Toggle to activate TLSSC (EAP).  
+> 截图中的车辆状态、扭矩、CAN 计数均为演示数据；不代表真实车辆行为。
 
-**NAG-Killer**
-- eliminate the "hands on the wheel" prompt while using Autopilot/FSD*
+## 这个 fork 做了什么
 
----
+- **Dashboard 中文化**：页面标题、导航、开关、设置项、状态、说明、可见属性全部中文；`<html lang>` 从上游误写的 `ko` 修正为 `zh-CN`。
+- **动态文本翻译层**：JS 运行时写入的状态/计数/提示通过页面内嵌中文词典和 `MutationObserver` 翻译；**只改显示，不改任何业务逻辑**。
+- **保留技术术语**：`CAN / NAG / TLSSC / R79 / AP / NOA / MUX1 / HO / TX / RX / 0x 帧 ID / HW3 / S3XY / BLE / NVS` 等保留英文，方便对照 CAN 资料；车型名保留 `Model 3 / Model Y`。
+- **构建与发布自动化**：新增 GitHub Actions，推送 `v*` tag 时自动用 ESP32 core 3.3.12 编译 OTA 与整片镜像，并创建 GitHub Release。
+- **固件逻辑未改**：CAN、NAG、TLSSC、R79、OTA、BLE 等与上游 v3.29.1 保持一致。
 
-## 🚙 Supported profiles
+## 主要功能（继承上游）
 
-| Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
-|---|:---:|:---:|:---:|:---:|
-| **Model YL · Party + Body** | ✅ | ✅ | ✅ | ✅ |
-| **Standard Model 3/Y · Body + Chassis** | ❌✅ | ✅ | ✅ | ✅ | 
-| **Standard Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
+- **防打扰 / NAG Killer**：转向扭矩注入（Mode A/B/C/H）或 TSL9 手势；可选关闭驾驶员监控（`0x3FD` MUX1 bit43）。
+- **Advanced EAP / 自动转向灯**：检测到 NOA 变道请求后自动打灯，带延迟、取消与防误触策略。
+- **EU Unlock / R79 & 召唤**：固定 R79 策略（bit19=0、bit47=1、可选 bit18），以及召唤心跳覆盖。
+- **TLSSC**：红绿灯/停止标志控制，可选高速自动关闭、NOA 期间暂停。
+- **ULC / 变道**：Confirm-Free 变道、ULC 非高速、ULC 盲区、Off-Highway ALC。
+- **AP 加速 / 动能回收、踏板响应、连续 AP、S3XY 按钮、CAN 研究抓包、诊断/恢复**。
+- 中文 Dashboard 的 `设置`、`实验室` 页可查看/修改上述功能；高风险功能默认关闭。
 
-> Model 3 Highland requires selecting the installed turn-control type during profile setup. Other supported profiles automatically use the Stalk configuration.
+## 支持的车型与拓扑
 
-## 🔧 Hardware Target
+| 配置 | 防打扰 | Advanced EAP | Pedal Map / AP 驱动 | EU Unlock |
+| --- | :---: | :---: | :---: | :---: |
+| Model Y L · Party + VH | ✅ | ✅ | ✅ | ✅ |
+| Standard Model 3/Y · Body + Chassis | ✅（TSL9） | ✅ | ✅ | ✅ |
+| Standard Model 3/Y · Party + Chassis | ✅（扭矩） | ❌ | ❌ | ✅ |
 
-This code is adapted for the **LilyGO / T-2Can**.
+> Model 3 Highland 首次配置时需选择实际安装的转向控制类型（拨杆 / 无拨杆）。
 
-| Device | CAN Interface | CAN Bus | Function |
-|---|---|---|---| 
-| LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
-| LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
+## 硬件与接线
 
-*Invert CAN A & CAN B wire on Model YL & Model S/X  
+- **LILYGO T-2CAN**（ESP32-S3，16 MB Flash，8 MB OPI PSRAM）。
+- CAN A：外置 MCP2515（SPI，经典 CAN 2.0B）；CAN B：ESP32-S3 内置 TWAI。
+- T-2CAN 默认接线：**CAN A = Body CAN，CAN B = Chassis CAN**。
+- **Model YL / Model S/X 需要按上游 README 反接 CAN A/B**；接线错误会导致功能异常，甚至无法收到关键帧。
+- 如从旧的 `t2can-monitor` 固件切换，请重新核对接线：旧项目使用 CAN A=Chassis、CAN B=Vehicle，和 Universal 的默认约定不同。
 
+## 下载与烧录
 
-### 🛡️ Vehicle-profile safety
+### 从旧固件切换：USB 整片烧录（推荐）
 
-A saved Vehicle Profile determines the CAN topology, turn-signal route, supported features, and profile-specific restrictions.
+如果设备当前是 `t2can-monitor`（`default.csv`，app 分区约 1.25 MB），**不能直接 OTA** 到 Universal（OTA 镜像约 1.58 MB，分区装不下）。请使用 Release 中的 `*-zh.fullflash.bin`：
 
-On first boot or after a major migration, firmware remains in a fail-closed setup state until a valid profile is saved:
+```sh
+esptool.py --chip esp32s3 --port COM3 write_flash -z 0x0 \
+  T2CAN-Universal-v3.29.1-LP_YL-zh.fullflash.bin
+```
 
-- CAN transmission and injection are disabled.
-- CAN recovery supervision is disabled.
-- Bluetooth is not started.
-- Wi-Fi and the Profile Setup page remain available.
+> 整片烧录会覆盖 bootloader、分区表和 NVS，**操作前先备份**。T-2CAN 为 16 MB Flash，镜像从 `0x0` 写入。
 
-> Migrating from pre-Universal v2.x firmware intentionally erases NVS before creating the Universal bootstrap configuration.
+### 已有 Universal 固件：OTA
 
-### 🚦 Advanced EAP and Auto Blinker
+如果设备已经在 Universal（3 MB app 分区）上，打开网页 `固件更新`，上传 Release 中的 `*-zh.OTA.bin` 即可。
 
-Advanced EAP can automatically request a turn signal when the vehicle requests a lane change, with configurable delay and retained cancellation options through the screen, door-open action, or S3XY button.
+### 首次启动
 
-Auto Blinker is profile-aware and validates the requested direction before transmission:
+1. 连接 T-2CAN 默认热点：SSID `T2CAN-****`，密码 `12345678`（可在中文 Dashboard 的“无线”页修改）。
+2. 浏览器打开 `http://192.168.4.1`。
+3. 首次启动进入**车辆配置模式**：选择车型、CAN 拓扑、转向灯类型，保存并重启；CAN 才会启用（fail-closed）。
+4. 高风险功能（NAG 扭矩、R79/召唤、TLSSC Restore 等）默认关闭，请在台架逐项验证后再使用。
 
-- `DAS_autoLaneChangeState` must permit the requested left or right maneuver.
-- The condition is checked when the request is armed and again when it fires.
-- A lane becoming unavailable during the delay cancels the pending action.
-- NOA must remain eligible through the configured stabilization interval.
-- Door-open or S3XY cancellation can apply a shared, configurable pause; triggering cancel again releases it early.
+## 从源码编译
 
-> Direct S3XY left/right blinker actions remain independent from the Auto Blinker enable, stabilization, and pause states.
+本仓库可用 **Arduino CLI + ESP32 core 3.3.12** 编译（5 分钟级）：
 
-### 🔁 R79 and Summon
+```sh
+# 1) 安装 ESP32 core 3.3.12
+arduino-cli config init --overwrite
+arduino-cli config add board_manager.additional_urls \
+  https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core update-index
+arduino-cli core install esp32:esp32@3.3.12
 
-The production R79 path applies a fixed policy to accepted stock frames:
+# 2) 安装 MCP2515 库
+git clone --depth 1 https://github.com/autowp/arduino-mcp2515 \
+  "$HOME/Arduino/libraries/autowp-mcp2515"
 
-- `UI_applyEceR79` bit 19: forced to `0`.
-- `UI_hardCoreSummon` bit 47: forced to `1`.
-- SmartSummonOnly bit 18: selectable in **Settings → Summon** as `FORCE 0` or `STOCK`.
+# 3) 把仓库中的 sketch 复制到同名目录（Arduino 要求目录名与 .ino 同名）
+mkdir -p "$RUNNER_TEMP/T2CAN-Universal-v3.29.1-LP_YL"
+cp *.h *.ino "$RUNNER_TEMP/T2CAN-Universal-v3.29.1-LP_YL/"
 
-Each accepted stock mux1 frame is echoed with a bounded 2 ms queue wait. Each accepted mux2 frame schedules one +150 ms refresh. The LAB page now exposes a read-only R79 status card rather than transport/timing experiments.
+# 4) 编译
+arduino-cli compile \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,CDCOnBoot=cdc,USBMode=hwcdc,FlashMode=qio,CPUFreq=240,DebugLevel=none" \
+  --output-dir dist "$RUNNER_TEMP/T2CAN-Universal-v3.29.1-LP_YL"
+```
 
-A separate always-on Summon Monitor provides state observation, gate telemetry, ACA/SPR monitoring, park-state monitoring, and queue/transport telemetry.
+产物：
 
-### 💪 NAG Killer and AP Right Scroll
+- `dist/T2CAN-Universal-v3.29.1-LP_YL.ino.bin` → OTA 镜像
+- `dist/T2CAN-Universal-v3.29.1-LP_YL.ino.merged.bin` → 16 MB 整片镜像
 
-NAG Killer remains profile-gated. Mode H Rev.4 is available as a production profile in **Settings → NAG KILLER** with these defaults:
+## GitHub Actions 自动编译与发布
 
-- Primary: 1.80–2.60 Nm
-- Wait: 0.90–3.00 s
-- Refractory: 0.50–1.50 s
-- Opposite carrier: 0.10–0.60 Nm
-- Tiered Hands-On thresholds: 0.40 / 2.00 Nm
-- Visual Warning Rescue: ON after 0.5 s
-- Hard pause while stopped
+- 工作流：`.github/workflows/build-release.yml`
+- 触发：推送 `v*` tag（例如 `v3.29.1-zh.1`）或手动 `workflow_dispatch`。
+- 自动步骤：安装 ESP32 core 3.3.12 → 安装 MCP2515 库 → 编译 → 生成 `*-zh.OTA.bin` / `*-zh.fullflash.bin` → 上传 Artifact；tag 构建同时创建 GitHub Release。
+- 发布说明见 `.github/release-notes.md`。
 
-AP Right Scroll is available in Settings for Model YL and standard Model 3/Y profiles. A newly detected visual warning triggers an immediate UP/DOWN pair; if the warning stays active, it repeats every 1–5 seconds (default: 2 seconds). Physical right-scroll input always has priority.
+## 中文 Dashboard 的维护
 
-### 🔘 S3XY Button support
+- 可编辑源文件：[`dashboard_source.html`](dashboard_source.html)
+- 生成嵌入头：[`index_html.h`](index_html.h)
+- 构建脚本：[`tools/build_dashboard.py`](tools/build_dashboard.py)（Zopfli gzip；本 fork 将体积上限从 100 KB 调到 120 KB 以容纳中文词典）
+- 重新生成：
 
-- Register up to **three S3XY Buttons**.
-- Enable or disable Bluetooth Master at runtime without rebooting.
-- Saved devices, bonds, button mappings, and Auto Connect settings are retained.
-- S3XY actions can control direct blinkers, lane-change cancellation, and CAN research capture.
+```sh
+python3 tools/build_dashboard.py
+```
 
-## 🧪 Dashboard and LAB
+- 如需调整翻译：修改 `dashboard_source.html` 中的静态文案，或修改生成脚本/运行时词典中的动态词条，然后重新运行构建脚本并编译固件。
 
-The mobile dashboard has four persistent sections:
+## 与上游的关系
 
-| Section | Purpose |
-|---|---|
-| **HOME** | Status and quick controls |
-| **DEVICES** | S3XY / Bluetooth devices |
-| **SETTINGS** | Supported production features and system configuration |
-| **LAB** | Experimental tools and CAN research |
+- 上游：[06066060606060/t2can-universal-unlock](https://github.com/06066060606060/t2can-universal-unlock)
+- 本 fork：[bi4nbn/t2can-universal-unlock](https://github.com/bi4nbn/t2can-universal-unlock)
+- 上游版本：v3.29.1；本 fork 只做 Dashboard 中文化与构建/发布自动化，**不改变车辆控制策略**。
+- 上游完整英文 README/变更记录见上游仓库的 `README.md`、`CHANGELOG.md`、`VALIDATION.md`。
 
-### 🔬 LAB tools
+## 安全与合规
 
-> ⚠️ LAB is intended for controlled research only.
-
-- Read-only R79 status and bit telemetry.
-- Experimental **Disable Driver Monitoring (NAG)** control using `0x3FD` mux1 bit 43, where supported.
-- ULC Blind Spot research modes: Stock, Standard, Aggressive, and Mad Max.
-- Auto Lane Change experiment.
-- CAN capture: Snapshot, Raw Transition, and Auto ALC Transition.
-
-> CAN Research Capture is RX-only: it observes and exports CAN traffic but does not replay captured frames.
-
-## 📶 Wi-Fi and resets
-
-### 📡 Wi-Fi access point
-
-Default access point:
-
-| Setting | Default |
-|---|---|
-| SSID | `T2CAN-****` |
-| Password | `12345678` |
-| Dashboard | [http://192.168.4.1](http://192.168.4.1) |
-
-SSID and password can be changed from the dashboard. Applying a Wi-Fi change restarts only the access point; CAN, BLE, and the MCU continue running.
-
-### ♻️ Reset options
-
-| Action | What it clears | What it preserves |
-|---|---|---|
-| Reset Firmware Settings | Normal firmware settings | Vehicle profile, Wi-Fi, and S3XY/Bluetooth data |
-| Reset Bluetooth Data | S3XY registry, mappings, bonds, discovery/cache | Bluetooth Master and Global Auto Connect settings |
-| Factory Reset | All NVS data | Nothing; returns to Vehicle Profile Setup |
-
-## 🔧 Hardware note
-
-> ⚠️ Remove the two **120 Ω termination resistors** if they are not appropriate for your wiring. Leaving them in place can cause CAN signal errors.
-
-<img width="407" height="180" alt="LILYGO-T-2CAN_9" src="https://github.com/user-attachments/assets/0d272b7e-bd82-408f-9ca1-239e6dab44d5" />
-
-### ☕ Support the Project 
-
-[![Crypto](https://img.shields.io/badge/Crypto-Donate-F7931A?style=for-the-badge&logo=bitcoin&logoColor=white)](https://tesla-mods.fkey.id/) [![PayPal](https://img.shields.io/badge/PayPal-Donate-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=Q2YMMMJYTAPJE)
-<a href="https://www.buymeacoffee.com/xbmod" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 30px !important;width: 108px !important;" ></a>
-
-欢迎请作者喝杯咖啡，助力后续更新~  
-
-<img width="279" height="381" alt="mm_facetoface_collect_qrcode_1794913481420" src="https://github.com/user-attachments/assets/53b0d528-529d-43f7-bef0-712938274629" />
-
-
-### Discord
-
-Join the project Discord server:
-
-https://discord.gg/euPbYG8Npc
-
-
-## 📚 Scope
-
-This Universal release is based on source-level comparison and consolidation of:
-
-- LP_YL V2.0
-- Advanced EAP & EU-Unlock V2.6.0 for T-2CAN
-- T2CAN Universal v3.x
+- 这是**实验性**车辆 CAN 研究固件：作者明确说明未台架/实车验证，注入时序、原厂帧竞争、车辆接受度都未被证明。
+- 会主动向 Chassis / Vehicle 总线发送帧；错误接线、错误总线、错误时序都可能造成危险行为。
+- 请只在隔离台架或封闭场地使用，并保留 USB 恢复与完整备份；**不要用于公共道路或载人场景**。
+- 解除区域/付费限制、修改驾驶员监控等行为可能违反当地法规与车辆条款，风险自负。
 
 ## License
 
-GNU GPL v3 or later. See [LICENSE](LICENSE).
+GNU GPL v3.0（见 [`LICENSE.txt`](LICENSE.txt)）。本 fork 的修改同样按 GPL-3.0 发布；分发固件时请同时提供对应源码与修改说明。
+
+## 致谢
+
+感谢上游作者 **06066060606060 / XBmod** 及社区贡献者；本 fork 仅在其公开成果上做中文化与发布工程化。
