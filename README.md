@@ -197,7 +197,8 @@ SSID and password can be changed from the dashboard. Applying a Wi-Fi change res
 
 欢迎请作者喝杯咖啡，助力后续更新~  
 
- <img width="178.666" height="178" alt="mm_facetoface_collect_qrcode_17949068ezrze97436" src="https://github.com/user-attachments/assets/0054af9d-7f14-4f8c-9431-541e6c08550f" />
+<img width="279" height="381" alt="mm_facetoface_collect_qrcode_1794913481420" src="https://github.com/user-attachments/assets/53b0d528-529d-43f7-bef0-712938274629" />
+
 
 ### Discord
 
