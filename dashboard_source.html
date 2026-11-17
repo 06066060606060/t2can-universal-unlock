@@ -508,8 +508,8 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="topologyStep" id="topologyStep">
 <div class="stepTitle">CAN Connection</div><div class="stepSub">Select the CAN buses wired to T-2CAN. The connection determines which features are available.</div>
 <div class="topologyChoices">
-<button class="topologyChoice" data-topology="BODY_CHASSIS"><div class="t1">Body CAN + Chassis CAN</div><div class="t2">Standard 3/Y configuration</div><div class="capList"><div class="capLine"><span>NAG KILLER</span><span class="no">—</span></div><div class="capLine"><span>ADV EAP</span><span class="yes">✓ AVAILABLE</span></div><div class="capLine"><span>EU UNLOCK</span><span class="yes">✓ AVAILABLE</span></div></div></button>
-<button class="topologyChoice" data-topology="PARTY_CHASSIS"><div class="t1">Party CAN + Chassis CAN</div><div class="t2">Nag Killer configuration</div><div class="capList"><div class="capLine"><span>NAG KILLER</span><span class="yes">✓ AVAILABLE</span></div><div class="capLine"><span>ADV EAP</span><span class="no">—</span></div><div class="capLine"><span>EU UNLOCK</span><span class="yes">✓ AVAILABLE</span></div></div></button>
+<button class="topologyChoice" data-topology="BODY_CHASSIS"><div class="t1">Body CAN + Chassis CAN</div><div class="t2">Standard 3/Y full-feature configuration</div><div class="capList"><div class="capLine"><span>NAG KILLER</span><span class="yes">✓ AVAILABLE</span></div><div class="capLine"><span>ADV EAP</span><span class="yes">✓ AVAILABLE</span></div><div class="capLine"><span>EU UNLOCK</span><span class="yes">✓ AVAILABLE</span></div></div></button>
+<button class="topologyChoice" data-topology="PARTY_CHASSIS"><div class="t1">Party CAN + Chassis CAN</div><div class="t2">Torque-method Nag · Advanced EAP unavailable</div><div class="capList"><div class="capLine"><span>NAG KILLER</span><span class="yes">✓ AVAILABLE</span></div><div class="capLine"><span>ADV EAP</span><span class="no">—</span></div><div class="capLine"><span>EU UNLOCK</span><span class="yes">✓ AVAILABLE</span></div></div></button>
 </div></div>
 <div class="highlandTurnStep" id="highlandTurnStep">
 <div class="stepTitle">Model 3 Highland · Turn Signal Controls</div>
@@ -1732,7 +1732,7 @@ setInterval(()=>{if(universalBootReady){pollTick(false);renderHeartbeatSnapshot(
   };
   const TOPOLOGIES={
     1:{id:1,key:'YL_PARTY_VH',name:'Party + VH',canA:'CAN A · PARTY',canB:'CAN B · VH',nag:true,adv:true,eu:true,body:false},
-    2:{id:2,key:'BODY_CHASSIS',name:'Body + Chassis',canA:'CAN A · BODY',canB:'CAN B · CHASSIS',nag:false,adv:true,eu:true,body:true},
+    2:{id:2,key:'BODY_CHASSIS',name:'Body + Chassis',canA:'CAN A · BODY',canB:'CAN B · CHASSIS',nag:true,adv:true,eu:true,body:true},
     3:{id:3,key:'PARTY_CHASSIS',name:'Party + Chassis',canA:'CAN A · PARTY',canB:'CAN B · CHASSIS',nag:true,adv:false,eu:true,body:false}
   };
   const KEY_TO_ID=Object.fromEntries(Object.values(PROFILES).map(p=>[p.key,p.id]));
