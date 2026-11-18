@@ -199,10 +199,7 @@ SSID and password can be changed from the dashboard. Applying a Wi-Fi change res
 <a href="https://www.buymeacoffee.com/xbmod" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 30px !important;width: 108px !important;" ></a>
 
 欢迎请作者喝杯咖啡，助力后续更新~  
-
-
-<img width="279" alt="mm_facetoface_collect_qrcode_1795002156171" src="https://github.com/user-attachments/assets/73a8fe73-92af-44e7-ba8a-6446fbce32a6" />
-
+Wechat QR on discord
 
 ### Discord
 
