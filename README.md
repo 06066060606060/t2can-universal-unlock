@@ -9,7 +9,7 @@
 --- 
 
 # T2CAN Universal Unlock v3.29.1
-
+  DOESN'T WORK CORRECTLY BEFORE 2026.20 Update
 **Major Universal Release for Lilygo T2CAN**  
 **Release date:** 10 October 2026  
 **code entirely rewritten by LP_YL**  
@@ -17,6 +17,7 @@
 
 --- 
 - **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
+ 
 - **multiple operating modes:**  
   - Nag-killer + Eu-Unlock  
   - Advanced EAP + Eu-Unlock 
