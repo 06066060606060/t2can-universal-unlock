@@ -8,8 +8,10 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.29.1
-  DOESN'T WORK CORRECTLY BEFORE 2026.20 Update  
+# T2CAN Universal Unlock v3.29.1  
+
+DOESN'T WORK CORRECTLY BEFORE 2026.20 Update  
+  
 **Major Universal Release for Lilygo T2CAN**  
 **Release date:** 10 October 2026  
 **code entirely rewritten by LP_YL**  
