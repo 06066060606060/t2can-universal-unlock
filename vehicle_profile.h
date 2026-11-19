@@ -9,8 +9,56 @@ enum VehicleProfileId : uint8_t {
   VEHICLE_MODEL_Y_JUNIPER = 2,
   VEHICLE_MODEL_Y_LEGACY = 3,
   VEHICLE_MODEL_3_HIGHLAND = 4,
-  VEHICLE_MODEL_3_LEGACY = 5
+  VEHICLE_MODEL_3_LEGACY = 5,
+  VEHICLE_MODEL_S_2017 = 6
 };
+
+// Shared wiring only; Model S has separate message IDs and stalk encoding.
+static inline bool vehicleProfileUsesYlTopology(uint8_t id) {
+  return id == VEHICLE_MODEL_YL || id == VEHICLE_MODEL_S_2017;
+}
+
+// Model S 2017: legacy STW_ACTN_RQ layout, physical ID 0x045 on CAN A.
+// CRC matches all 15 distinct idle payloads in log-model s2.csv.
+static inline uint8_t modelS2017StalkCrc(const uint8_t *data) {
+  uint8_t crc = 0xFFu;
+  for (uint8_t i = 0; i < 7; ++i) {
+    crc ^= data[i];
+    for (uint8_t bit = 0; bit < 8; ++bit)
+      crc = (uint8_t)((crc << 1) ^ ((crc & 0x80u) ? 0x1Du : 0u));
+  }
+  return crc ^ 0xFFu;
+}
+
+static inline bool modelS2017StalkPrepare(const uint8_t *stock, uint8_t dlc,
+                                         uint8_t counter, uint8_t direction,
+                                         uint8_t *out) {
+  if (!stock || !out || dlc != 8u || direction > 2u ||
+      modelS2017StalkCrc(stock) != stock[7]) return false;
+  for (uint8_t i = 0; i < 8; ++i) out[i] = stock[i];
+  out[2] = (uint8_t)((out[2] & 0xFCu) | direction);
+  out[6] = (uint8_t)((out[6] & 0x0Fu) | ((counter & 0x0Fu) << 4));
+  out[7] = modelS2017StalkCrc(out);
+  return true;
+}
+
+// Model S/X right wheel observed in hw2.5.csv: A 0x045 / B 0x238, DLC 8.
+// Signed four-bit scroll delta at bits42..45: +1 = 0x04, -1 = 0x3C in byte5.
+// Preserve each bus's own stock context; counter bits52..55, CRC in byte7.
+static inline uint8_t modelSRightScrollCrc(const uint8_t *data) {
+  return modelS2017StalkCrc(data);
+}
+static inline bool modelSRightScrollPrepare(const uint8_t *stock, uint8_t dlc,
+                                            uint8_t counter, int8_t tick,
+                                            uint8_t *out) {
+  if (!stock || !out || dlc != 8u || (tick != 1 && tick != -1) ||
+      modelSRightScrollCrc(stock) != stock[7]) return false;
+  for (uint8_t i = 0; i < 8u; ++i) out[i] = stock[i];
+  out[5] = (uint8_t)((out[5] & 0xC3u) | (tick > 0 ? 0x04u : 0x3Cu));
+  out[6] = (uint8_t)((out[6] & 0x0Fu) | ((counter & 0x0Fu) << 4));
+  out[7] = modelSRightScrollCrc(out);
+  return true;
+}
 
 enum VehicleCanTopology : uint8_t {
   VEHICLE_TOPOLOGY_NONE = 0,
@@ -35,6 +83,7 @@ struct VehicleProfileSpec {
 
 static inline const VehicleProfileSpec *vehicleProfileSpec(uint8_t id) {
   static const VehicleProfileSpec specs[] = {
+    {VEHICLE_MODEL_S_2017, "Model S/X MCU2 HW3", VEHICLE_TOPOLOGY_YL_PARTY_VH, TURN_SIGNAL_STALK, true},
     {VEHICLE_MODEL_YL, "Model Y L", VEHICLE_TOPOLOGY_YL_PARTY_VH, TURN_SIGNAL_STALK, false},
     {VEHICLE_MODEL_Y_JUNIPER, "Model Y Juniper", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
     {VEHICLE_MODEL_Y_LEGACY, "Model Y Legacy", VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS, TURN_SIGNAL_STALK, true},
@@ -56,7 +105,7 @@ static inline VehicleCanTopology vehicleProfileDefaultTopology(uint8_t id) {
 
 static inline bool vehicleProfileTopologyValid(uint8_t id, uint8_t topology) {
   if (!vehicleProfileValid(id)) return false;
-  if (id == VEHICLE_MODEL_YL)
+  if (vehicleProfileUsesYlTopology(id))
     return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
   return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS ||
          topology == VEHICLE_TOPOLOGY_STANDARD_PARTY_CHASSIS;
@@ -89,7 +138,7 @@ static inline bool vehicleProfileCanBIsChassis(uint8_t id, uint8_t topology) {
 
 static inline bool vehicleProfileTsl9InputSupported(uint8_t id, uint8_t topology) {
   return vehicleProfileTopologyValid(id, topology) &&
-         (id == VEHICLE_MODEL_YL || vehicleProfileCanBIsChassis(id, topology));
+         (vehicleProfileUsesYlTopology(id) || vehicleProfileCanBIsChassis(id, topology));
 }
 
 // Standard Body+Chassis profiles use the Body CAN scroll control. Model YL
@@ -112,7 +161,7 @@ static inline bool vehicleProfileIsaSuppressionSupported(uint8_t id,
 
 static inline bool vehicleProfileNagTsl9Supported(uint8_t id, uint8_t topology) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
-  return id == VEHICLE_MODEL_YL || vehicleProfileCanAIsBody(id, topology);
+  return vehicleProfileUsesYlTopology(id) || vehicleProfileCanAIsBody(id, topology);
 }
 
 // Only pre-refresh Legacy 3/Y uses the gateway-translated DAS_status 0x39B
@@ -153,7 +202,7 @@ static inline bool vehicleProfileAdvancedEapSupported(uint8_t id, uint8_t topolo
   if (!vehicleProfileTopologyValid(id, topology)) return false;
   // YL keeps its existing Party+VH split-bus implementation. Standard 3/Y
   // requires Body CAN on CAN A for Advanced EAP/Auto Blinker.
-  return id == VEHICLE_MODEL_YL || topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+  return vehicleProfileUsesYlTopology(id) || topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
 }
 
 static inline bool vehicleProfileEuUnlockSupported(uint8_t id, uint8_t topology) {
@@ -181,7 +230,7 @@ static inline bool vehicleProfileBodyControlsSupported(uint8_t id, uint8_t topol
 // wired as Body. Party+Chassis intentionally has no Body 0x334 path.
 static inline bool vehicleProfilePedalMapSupported(uint8_t id, uint8_t topology) {
   if (!vehicleProfileTopologyValid(id, topology)) return false;
-  if (id == VEHICLE_MODEL_YL) return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
+  if (vehicleProfileUsesYlTopology(id)) return topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
   return topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
 }
 
@@ -190,6 +239,49 @@ static inline bool vehicleProfilePedalMapSupported(uint8_t id, uint8_t topology)
 // Party+Chassis has no Body 0x334 route and remains blocked.
 static inline bool vehicleProfileApDriveProfileSupported(uint8_t id, uint8_t topology) {
   return vehicleProfilePedalMapSupported(id, topology);
+}
+
+// ---------------------------------------------------------------------------
+// Vehicle/Body (VH) bus resolver.
+//
+// Imported 3/Y + YL protocol; Model S/X is intentionally excluded.
+// This bus carries every frame the battery-preheat feature needs:
+//   0x082 UI_tripPlanning   (RX source frame / TX target)
+//   0x212 BMS_status        (bmsSeen, precondition flags)
+//   0x241 VCFRONT_coolant   (battery coolant flow + flow reason)
+//   0x252 BMS_powerAvailable(max stationary heat power)
+//   0x2E1 VCFRONT_status    (isActiveHeatingBattery, mux 0)
+//   0x332 BattBrickMinMax   (pack temperature min/max, mux 0)
+//
+// BODY == VEHICLE == VH: one bus, three names. PARTY is a different bus and
+// never carries these frames. The physical channel therefore depends on the
+// topology:
+//   STANDARD_BODY_CHASSIS  -> Vehicle/Body is CAN A   (MCP2515)
+//   YL_PARTY_VH            -> Vehicle/Body is CAN B   (TWAI, exposed as VH)
+//   STANDARD_PARTY_CHASSIS -> no Vehicle/Body path at all
+//
+// This is exactly the 0x334 pedal-map requirement, so it is reused rather than
+// duplicated: PedalMap is the existing feature that already encodes "is the
+// Vehicle/Body bus reachable, and on which channel".
+static inline bool vehicleProfileVehicleBusSupported(uint8_t id, uint8_t topology) {
+  return id != VEHICLE_MODEL_S_2017 && vehicleProfilePedalMapSupported(id, topology);
+}
+
+static inline bool vehicleProfileVehicleBusOnCanA(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology) &&
+         topology == VEHICLE_TOPOLOGY_STANDARD_BODY_CHASSIS;
+}
+
+static inline bool vehicleProfileVehicleBusOnCanB(uint8_t id, uint8_t topology) {
+  return vehicleProfileTopologyValid(id, topology) &&
+         id == VEHICLE_MODEL_YL && topology == VEHICLE_TOPOLOGY_YL_PARTY_VH;
+}
+
+// Battery preheat needs the Vehicle/Body bus for both its RX source frame and
+// its TX path, so it is gated exactly like PedalMap: unavailable on
+// Party+Chassis, which has no Vehicle/Body path.
+static inline bool vehicleProfilePreheatSupported(uint8_t id, uint8_t topology) {
+  return vehicleProfileVehicleBusSupported(id, topology);
 }
 
 // Experimental 0x3F8 UI_ulcStalkConfirm override is supported on every valid
@@ -217,7 +309,7 @@ static inline bool vehicleProfileTlsscRestoreSupported(uint8_t id) {
 // Keep this separate from TLSSC Restore capability so it can be re-enabled
 // deliberately later without weakening the current backend guard.
 static inline bool vehicleProfileBannedCarSupported(uint8_t id) {
-  return id != VEHICLE_MODEL_YL && vehicleProfileTlsscRestoreSupported(id);
+  return !vehicleProfileUsesYlTopology(id) && vehicleProfileTlsscRestoreSupported(id);
 }
 
 static inline bool vehicleProfileTurnValid(uint8_t id, uint8_t topology, uint8_t turn) {
@@ -290,6 +382,16 @@ static inline bool activeProfileIsYl() {
   return activeVehicleProfile == VEHICLE_MODEL_YL;
 }
 
+static inline bool activeProfileIsModelS2017() {
+  return activeVehicleProfile == VEHICLE_MODEL_S_2017;
+}
+static inline bool activeProfileUsesYlTopology() {
+  return vehicleProfileUsesYlTopology(activeVehicleProfile);
+}
+static inline uint16_t activeAutopilotControlId() {
+  return activeProfileIsModelS2017() ? 0x3EEu : 0x3FDu;
+}
+
 static inline bool activeCanAIsParty() {
   return vehicleProfileCanAIsParty(activeVehicleProfile, activeVehicleTopology);
 }
@@ -347,6 +449,18 @@ static inline bool activeProfileBodyControlsSupported() {
 
 static inline bool activeProfilePedalMapSupported() {
   return vehicleProfilePedalMapSupported(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfilePreheatSupported() {
+  return vehicleProfilePreheatSupported(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileVehicleBusOnCanA() {
+  return vehicleProfileVehicleBusOnCanA(activeVehicleProfile, activeVehicleTopology);
+}
+
+static inline bool activeProfileVehicleBusOnCanB() {
+  return vehicleProfileVehicleBusOnCanB(activeVehicleProfile, activeVehicleTopology);
 }
 
 static inline bool activeProfileApDriveProfileSupported() {

@@ -8,35 +8,73 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.29.1  
+# T2CAN Universal Unlock v3.30.2
 
-DOESN'T WORK CORRECTLY BEFORE 2026.20 Update  
-  
 **Major Universal Release for Lilygo T2CAN**  
-**Release date:** 10 October 2026  
-**code entirely rewritten by LP_YL**  
+**Release date:** 17 11 2026  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
 
---- 
+### Discord
+Join Discord server for more info:
+https://discord.gg/euPbYG8Npc
+
+---
+**v3.30.2 **	
+- Added Model S/X MCU2 HW3 profile (Compatibility with HW2.5) 
+- Fix R79 injection after AP disengage. 
+- Added experimental FSD Visualisation panel.(This will block AP Activation and cause autopark error!)
+- Added Service Mode entry.
+- Reorganized settings for a better overview. 
+- Auto lane change enable for Standard AP 
+
+**v3.28+ **	
+- Continuous AP Experimental    
+- Independent ISA chime Suppression 
+- Increased OTA receive idle timeout from 5 to 30 seconds.
+- Added detailed upload errors and improved retry handling.
+- Prevented duplicate uploads and false success messages.
+- The new timeout applies after installing and booting this version.  
+- Clearer feature names and short descriptions  
+
+**v3.26** 
+ - Fixed initial setup recovery, added clear save-error messages, and prevented duplicate saves.
+ - Added USB CAN logging and a persistent listen-only mode. (not for everyone)
+ - Made ISA Suppression independent of Nag Killer.
+ - Improved long diagnostic text layout on mobile screens.
+
+**v3.23**  
+ - Improved CAN reliability, including safer BUS-OFF recovery and expanded error diagnostics.  
+ - Simplified CAN A reception with immediate single-frame processing.  
+ - Removed completed or obsolete LAB tools, including Lane Graph, Parked 0x3FD Injection, and Blind Spot Injection Monitor.  
+ - Fixed dashboard API recovery and mobile dropdown touch handling.  
+ - Made Disable Driver Monitoring a standalone production feature, independent of Nag Killer.  
+ - Promoted Visual Speed Control from LAB to Settings and removed 0x3FD from its name.  
+ - Preserved existing AP, CAN health, signal freshness, routing, and transport safety checks.  
+ - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
+
+
+## 📋3.0 Release Highlights  
+
 - **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
- 
 - **multiple operating modes:**  
   - Nag-killer + Eu-Unlock  
   - Advanced EAP + Eu-Unlock 
   - Nag-killer + Advanced EAP + Eu-Unlock (Model YL only)
-
-- **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.  
-- **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.  
-- **Off-Highway ALC BETA** added as a normal vehicle feature.  
-- **ISA chime Suppression**  
-- **New Nag-killer TSL9 mode for Chassis/Body topology** (doesn't work in all regions)  
-- **TLSSC Highway Block** added: TLSSC can optionally turn **OFF on highways / controlled-access roads**. 
-- **toggle to restore Confirm free lane change setting (doesn't work in EU use auto blinker)**.  
-- **CAN Research Capture** with Snapshot, RAW Transition, and Auto ALC Transition modes.  
-- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB. [Android APP](https://github.com/06066060606060/t2can-universal-unlock/releases/tag/android_1.2.1)  
- - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)  
-
-# Main Features:
+- **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.
+- **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.
+- **Runtime Bluetooth Master ON/OFF without MCU reboot**, while preserving saved devices, bonds, mappings, and Auto Connect settings.
+- **Reworked Auto Blinker** with profile-aware routing and direction-specific ALC availability gating.
+- **Independent R79 engine** with immediate reassertion and independent periodic refresh.
+- **Summon Monitor** separated from R79 ownership.
+- **Off-Highway ALC BETA** added as a normal vehicle feature.
+- **TLSSC Highway Block** added: TLSSC can optionally turn **OFF on highways / controlled-access roads**.
+- **CAN Research Capture** with Snapshot, RAW Transition, and Auto ALC Transition modes.
+- **Dedicated LAB research area** for R79, ULC Blind Spot, ACC Follow Distance, and CAN capture.
+- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB.
+- **Configurable Wi-Fi AP**, tiered reset behavior, and expanded CAN/BLE diagnostics.
+- **Stronger CAN recovery safety** through the new TX recovery barrier / epoch model.
+- **Added optional Pause NAG at 0 km/h** — default OFF   
+- **Added topology-aware feature gating** for Advanced EAP, Body controls, NAG and EU Unlock  
 
 **Advanced EAP**
 - Automatically activates the turn signal.
@@ -79,8 +117,7 @@ This code is adapted for the **LilyGO / T-2Can**.
 | LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
 | LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
 
-*Invert CAN A & CAN B wire on Model YL & Model S/X  
-
+## 🧩 Main features
 
 ### 🛡️ Vehicle-profile safety
 
@@ -193,21 +230,6 @@ SSID and password can be changed from the dashboard. Applying a Wi-Fi change res
 
 <img width="407" height="180" alt="LILYGO-T-2CAN_9" src="https://github.com/user-attachments/assets/0d272b7e-bd82-408f-9ca1-239e6dab44d5" />
 
-### ☕ Support the Project 
-
-[![Crypto](https://img.shields.io/badge/Crypto-Donate-F7931A?style=for-the-badge&logo=bitcoin&logoColor=white)](https://tesla-mods.fkey.id/) [![PayPal](https://img.shields.io/badge/PayPal-Donate-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=Q2YMMMJYTAPJE)
-<a href="https://www.buymeacoffee.com/xbmod" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 30px !important;width: 108px !important;" ></a>
-
-欢迎请作者喝杯咖啡，助力后续更新~  
-Wechat QR on discord
-
-### Discord
-
-Join the project Discord server:
-
-https://discord.gg/euPbYG8Npc
-
-
 ## 📚 Scope
 
 This Universal release is based on source-level comparison and consolidation of:
@@ -215,7 +237,3 @@ This Universal release is based on source-level comparison and consolidation of:
 - LP_YL V2.0
 - Advanced EAP & EU-Unlock V2.6.0 for T-2CAN
 - T2CAN Universal v3.x
-
-## License
-
-GNU GPL v3 or later. See [LICENSE](LICENSE).

@@ -111,7 +111,7 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   tsl9InputRequestCancel(TSL9_INPUT_FAILURE_CAN_UNAVAILABLE_PURE, true);
   continuousApResetForEpoch(barrierLocked ? canTxBarrierState.epoch : 0u);
   driverWindowLabResetRuntimeUnderTxBarrier();
-  summonHeartbeatOverrideResetUnderTxBarrier();
+  preheatRuntimeResetUnderTxBarrier();
 
   // These transient feature requests are inexpensive to restart and are cleared
   // at either controller recovery so they cannot cross a changed CAN epoch.
@@ -132,6 +132,8 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
   visualBehaviorType = 0;
   visualDebugLastMs = 0;
   seen249 = false;
+  modelS238Valid = false;
+  modelS238LastMs = 0;
   realDlc = 0;
   cksumSelfTest = false;
   memset(realRaw249, 0, sizeof(realRaw249));
@@ -168,13 +170,21 @@ static void invalidateCanTxStateInternal(uint8_t invalidatedBusMask) {
     uiAutoLaneChangeStockBValid = false;
     uiAutoLaneChangeStockBMs = 0;
     portEXIT_CRITICAL(&autoLc293Mux);
+  }
+  if ((invalidatedBusMask & (activeProfileIsModelS2017() ? SUMMON_BUS_A : SUMMON_BUS_B)) != 0) {
     portENTER_CRITICAL(&lab3f8Mux);
+    if (activeProfileIsModelS2017()) lab3f8CanBValid = false;
     uiDriverAssistLastRxMs = 0;
     uiUlcBlindSpotConfig = 0;
     uiAlcOffHighwayEnable = false;
     portEXIT_CRITICAL(&lab3f8Mux);
   }
 
+  if ((invalidatedBusMask & SUMMON_BUS_B) != 0) {
+    portENTER_CRITICAL(&fsdLabMux);
+    fsdLabSignals[0].stockValid = fsdLabSignals[1].stockValid = false;
+    portEXIT_CRITICAL(&fsdLabMux);
+  }
   if (barrierLocked) xSemaphoreGive(canTxBarrierMutex);
 }
 
@@ -423,30 +433,68 @@ static void canTaskMcp(void* arg) {
       lastCanAFrameMs = frameNow;
       mcpRxCount++;
       canRxObserve(CAN_RX_BUS_PARTY, frameNow);
+      if ((rxf.can_id & 0xC0000000UL) == 0) preheatRuntimeIngestCanA(rxf);
       if (canUsbPassive()) continue;
       // All downstream Model YL decoders and TX decisions expect standard
       // 11-bit DATA frames. Aggregate telemetry still counts rejected frames.
       if ((rxf.can_id & 0xC0000000UL) != 0) continue;
       const uint16_t partyId = (uint16_t)(rxf.can_id & 0x7FF);
-      continuousApObserveStock(0, partyId, rxf.data, rxf.can_dlc, countryRxEpoch, prefetchedRxMs[bi]);
+      if (!activeProfileIsModelS2017()) continuousApObserveStock(0, partyId, rxf.data, rxf.can_dlc, countryRxEpoch, prefetchedRxMs[bi]);
+      if (activeProfileIsModelS2017() && partyId == 0x045u && rxf.can_dlc == 8u)
+        tsl9ModelSObserveRightStock(0u, rxf.data, rxf.can_dlc);
       canTxMarkFresh(CAN_TX_FRESH_PARTY); // physical CAN A fresh in this recovery epoch
       bootCaptureObservePartyFrame(partyId, rxf.can_dlc, rxf.data);
       researchCaptureObserveParty(partyId, rxf.can_dlc, rxf.data);
       driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_A, partyId, rxf.can_dlc, rxf.data);
-      if (partyId == UI_CHASSIS_CONTROL_ID && rxf.can_dlc >= 8)
+      if (partyId == (activeProfileIsModelS2017() ? 0x218u : UI_CHASSIS_CONTROL_ID) && rxf.can_dlc >= 8)
         uiAutoLaneChangeObserveAndInjectCanA(rxf);
+      if (activeProfileIsModelS2017() && partyId == 0x331u && rxf.can_dlc == 8u) {
+        twai_message_t stock = {}; // Payload container; Restore TX uses CAN A.
+        stock.identifier = 0x331u;
+        stock.data_length_code = 8u;
+        memcpy(stock.data, rxf.data, 8u);
+        doInjectTlsscRestore(stock);
+      }
       if (partyId == 0x7FF && rxf.can_dlc == 8)
         countryOverrideObserve7ffCanA(rxf, countryRxEpoch);
       if (partyId == 0x238 && rxf.can_dlc == 8)
         countryOverrideObserve238CanA(rxf, countryRxEpoch);
-      if (partyId == 0x3FD && rxf.can_dlc == 8)
+      if (activeProfileIsModelS2017() && partyId == 0x3E8u && rxf.can_dlc == 8u) {
+        twai_message_t stock = {}; // Payload container only; TX remains on CAN A.
+        stock.identifier = 0x3E8u;
+        stock.data_length_code = 8u;
+        memcpy(stock.data, rxf.data, 8u);
+        handle1016(stock.data, 8u);
+        lab3f8FrameRxMs = prefetchedRxMs[bi];
+        lab3f8FrameRxEpoch = countryRxEpoch;
+        injectDriverAssistControl(stock);
+      }
+      if (activeProfileIsModelS2017() && partyId == 0x045u && rxf.can_dlc == 8u)
+        handle249OnCanA(rxf.data, rxf.can_dlc);
+      if (activeProfileIsModelS2017() && partyId == 0x3EEu && rxf.can_dlc == 8u) {
+        // Reuse payload policies; all 3EE transmit helpers select physical CAN A.
+        twai_message_t stock = {};
+        stock.identifier = partyId;
+        stock.data_length_code = 8u;
+        memcpy(stock.data, rxf.data, 8u);
+        const uint8_t mux = readMuxID(stock.data);
+        if (mux == 1u)
+          visionControlCacheStock(VISION_CONTROL_CHASSIS_PURE, stock.data, countryRxEpoch, prefetchedRxMs[bi]);
+        const bool claimed = r79ProcessStockFrame(stock, mux, frameNow);
+        if (mux == 1u) {
+          r79LabObserve3fdMux1(stock.data, 8u);
+          const bool ulcClaimed = injectUlcSnooze3fdMux1(stock);
+          visionControlObserveStock(stock, countryRxEpoch, claimed || ulcClaimed, prefetchedRxMs[bi]);
+        } else if (mux == 0u) injectTLSSC(stock);
+      }
+      if (!activeProfileIsModelS2017() && partyId == 0x3FD && rxf.can_dlc == 8)
         visionControlObserveBody(rxf, countryRxEpoch, prefetchedRxMs[bi]);
       if (activeCanAIsParty()) {
         // Party CAN on CAN A: Nag Killer is topology-gated. Keep YL-only
         // DAS/Summon/visual-debug behavior explicitly model-gated so selecting
         // Party + Chassis on Standard 3/Y cannot accidentally enable YL paths.
         nagProcessMcpFrame(rxf);
-        if (activeProfileIsYl() && partyId == VISUAL_DEBUG_ID && rxf.can_dlc >= 8) {
+        if (activeProfileUsesYlTopology() && partyId == (activeProfileIsModelS2017() ? 0x249u : VISUAL_DEBUG_ID) && rxf.can_dlc >= 8) {
           visualBehaviorType = (uint8_t)readBitsLE(rxf.data, 56, 2);
           visualDebugRxCount++;
           visualDebugLastMs = frameNow;
@@ -481,6 +529,7 @@ static void canTaskMcp(void* arg) {
     canTaskDiagnosticsEnterStagePure(canTaskMcpDiagnostics,
                                      CAN_TASK_STAGE_SERVICE,
                                      (uint32_t)millis());
+    if (activeProfileIsModelS2017()) r79TransportTick();
     continuousApService(ContApRoute::BodyA);
     tsl9InputServiceCanA();
 
@@ -585,10 +634,10 @@ static void canTaskTwai(void* arg) {
       // v3.6d2 R79 fast path: this is deliberately before millis(), RX-gap
       // accounting, capture, and normal decoding. Preserve the existing d1
       // fail-open/manual-latch authorization policy inside the fast function.
-      if (!canUsbPassive() && !f.extd && !f.rtr)
+      if (!activeProfileIsModelS2017() && !canUsbPassive() && !f.extd && !f.rtr)
         continuousApObserveStock(1, (uint16_t)f.identifier, f.data, f.data_length_code, countryRxEpoch, stockRxMs);
       bool mux1StockClaimed = false;
-      if (!canUsbPassive() && !f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
+      if (!activeProfileIsModelS2017() && !canUsbPassive() && !f.extd && !f.rtr && f.identifier == 0x3FD && f.data_length_code >= 8) {
         const uint8_t timingMux = readMuxID(f.data);
         if (f.data_length_code == 8u && timingMux == 1u)
           visionControlCacheStock(VISION_CONTROL_CHASSIS_PURE, f.data, countryRxEpoch, stockRxMs);
@@ -607,6 +656,7 @@ static void canTaskTwai(void* arg) {
       }
       lastCanBFrameMs = frameNow;
       canRxObserve(CAN_RX_BUS_VH, frameNow);
+      if (!f.extd && !f.rtr) preheatRuntimeIngestCanB(f);
       // Only standard 11-bit DATA frames may reach Tesla decoders or TX paths.
       if (!canUsbPassive() && !f.extd && !f.rtr) {
         canTxMarkFresh(CAN_TX_FRESH_VH);
@@ -621,7 +671,7 @@ static void canTaskTwai(void* arg) {
           // Model Y L carries the pedal-map frame on VH / CAN B. Standard 3/Y
           // Body+Chassis uses the CAN-A Body copy instead and must ignore any
           // numeric 0x334 that happens to exist on Chassis CAN.
-          if (activeProfileIsYl() && activeProfilePedalMapSupported()) handlePedalMap334OnCanB(f);
+          if (activeProfileUsesYlTopology() && activeProfilePedalMapSupported()) handlePedalMap334OnCanB(f);
           break;
         case LEFTSTALK_ID:
           if (activeProfileIsYl() && activeTurnSignalVariant == TURN_SIGNAL_STALK && f.data_length_code >= 3)
@@ -636,7 +686,7 @@ static void canTaskTwai(void* arg) {
           }
           break;
         case DOOR_SWITCH_ID:
-          if (activeProfileIsYl() && f.data_length_code >= 4)
+          if (activeProfileUsesYlTopology() && f.data_length_code >= 4)
             handle102LaneChangeCancel(f.data, f.data_length_code);
           break;
         case VISUAL_DEBUG_ID:
@@ -664,6 +714,10 @@ static void canTaskTwai(void* arg) {
           break;
         // Model YL/public-DBC reference: UI_driverAssistMapData road context.
         case 0x238:
+          if (activeProfileIsModelS2017() && f.data_length_code == 8u)
+            tsl9ModelSObserveRightStock(1u, f.data, f.data_length_code);
+          if (activeProfileIsModelS2017() && activeTurnSignalVariant == TURN_SIGNAL_STALK)
+            handleModelS238OnCanB(f.data, f.data_length_code);
           if (f.data_length_code >= 5) handleRoadContext238(f.data, f.data_length_code);
           countryOverrideObserve238CanB(f, countryRxEpoch);
           break;
@@ -673,6 +727,7 @@ static void canTaskTwai(void* arg) {
 
         // 1016 (SPR) is read on CAN B for both models.
         case DRIVER_ASSIST_ID:
+          if (activeProfileIsModelS2017()) break;
           // Always retain stock telemetry before applying the production/research overlay.
           handle1016(f.data, f.data_length_code);
           lab3f8FrameRxMs = stockRxMs;
@@ -680,13 +735,14 @@ static void canTaskTwai(void* arg) {
           injectDriverAssistControl(f);
           break;
         case 1021:
-          if (f.data_length_code >= 8) {
+          if (!activeProfileIsModelS2017() && f.data_length_code >= 8) {
             uint8_t mux = readMuxID(f.data);
             if (mux == 1) {
               r79LabObserve3fdMux1(f.data, f.data_length_code);
               const bool ulcCloneClaimed = injectUlcSnooze3fdMux1(f);
               visionControlObserveStock(f, countryRxEpoch, mux1StockClaimed || ulcCloneClaimed, stockRxMs);
             } else if (mux == 0) injectTLSSC(f);
+            else if (mux == 2) fsdLabEchoMux2(f, countryRxEpoch);
           }
           break;
 
@@ -710,7 +766,8 @@ static void canTaskTwai(void* arg) {
                                      (uint32_t)millis());
     refreshSummonState();
     driverWindowLabServiceTick();
-    r79TransportTick();
+    preheatRuntimeTick();
+    if (!activeProfileIsModelS2017()) r79TransportTick();
     // R79 immediate/retry/periodic work always gets first access to the CAN-B
     // TX queue. TSL9 input assistance is intentionally lower priority.
     continuousApService(ContApRoute::ChassisB);

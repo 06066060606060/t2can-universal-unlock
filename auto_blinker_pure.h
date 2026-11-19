@@ -318,12 +318,14 @@ struct BlinkerTxRequestStatePure {
   uint8_t pendingSource;
   uint32_t requestedMs;
   uint32_t lastToken[2];
+  bool pendingFullDetent;
 };
 
 struct BlinkerTxConsumeResultPure {
   bool transmit;
   uint8_t dir;
   uint8_t source;
+  bool fullDetent;
 };
 
 struct BlinkerTxModeTransitionPure {
@@ -334,7 +336,8 @@ struct BlinkerTxModeTransitionPure {
 
 static inline bool blinkerTxArmPure(BlinkerTxRequestStatePure &state,
                                     uint8_t dir, uint8_t source,
-                                    uint32_t eventToken, uint32_t now) {
+                                    uint32_t eventToken, uint32_t now,
+                                    bool fullDetent = false) {
   if ((dir != 1 && dir != 2) ||
       (source != BLINKER_TX_SOURCE_AUTO_PURE &&
        source != BLINKER_TX_SOURCE_S3XY_PURE)) {
@@ -346,6 +349,7 @@ static inline bool blinkerTxArmPure(BlinkerTxRequestStatePure &state,
   state.pendingDir = dir;
   state.pendingSource = source;
   state.requestedMs = now;
+  state.pendingFullDetent = fullDetent;
   return true;
 }
 
@@ -357,15 +361,18 @@ static inline BlinkerTxConsumeResultPure blinkerTxConsumeStockPure(
 
   const uint8_t dir = state.pendingDir;
   const uint8_t source = state.pendingSource;
+  const bool fullDetent = state.pendingFullDetent;
   const uint32_t age = (uint32_t)(now - state.requestedMs);
   state.pendingDir = 0;
   state.pendingSource = BLINKER_TX_SOURCE_NONE_PURE;
   state.requestedMs = 0;
+  state.pendingFullDetent = false;
   if (!physicalStalkIdle || age > timeoutMs) return result;
 
   result.transmit = true;
   result.dir = dir;
   result.source = source;
+  result.fullDetent = fullDetent;
   return result;
 }
 

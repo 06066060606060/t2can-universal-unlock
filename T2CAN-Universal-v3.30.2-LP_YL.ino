@@ -1,4 +1,4 @@
-// T2CAN Universal v3.29.1 - Model 3/Y / Model YL firmware
+// T2CAN Universal v3.30.0 - Model 3/Y / Model YL firmware
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -42,6 +42,7 @@
 #include "vehicle_profile.h"
 #include "summon_state_pure.h"
 #include "auto_blinker_pure.h"
+#include "preheat_pure.h"
 #include "runtime_gate_pure.h"
 #include "can_task_diagnostics_pure.h"
 #include "can_research_capture_pure.h"
@@ -65,7 +66,7 @@
 #include "text_format_arduino.h"
 #include "json_writer_arduino.h"
 
-#define FW_VERSION "v3.29.1"
+#define FW_VERSION "v3.30.2"
 
 #include "continuous_ap_fsm_pure.h"
 #include "t2can_core_state.h"
@@ -78,6 +79,7 @@
 #include "can_busoff_persistence.h"
 #include "vehicle_logic.h"
 #include "continuous_ap_runtime.h"
+#include "preheat_runtime.h"
 #include "web_api.h"
 #include "can_runtime.h"
 #include "can_usb_logger_task.h"
@@ -209,6 +211,7 @@ void setup() {
   countryOverrideCfgLoad();
   r79CfgLoad();
   s3xyAutoLoadConfig();
+  preheatMenuLoad();
   nvsSchemaFinalize();
   canBusOffPersistenceLoad();
   if (labMenuEnabled) {

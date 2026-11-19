@@ -60,7 +60,7 @@ static void bootCaptureObservePartyFrame(uint16_t id, uint8_t dlc, const uint8_t
   if (id == 0x399 && dlc >= 1)
     bootCaptureMarkOnce(&bootCapFirst399Ms);
 
-  if (id == 0x24A && dlc >= 8)
+  if (id == (activeProfileIsModelS2017() ? 0x249u : 0x24Au) && dlc >= 8)
     bootCaptureMarkOnce(&bootCapFirstParty24AMs);
 
   if (id == 0x370 && dlc >= 4 &&
@@ -891,7 +891,7 @@ static bool nagTsl9Body39BSelected() {
 }
 
 static bool nagTsl9Chassis399Selected() {
-  return !activeProfileIsYl() && activeCanBIsChassis() &&
+  return !activeProfileUsesYlTopology() && activeCanBIsChassis() &&
       activeProfileNagTsl9Supported() && !nagTsl9Body39BSelected();
 }
 
@@ -1581,7 +1581,9 @@ static void nagUpdateApState(const uint8_t* data, uint8_t dlc) {
 
 static void nagUpdateVehicleSpeed(const uint8_t* data, uint8_t dlc) {
   uint16_t raw = 0;
-  const bool valid = nagDecodePartySpeedRawPure(data, dlc, raw);
+  const bool valid = activeProfileIsModelS2017()
+      ? nagDecodeModelSSpeedRawPure(data, dlc, raw)
+      : nagDecodePartySpeedRawPure(data, dlc, raw);
   const unsigned long now = millis();
   const bool locked = canTxBarrierMutex &&
       xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) == pdTRUE;
@@ -1704,7 +1706,7 @@ static Tsl9DasTransformResultPure nagTsl9TransformStock(
 }
 
 static bool nagProcessTsl9Mcp(const struct can_frame& rxf) {
-  const bool yl399Route = activeProfileIsYl();
+  const bool yl399Route = activeProfileUsesYlTopology();
   const bool legacyBody39BRoute = nagTsl9Body39BSelected();
   const bool handsOnRoute = activeProfileNagTsl9Supported() &&
       (yl399Route || legacyBody39BRoute);
@@ -1784,13 +1786,16 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
 
   (void)nagProcessTsl9Mcp(rxf);
 
-  const bool ylProfile = activeProfileIsYl();
+  const bool ylProfile = activeProfileUsesYlTopology();
   // Model Y L reads DAS/Summon status on CAN A / Party. Standard 3/Y
   // receives the corresponding status from Chassis CAN B regardless of whether
   // CAN A is configured as Body or Party, so only YL runs these handlers here.
   if (ylProfile) {
     switch (id) {
-      case 280: if (dlc >= 7) handle280(rxf.data); break;
+      case 280:
+        if (activeProfileIsModelS2017() ? dlc == 6u : dlc >= 7u)
+          handle280(rxf.data);
+        break;
       case 390: if (dlc >= 8) handle390(rxf.data); break;
       case 921:
         if (dlc >= 6) handle921(rxf.data, dlc);
@@ -1808,9 +1813,10 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
 
   // Most Party frames are unrelated to NAG. Reject them before touching
   // nagCfgMux; only speed/context/target frames enter the NAG processing path.
-  if (id != NAG_SPEED_ID && id != targetId && id != apStateId && id != steeringId) return;
+  const uint16_t speedId = activeProfileIsModelS2017() ? 0x118u : NAG_SPEED_ID;
+  if (id != speedId && id != targetId && id != apStateId && id != steeringId) return;
 
-  if (id == NAG_SPEED_ID) nagUpdateVehicleSpeed(rxf.data, dlc);
+  if (id == speedId) nagUpdateVehicleSpeed(rxf.data, dlc);
   // YL's proven Party layout exposes the legacy 0x399 context used by these
   // diagnostics. Standard Party+Chassis authorizes NAG from Chassis CAN B
   // 0x399 instead; do not misparse a Party frame with the same numeric ID.
@@ -1932,7 +1938,9 @@ static void nagProcessMcpFrame(const struct can_frame& rxf) {
   ModeHBaseStepResultPure humanDecision = {};
   bool modeHStopCarrier = false;
   if (modeNow == MODE_H) {
-    humanDecision = nagHumanRuntimeStep(nowMs, tRaw, true, speedValid, speedFresh, speedRaw,
+    const uint16_t motionSpeedRaw = activeProfileIsModelS2017()
+        ? nagModelSSpeedForMotionGatePure(speedRaw) : speedRaw;
+    humanDecision = nagHumanRuntimeStep(nowMs, tRaw, true, speedValid, speedFresh, motionSpeedRaw,
                                         visualWarningEpoch, visualWarningEnterMs, visualWarningActive);
     if (!humanDecision.tx) {
       const bool confirmedStopped = humanDecision.blockReason == MH_BLOCK_STOPPED;

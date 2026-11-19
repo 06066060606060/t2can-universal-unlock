@@ -92,6 +92,28 @@ static inline int32_t nagPartySpeedKphX100Pure(uint16_t raw) {
   return (int32_t)raw * 8 - 4000;
 }
 
+// Model S/X Chassis CAN 0x118 DI_torque2: six bytes, LE bits 16..27.
+// Keep the native raw value: (raw * 0.05 - 25) mph; raw 500 is zero.
+static inline bool nagDecodeModelSSpeedRawPure(const uint8_t *data, uint8_t dlc,
+                                               uint16_t &rawOut) {
+  if (!data || dlc != 6u) return false;
+  rawOut = (uint16_t)data[2] | ((uint16_t)(data[3] & 0x0Fu) << 8);
+  return true;
+}
+static inline int32_t nagModelSSpeedKphX100Pure(uint16_t raw) {
+  // 0.05 mph = 0.0804672 km/h. Round signed hundredths of km/h.
+  const int64_t scaled = ((int64_t)raw - 500) * 804672;
+  return (int32_t)((scaled + (scaled >= 0 ? 50000 : -50000)) / 100000);
+}
+static inline uint16_t nagModelSSpeedForMotionGatePure(uint16_t raw) {
+  // Existing Mode H variants consume the 0.08 km/h, -40 internal scale.
+  // Normalize only their input; telemetry retains the native Model S raw.
+  const int32_t scaled = ((int32_t)raw - 500) * 100584;
+  const int32_t normalized = 500 +
+      (scaled + (scaled >= 0 ? 50000 : -50000)) / 100000;
+  return (uint16_t)(normalized < 0 ? 0 : normalized);
+}
+
 static inline bool nagPauseAtZeroBlocksPure(bool optionEnabled, bool speedValid,
                                              bool speedFresh, uint16_t raw) {
   return optionEnabled && speedValid && speedFresh && raw == 500u;

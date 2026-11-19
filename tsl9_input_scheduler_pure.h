@@ -76,6 +76,9 @@ struct Tsl9InputInputsPure {
   // Torque uses warning edges as one-shot immediate triggers. TSL9 keeps its
   // legacy randomized warning repeat while the warning remains active.
   bool warningEdgeOnly;
+  // Fixed Model S/X pulses: a cleared warning must not cancel the balancing
+  // DOWN of an already-started pair. AP-off, config and CAN stops still apply.
+  bool completePairOnWarningClear = false;
 };
 
 struct Tsl9InputCommandPure {
@@ -213,7 +216,9 @@ class Tsl9InputSchedulerPure {
 
       if (warningFalling && !configuredWarningEdgeOnly_) {
         warningEdgePending_ = false;
-        if (active_ && activeSource_ == TSL9_INPUT_WORK_WARNING_PURE) {
+        if (active_ && activeSource_ == TSL9_INPUT_WORK_WARNING_PURE &&
+            !(in.completePairOnWarningClear &&
+              actionPattern_ == TSL9_INPUT_PATTERN_PAIR_PURE)) {
           cancelWork(TSL9_INPUT_FAILURE_WARNING_CLEARED_PURE, in.nowMs);
           if (configuredPeriodicSeconds_ != 0u) armPeriodic(in.nowMs);
         } else if (!active_ &&

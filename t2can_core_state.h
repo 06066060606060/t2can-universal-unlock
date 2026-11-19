@@ -136,7 +136,8 @@ static portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t dasAutoLaneChangeState = 0xFF;
 static volatile bool dasAutoLaneChangeStateValid = false;
 // v3.3 top-level feature switches loaded before CAN/BLE runtime starts.
-static volatile bool labMenuEnabled = false;
+// Legacy schema field: experimental controls have no master enable gate.
+static constexpr bool labMenuEnabled = true;
 static volatile bool bannedCar = false;
 static volatile bool tlsscRestoreEnabled = false;
 static volatile bool doorOpenCancelEnabled = false;

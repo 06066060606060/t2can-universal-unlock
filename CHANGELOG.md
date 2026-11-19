@@ -1,3 +1,13 @@
+# T2CAN Universal v3.30.2
+- Added Model S/X MCU2 HW3 profile, tested on model S 2017 HW3 and on model S 2017 HW2.5, (for HW2.5 use TSL9 mode for nag)
+- Fix R79 injection delay after AP disengage 
+- Added Service mode Toggle
+- Added experimental FSD Visualisation for FSD subscription only...(This will block AP Activation and cause autopark error!)
+- Organized settings for a better overview
+- Added Battery preheating page
+- Fix S3XY button lane change for standard ap
+- added FSD visualisation action for S3XY button with save state
+
 # T2CAN Universal v3.29.1
 
 ## Continuous AP brake reception compatibility — 2026-10-11

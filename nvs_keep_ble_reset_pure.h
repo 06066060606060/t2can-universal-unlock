@@ -8,7 +8,7 @@ enum NvsKeepBleGuardBootActionPure : uint8_t {
   NVS_KEEP_BLE_GUARD_RECOVER_PURE = 2,
 };
 
-static constexpr uint8_t NVS_KEEP_BLE_APPLICATION_NAMESPACE_COUNT_PURE = 16u;
+static constexpr uint8_t NVS_KEEP_BLE_APPLICATION_NAMESPACE_COUNT_PURE = 17u;
 
 struct NvsKeepBleResetStatePure {
   bool guardActive;
