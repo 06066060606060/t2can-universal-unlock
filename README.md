@@ -1,244 +1,241 @@
-> ⚠️ **Research / educational firmware only**
+> ⚠️ **本固件仅供研究和教学使用**
 >
-> This project interacts with a Tesla vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.
+> 本项目会与特斯拉车辆的 CAN 总线交互，仅适用于受控的台架测试、代码审查和研究环境。
 >
-> It sends signals directly to vehicle controllers; it is **not** a physical steering-wheel command. **Do not use it on public roads or in any situation where unsafe behavior could put people or property at risk.**
+> 本固件直接向车辆控制器发送信号，并非通过实际操作方向盘来发出指令。**请勿在公共道路上使用，也不要在任何可能因不安全行为危及人身或财产的场景中使用。**
 >
-> You are responsible for your own testing, wiring, configuration, and compliance with local laws.
+> 使用者须自行负责测试、接线、配置，并遵守当地法律法规。
 
 --- 
-
 # T2CAN Universal Unlock v3.30.3
 
-**Major Universal Release for Lilygo T2CAN**  
-**Release date:** 20 11 2026  
-**[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**  
+**面向 Lilygo T2CAN 的通用固件重大版本**  
+**发布日期：** 2026 年 11 月 20 日  
+**[管理界面预览](https://06066060606060.github.io/t2can-universal-unlock/)**  
 
 **[仪表板模拟](https://06066060606060.github.io/t2can-universal-unlock/index-zh-cn.html)** 
 
 ### Discord
-Join Discord server for more info:
+加入 Discord 服务器，了解更多信息：
 https://discord.gg/euPbYG8Npc
 
 ---
-**v3.30.3 **
-- Restore TLSSC for Model YL
-- Added Chinese Language variant
+**v3.30.3**
+- 恢复 Model YL 的 TLSSC 功能
+- 新增中文语言版本
 
-**v3.30.2 **	
-- Added Model S/X MCU2 HW3 profile (Compatibility with HW2.5) 
-- Fix R79 injection after AP disengage. 
-- Added experimental FSD Visualisation panel.(This will block AP Activation and cause autopark error!)
-- Added Service Mode entry.
-- Reorganized settings for a better overview. 
-- Auto lane change enable for Standard AP 
+**v3.30.2**	
+- 新增 Model S/X MCU2 HW3 车型配置（兼容 HW2.5）
+- 修复 AP 退出后的 R79 注入问题。
+- 新增实验性 FSD 可视化面板。（启用后会阻止 AP 激活，并导致自动泊车报错！）
+- 新增服务模式入口。
+- 重新整理设置，便于查看和操作。
+- 为标准版 AP 启用自动变道功能。
 
-**v3.28+ **	
-- Continuous AP Experimental    
-- Independent ISA chime Suppression 
-- Increased OTA receive idle timeout from 5 to 30 seconds.
-- Added detailed upload errors and improved retry handling.
-- Prevented duplicate uploads and false success messages.
-- The new timeout applies after installing and booting this version.  
-- Clearer feature names and short descriptions  
+**v3.28+**	
+- 实验性连续 AP 功能。
+- ISA 提示音抑制可独立控制。
+- 将 OTA 接收空闲超时从 5 秒延长至 30 秒。
+- 增加详细的上传错误信息，并改进重试处理。
+- 防止重复上传和虚假成功提示。
+- 新超时时间仅在安装并启动本版本后生效。
+- 更清晰的功能名称与简短说明。
 
 **v3.26** 
- - Fixed initial setup recovery, added clear save-error messages, and prevented duplicate saves.
- - Added USB CAN logging and a persistent listen-only mode. (not for everyone)
- - Made ISA Suppression independent of Nag Killer.
- - Improved long diagnostic text layout on mobile screens.
+ - 修复初始设置恢复问题，新增清晰的保存错误提示，并防止重复保存。
+ - 新增 USB CAN 日志记录和持久化的只听模式。（并非面向所有用户）
+ - 使 ISA 抑制功能独立于 Nag Killer。
+ - 改进移动端长诊断文本的布局。
 
 **v3.23**  
- - Improved CAN reliability, including safer BUS-OFF recovery and expanded error diagnostics.  
- - Simplified CAN A reception with immediate single-frame processing.  
- - Removed completed or obsolete LAB tools, including Lane Graph, Parked 0x3FD Injection, and Blind Spot Injection Monitor.  
- - Fixed dashboard API recovery and mobile dropdown touch handling.  
- - Made Disable Driver Monitoring a standalone production feature, independent of Nag Killer.  
- - Promoted Visual Speed Control from LAB to Settings and removed 0x3FD from its name.  
- - Preserved existing AP, CAN health, signal freshness, routing, and transport safety checks.  
- - And a lot more check [Changelog](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
+ - 提升 CAN 通信可靠性，包括更安全的 BUS-OFF 恢复和更全面的错误诊断。  
+ - 简化 CAN A 接收流程，实现即时单帧处理。  
+ - 移除已完成或废弃的 LAB 工具，包括车道图、驻车 0x3FD 注入和盲区注入监控。  
+ - 修复仪表板 API 恢复和移动端下拉触摸操作。  
+ - 使"禁用驾驶员监控"成为独立的生产功能，不再依赖 Nag Killer。  
+ - 将"可视速度控制"从 LAB 提升至设置，并从其名称中移除 0x3FD。  
+ - 保留既有的 AP、CAN 健康、信号新鲜度、路由和传输安全检查。  
+ - 更多内容请查看 [更新日志](https://github.com/06066060606060/t2can-universal-unlock/blob/main/CHANGELOG.md)
 
+## 📋 3.0 版本亮点  
 
-## 📋3.0 Release Highlights  
-
-- **One Universal firmware** supporting five Model 3/Y/YL vehicle profiles.
-- **multiple operating modes:**  
+- **一套通用固件**，支持 Model 3/Y/YL 五种车型配置。
+- **多种运行模式：**  
   - Nag-killer + Eu-Unlock  
   - Advanced EAP + Eu-Unlock 
-  - Nag-killer + Advanced EAP + Eu-Unlock (Model YL only)
-- **Profile-based CAN topology and turn-signal routing** instead of separate firmware branches or manual transport selection.
-- **Direct S3XY Button Bluetooth support** for up to **3 registered buttons**.
-- **Runtime Bluetooth Master ON/OFF without MCU reboot**, while preserving saved devices, bonds, mappings, and Auto Connect settings.
-- **Reworked Auto Blinker** with profile-aware routing and direction-specific ALC availability gating.
-- **Independent R79 engine** with immediate reassertion and independent periodic refresh.
-- **Summon Monitor** separated from R79 ownership.
-- **Off-Highway ALC BETA** added as a normal vehicle feature.
-- **TLSSC Highway Block** added: TLSSC can optionally turn **OFF on highways / controlled-access roads**.
-- **CAN Research Capture** with Snapshot, RAW Transition, and Auto ALC Transition modes.
-- **Dedicated LAB research area** for R79, ULC Blind Spot, ACC Follow Distance, and CAN capture.
-- **New mobile dashboard architecture** with HOME, DEVICES, SETTINGS, and LAB.
-- **Configurable Wi-Fi AP**, tiered reset behavior, and expanded CAN/BLE diagnostics.
-- **Stronger CAN recovery safety** through the new TX recovery barrier / epoch model.
-- **Added optional Pause NAG at 0 km/h** — default OFF   
-- **Added topology-aware feature gating** for Advanced EAP, Body controls, NAG and EU Unlock  
+  - Nag-killer + Advanced EAP + Eu-Unlock（仅 Model YL）
+- **基于配置的 CAN 拓扑与转向灯路由**，无需单独的固件分支或手动选择传输方式。
+- **直接支持 S3XY 按钮蓝牙连接**，最多可注册 **3 个按钮**。
+- **运行时开关蓝牙主控而无需重启 MCU**，同时保留已保存的设备、配对、映射和自动连接设置。
+- **重新设计的自动转向灯**，具备配置感知的路由和方向相关的 ALC 可用性门控。
+- **独立的 R79 引擎**，支持即时重发和独立的周期刷新。
+- **Summon 监控**从 R79 控制权中分离。
+- **Off-Highway ALC BETA** 作为常规车辆功能加入。
+- **TLSSC 高速公路阻断**新增：TLSSC 可选择在高速公路 / 控制入口道路上**关闭**。
+- **CAN 研究抓包**，支持快照、原始变化和自动 ALC 变化模式。
+- **专用 LAB 研究区域**，涵盖 R79、ULC 盲区、ACC 跟车距离和 CAN 抓包。
+- **全新移动端仪表板架构**，包含 HOME、DEVICES、SETTINGS 和 LAB 四个页面。
+- **可配置的 Wi-Fi AP**，分级重置行为，以及更丰富的 CAN/BLE 诊断。
+- **更强的 CAN 恢复安全性**，通过新的 TX 恢复屏障 / epoch 模型实现。
+- **新增可选的 0 km/h 时暂停 NAG** — 默认关闭。
+- **新增拓扑感知的功能门控**，覆盖 Advanced EAP、车身控制、NAG 和 EU Unlock。
 
 **Advanced EAP**
-- Automatically activates the turn signal.
-- Delay can be configured from the dashboard.
-- All lane-change safety features are maintained.
-- The turn signal starts only when the vehicle requests a lane change.
-- Lane changes can always be cancelled: On screen, using the open-door button or using s3xy button.
+- 自动激活转向灯。
+- 延迟可在仪表板中配置。
+- 保留所有变道安全特性。
+- 转向灯仅在车辆请求变道时点亮。
+- 变道随时可取消：通过屏幕、开门按钮或 S3XY 按钮。
 
 **EU Unlock**
-- Bypass R79 EU restriction in AP.
-- Expand Summon range to ±85 m.
-- Expanded lateral acceleration limits.  
-- Lane changes near forks are not disabled (EAP).  
-- Instantaneous lane change on blinker (EAP).  
-- No lane-change timeout once initiated (EAP).  
-- Automatically takes forks and exits (EAP).  
-- Toggle to activate TLSSC (EAP).  
+- 绕过 AP 中的 R79 欧盟限制。
+- 将 Summon 范围扩展至 ±85 米。
+- 放宽横向加速度限制。  
+- 变道在匝道口不会被禁用（EAP）。  
+- 转向灯闪烁时即时变道（EAP）。  
+- 变道一旦开始不再有超时限制（EAP）。  
+- 自动驶入匝道和出口（EAP）。  
+- 可切换以激活 TLSSC（EAP）。  
 
 **NAG-Killer**
-- eliminate the "hands on the wheel" prompt while using Autopilot/FSD*
+- 在使用 Autopilot/FSD 时消除"请握住方向盘"提示*
 
 ---
 
-## 🚙 Supported profiles
+## 🚙 支持的车型配置
 
-| Configuration | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
+| 配置 | NAG Killer | Advanced EAP | Pedal Map | EU Unlock |
 |---|:---:|:---:|:---:|:---:|
 | **Model YL · Party + Body** | ✅ | ✅ | ✅ | ✅ |
-| **Standard Model 3/Y · Body + Chassis** | ❌✅ | ✅ | ✅ | ✅ | 
-| **Standard Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
+| **标准 Model 3/Y · Body + Chassis** | ❌✅ | ✅ | ✅ | ✅ | 
+| **标准 Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
 
-> Model 3 Highland requires selecting the installed turn-control type during profile setup. Other supported profiles automatically use the Stalk configuration.
+> Model 3 Highland 在配置设置时需要选择已安装的转向控制类型。其他支持的配置会自动使用 Stalk 配置。
 
-## 🔧 Hardware Target
+## 🔧 目标硬件
 
-This code is adapted for the **LilyGO / T-2Can**.
+本代码适配于 **LilyGO / T-2Can**。
 
-| Device | CAN Interface | CAN Bus | Function |
+| 设备 | CAN 接口 | CAN 总线 | 功能 |
 |---|---|---|---| 
 | LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
 | LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
 
-## 🧩 Main features
+## 🧩 主要功能
 
-### 🛡️ Vehicle-profile safety
+### 🛡️ 车型配置安全
 
-A saved Vehicle Profile determines the CAN topology, turn-signal route, supported features, and profile-specific restrictions.
+已保存的车型配置决定了 CAN 拓扑、转向灯路由、支持的功能以及配置相关的限制。
 
-On first boot or after a major migration, firmware remains in a fail-closed setup state until a valid profile is saved:
+首次启动或重大迁移后，固件会保持故障安全的设置状态，直到保存了有效的配置：
 
-- CAN transmission and injection are disabled.
-- CAN recovery supervision is disabled.
-- Bluetooth is not started.
-- Wi-Fi and the Profile Setup page remain available.
+- CAN 发送和注入被禁用。
+- CAN 恢复监管被禁用。
+- 蓝牙不启动。
+- Wi-Fi 和配置设置页面保持可用。
 
-> Migrating from pre-Universal v2.x firmware intentionally erases NVS before creating the Universal bootstrap configuration.
+> 从 pre-Universal v2.x 固件迁移时，会故意擦除 NVS，然后再创建 Universal 引导配置。
 
-### 🚦 Advanced EAP and Auto Blinker
+### 🚦 Advanced EAP 与自动转向灯
 
-Advanced EAP can automatically request a turn signal when the vehicle requests a lane change, with configurable delay and retained cancellation options through the screen, door-open action, or S3XY button.
+Advanced EAP 可在车辆请求变道时自动点亮转向灯，延迟可配置，并保留通过屏幕、开门动作或 S3XY 按钮取消的能力。
 
-Auto Blinker is profile-aware and validates the requested direction before transmission:
+自动转向灯具备配置感知能力，在发送前会校验请求的方向：
 
-- `DAS_autoLaneChangeState` must permit the requested left or right maneuver.
-- The condition is checked when the request is armed and again when it fires.
-- A lane becoming unavailable during the delay cancels the pending action.
-- NOA must remain eligible through the configured stabilization interval.
-- Door-open or S3XY cancellation can apply a shared, configurable pause; triggering cancel again releases it early.
+- `DAS_autoLaneChangeState` 必须允许所请求的左或右操作。
+- 该条件在请求武装时检查一次，在触发时再检查一次。
+- 若在延迟期间目标车道变为不可用，将取消待执行的操作。
+- NOA 必须在配置的稳定间隔内保持可用。
+- 开门或 S3XY 取消可应用共享的可配置暂停；再次触发取消会提前释放暂停。
 
-> Direct S3XY left/right blinker actions remain independent from the Auto Blinker enable, stabilization, and pause states.
+> 直接的 S3XY 左/右转向灯动作与自动转向灯的启用、稳定和暂停状态相互独立。
 
-### 🔁 R79 and Summon
+### 🔁 R79 与 Summon
 
-The production R79 path applies a fixed policy to accepted stock frames:
+生产版 R79 路径对接受的原始帧应用固定策略：
 
-- `UI_applyEceR79` bit 19: forced to `0`.
-- `UI_hardCoreSummon` bit 47: forced to `1`.
-- SmartSummonOnly bit 18: selectable in **Settings → Summon** as `FORCE 0` or `STOCK`.
+- `UI_applyEceR79` bit 19：强制为 `0`。
+- `UI_hardCoreSummon` bit 47：强制为 `1`。
+- SmartSummonOnly bit 18：可在 **Settings → Summon** 中选择 `FORCE 0` 或 `STOCK`。
 
-Each accepted stock mux1 frame is echoed with a bounded 2 ms queue wait. Each accepted mux2 frame schedules one +150 ms refresh. The LAB page now exposes a read-only R79 status card rather than transport/timing experiments.
+每个被接受的原始 mux1 帧都会在 2 ms 的有界队列等待内回显。每个被接受的 mux2 帧会调度一次 +150 ms 的刷新。LAB 页面现在展示只读的 R79 状态卡片，而非传输 / 时序实验。
 
-A separate always-on Summon Monitor provides state observation, gate telemetry, ACA/SPR monitoring, park-state monitoring, and queue/transport telemetry.
+一个独立的常驻 Summon 监控器提供状态观察、门控遥测、ACA/SPR 监控、驻车状态监控以及队列 / 传输遥测。
 
-### 💪 NAG Killer and AP Right Scroll
+### 💪 NAG Killer 与 AP 右侧滚动
 
-NAG Killer remains profile-gated. Mode H Rev.4 is available as a production profile in **Settings → NAG KILLER** with these defaults:
+NAG Killer 仍然按配置门控。Mode H Rev.4 作为生产配置可在 **Settings → NAG KILLER** 中使用，默认值如下：
 
-- Primary: 1.80–2.60 Nm
-- Wait: 0.90–3.00 s
-- Refractory: 0.50–1.50 s
-- Opposite carrier: 0.10–0.60 Nm
-- Tiered Hands-On thresholds: 0.40 / 2.00 Nm
-- Visual Warning Rescue: ON after 0.5 s
-- Hard pause while stopped
+- 主扭矩：1.80–2.60 Nm
+- 等待时间：0.90–3.00 s
+- 不应期：0.50–1.50 s
+- 反向载波：0.10–0.60 Nm
+- 分级手在方向盘阈值：0.40 / 2.00 Nm
+- 视觉警告救援：0.5 秒后开启
+- 停车时硬暂停
 
-AP Right Scroll is available in Settings for Model YL and standard Model 3/Y profiles. A newly detected visual warning triggers an immediate UP/DOWN pair; if the warning stays active, it repeats every 1–5 seconds (default: 2 seconds). Physical right-scroll input always has priority.
+AP 右侧滚动可在 Settings 中用于 Model YL 和标准 Model 3/Y 配置。新检测到的视觉警告会立即触发一次 UP/DOWN 配对；若警告持续，则每 1–5 秒重复一次（默认 2 秒）。物理右侧滚动输入始终具有优先权。
 
-### 🔘 S3XY Button support
+### 🔘 S3XY 按钮支持
 
-- Register up to **three S3XY Buttons**.
-- Enable or disable Bluetooth Master at runtime without rebooting.
-- Saved devices, bonds, button mappings, and Auto Connect settings are retained.
-- S3XY actions can control direct blinkers, lane-change cancellation, and CAN research capture.
+- 最多可注册 **三个 S3XY 按钮**。
+- 运行时启用或禁用蓝牙主控，无需重启。
+- 保留已保存的设备、配对、按钮映射和自动连接设置。
+- S3XY 动作可控制直接转向灯、变道取消和 CAN 研究抓包。
 
-## 🧪 Dashboard and LAB
+## 🧪 仪表板与 LAB
 
-The mobile dashboard has four persistent sections:
+移动端仪表板包含四个常驻区域：
 
-| Section | Purpose |
+| 区域 | 用途 |
 |---|---|
-| **HOME** | Status and quick controls |
-| **DEVICES** | S3XY / Bluetooth devices |
-| **SETTINGS** | Supported production features and system configuration |
-| **LAB** | Experimental tools and CAN research |
+| **HOME** | 状态与快捷控制 |
+| **DEVICES** | S3XY / 蓝牙设备 |
+| **SETTINGS** | 支持的生产功能与系统配置 |
+| **LAB** | 实验工具与 CAN 研究 |
 
-### 🔬 LAB tools
+### 🔬 LAB 工具
+> ⚠️ LAB 仅用于受控研究。
 
-> ⚠️ LAB is intended for controlled research only.
+- 只读的 R79 状态与位遥测。
+- 实验性 **禁用驾驶员监控（NAG）** 控制，使用 `0x3FD` mux1 bit 43（在支持的配置下）。
+- ULC 盲区研究模式：Stock、Standard、Aggressive 和 Mad Max。
+- 自动变道实验。
+- CAN 抓包：快照、原始变化和自动 ALC 变化。
 
-- Read-only R79 status and bit telemetry.
-- Experimental **Disable Driver Monitoring (NAG)** control using `0x3FD` mux1 bit 43, where supported.
-- ULC Blind Spot research modes: Stock, Standard, Aggressive, and Mad Max.
-- Auto Lane Change experiment.
-- CAN capture: Snapshot, Raw Transition, and Auto ALC Transition.
+> CAN 研究抓包仅支持 RX：只观察并导出 CAN 流量，不会重放抓取的帧。
 
-> CAN Research Capture is RX-only: it observes and exports CAN traffic but does not replay captured frames.
+## 📶 Wi-Fi 与重置
 
-## 📶 Wi-Fi and resets
+### 📡 Wi-Fi 热点
 
-### 📡 Wi-Fi access point
+默认热点：
 
-Default access point:
-
-| Setting | Default |
+| 设置 | 默认值 |
 |---|---|
 | SSID | `T2CAN-****` |
-| Password | `12345678` |
-| Dashboard | [http://192.168.4.1](http://192.168.4.1) |
+| 密码 | `12345678` |
+| 仪表板 | [http://192.168.4.1](http://192.168.4.1) |
 
-SSID and password can be changed from the dashboard. Applying a Wi-Fi change restarts only the access point; CAN, BLE, and the MCU continue running.
+SSID 和密码可在仪表板中修改。应用 Wi-Fi 更改时只会重启热点；CAN、BLE 和 MCU 继续运行。
 
-### ♻️ Reset options
+### ♻️ 重置选项
 
-| Action | What it clears | What it preserves |
+| 操作 | 清除内容 | 保留内容 |
 |---|---|---|
-| Reset Firmware Settings | Normal firmware settings | Vehicle profile, Wi-Fi, and S3XY/Bluetooth data |
-| Reset Bluetooth Data | S3XY registry, mappings, bonds, discovery/cache | Bluetooth Master and Global Auto Connect settings |
-| Factory Reset | All NVS data | Nothing; returns to Vehicle Profile Setup |
+| 重置固件设置 | 常规固件设置 | 车型配置、Wi-Fi 和 S3XY/蓝牙数据 |
+| 重置蓝牙数据 | S3XY 注册表、映射、配对、发现/缓存 | 蓝牙主控和全局自动连接设置 |
+| 恢复出厂设置 | 所有 NVS 数据 | 无；回到车型配置设置 |
 
-## 🔧 Hardware note
+## 🔧 硬件说明
 
-> ⚠️ Remove the two **120 Ω termination resistors** if they are not appropriate for your wiring. Leaving them in place can cause CAN signal errors.
+> ⚠️ 如果两个 **120 Ω 终端电阻**不适用于你的接线，请将其移除。保留它们可能导致 CAN 信号错误。
 
 <img width="407" height="180" alt="LILYGO-T-2CAN_9" src="https://github.com/user-attachments/assets/0d272b7e-bd82-408f-9ca1-239e6dab44d5" />
 
-## 📚 Scope
+## 📚 范围
 
-This Universal release is based on source-level comparison and consolidation of:
+本 Universal 版本基于以下来源的源码级对比与整合：
 
 - LP_YL V2.0
 - Advanced EAP & EU-Unlock V2.6.0 for T-2CAN
