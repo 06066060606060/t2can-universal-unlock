@@ -12,7 +12,7 @@
 
 **Major Universal Release for Lilygo T2CAN**  
 **Release date:** 17 11 2026  
-**[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
+**[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)** 
 **[仪表板模拟](https://06066060606060.github.io/t2can-universal-unlock/index-zh-cn.html)**
 
 ### Discord
