@@ -236,10 +236,22 @@ SSID and password can be changed from the dashboard. Applying a Wi-Fi change res
 
 <img width="407" height="180" alt="LILYGO-T-2CAN_9" src="https://github.com/user-attachments/assets/0d272b7e-bd82-408f-9ca1-239e6dab44d5" />
 
-## 📚 Scope
+## ☕ Support the Project
 
-This Universal release is based on source-level comparison and consolidation of:
+<p align="left">
+  <a href="https://tesla-mods.fkey.id/">
+    <img height="30" alt="Donate with Crypto" src="https://img.shields.io/badge/Crypto-Donate-F7931A?style=for-the-badge&amp;logo=bitcoin&amp;logoColor=white">
+  </a>
+  <a href="https://www.paypal.com/donate/?hosted_button_id=Q2YMMMJYTAPJE">
+    <img height="30" alt="Donate with PayPal" src="https://img.shields.io/badge/PayPal-Donate-00457C?style=for-the-badge&amp;logo=paypal&amp;logoColor=white">
+  </a>
+  <a href="https://www.buymeacoffee.com/xbmod">
+    <img height="30" alt="Buy Me a Coffee" src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png">
+  </a>
+</p>
 
-- LP_YL V2.0
-- Advanced EAP & EU-Unlock V2.6.0 for T-2CAN
-- T2CAN Universal v3.x
+  **各位，开发这个很不容易，费了好大劲，请大家适当赞赏，让我有持续更新的动力**  
+<p align="left">
+<img width="250" alt="368" src="https://github.com/user-attachments/assets/003791f1-f670-44b9-8728-73e8b48a24a6" />
+
+</p>
