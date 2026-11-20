@@ -8,17 +8,22 @@
 
 --- 
 
-# T2CAN Universal Unlock v3.30.2
+# T2CAN Universal Unlock v3.30.3
 
 **Major Universal Release for Lilygo T2CAN**  
 **Release date:** 17 11 2026  
 **[Dashboard view](https://06066060606060.github.io/t2can-universal-unlock/)**
+**[仪表板模拟](https://06066060606060.github.io/t2can-universal-unlock/index-zh-cn.html)**
 
 ### Discord
 Join Discord server for more info:
 https://discord.gg/euPbYG8Npc
 
 ---
+**v3.30.3 **
+- Restore TLSSC for Model YL
+- Added Chinese Language variant
+
 **v3.30.2 **	
 - Added Model S/X MCU2 HW3 profile (Compatibility with HW2.5) 
 - Fix R79 injection after AP disengage. 

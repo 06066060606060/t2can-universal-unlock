@@ -1,3 +1,6 @@
+# T2CAN Universal v3.30.3
+- Restore TLSSC for Model YL
+- Added Chinese Language variant
 # T2CAN Universal v3.30.2
 - Added Model S/X MCU2 HW3 profile, tested on model S 2017 HW3 and on model S 2017 HW2.5, (for HW2.5 use TSL9 mode for nag)
 - Fix R79 injection delay after AP disengage 

@@ -4100,9 +4100,8 @@ static bool injectUlcSnooze3fdMux1(const twai_message_t &src) {
     return true; // The ULC clone owns this stock frame even on enqueue failure.
 }
 
-// ── TLSSC Restore : 0x331, CAN A on Model S/X, CAN B on Standard 3/Y ──
+// ── TLSSC Restore : 0x331, CAN A on Model YL / S/X, CAN B on Standard 3/Y ──
 // Preserve byte0 bits7..6 and force its low six bits to 0x1B.
-// Model Y L retains its existing unsupported status.
 static void doInjectTlsscRestore(const twai_message_t &src) {
     if (!activeProfileTlsscRestoreSupported()) return;
     if (!tlsscRestoreEnabled) return;
@@ -4110,7 +4109,7 @@ static void doInjectTlsscRestore(const twai_message_t &src) {
 
     const uint8_t patched0 = (uint8_t)((src.data[0] & 0xC0U) | 0x1BU);
     if (patched0 == src.data[0]) return;
-    if (activeProfileIsModelS2017()) {
+    if (activeProfileUsesYlTopology()) {
       if (!mcpReady) return;
       struct can_frame out = {};
       out.can_id = 0x331u;

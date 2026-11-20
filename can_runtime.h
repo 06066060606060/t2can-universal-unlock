@@ -448,7 +448,7 @@ static void canTaskMcp(void* arg) {
       driverMonitorCaptureObserve(DRIVER_MONITOR_BUS_A, partyId, rxf.can_dlc, rxf.data);
       if (partyId == (activeProfileIsModelS2017() ? 0x218u : UI_CHASSIS_CONTROL_ID) && rxf.can_dlc >= 8)
         uiAutoLaneChangeObserveAndInjectCanA(rxf);
-      if (activeProfileIsModelS2017() && partyId == 0x331u && rxf.can_dlc == 8u) {
+      if (activeProfileUsesYlTopology() && partyId == 0x331u && rxf.can_dlc == 8u) {
         twai_message_t stock = {}; // Payload container; Restore TX uses CAN A.
         stock.identifier = 0x331u;
         stock.data_length_code = 8u;
