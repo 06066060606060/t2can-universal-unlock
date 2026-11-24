@@ -4799,6 +4799,77 @@ static void httpVisionControlUpdate() {
   server.send(200, "application/json", getVisionControlStatsJson());
 }
 
+static void httpMaxOffsetStats() {
+  server.send(200, "application/json", getMaxOffsetStatsJson());
+}
+
+static void httpMaxOffsetUpdate() {
+  if (!maxOffsetSupported()) {
+    server.send(409, "application/json", "{\"error\":\"unsupported-profile\"}"); return;
+  }
+  const bool hasEnabled = server.hasArg("enabled"), hasPercent = server.hasArg("percent");
+  const bool hasDcas = server.hasArg("dcas"), hasProfile = server.hasArg("profile");
+  const int expected = (int)hasEnabled + (int)hasPercent + (int)hasDcas + (int)hasProfile;
+  if (expected == 0 || server.args() != expected) {
+    server.send(400, "application/json", "{\"error\":\"enabled-or-percent-only\"}"); return;
+  }
+  bool enabled = maxOffsetEnabledSnapshot();
+  uint8_t percent = maxOffsetPercentSnapshot();
+  bool dcas = dcasClearEnabledSnapshot();
+  uint8_t profile = drivingProfileSnapshot();
+  if (hasEnabled) {
+    const String raw = server.arg("enabled");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"error\":\"invalid-enabled\"}"); return;
+    }
+    enabled = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
+  }
+  if (hasPercent) {
+    const String raw = server.arg("percent");
+    uint16_t value = 0u;
+    bool ok = raw.length() >= 1u && raw.length() <= 2u;
+    for (unsigned i = 0; ok && i < raw.length(); ++i) {
+      if (raw[i] < '0' || raw[i] > '9') ok = false;
+      else value = (uint16_t)(value * 10u + (uint16_t)(raw[i] - '0'));
+    }
+    if (!ok || value > 63u || !maxOffsetPercentAllowedPure((uint8_t)value)) {
+      server.send(400, "application/json", "{\"error\":\"invalid-percent\"}"); return;
+    }
+    percent = (uint8_t)value;
+  }
+  if (hasDcas) {
+    const String raw = server.arg("dcas");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"error\":\"invalid-dcas\"}"); return;
+    }
+    dcas = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
+  }
+  if (hasProfile) {
+    const String raw = server.arg("profile");
+    uint16_t value = 0u;
+    bool ok = raw.length() >= 1u && raw.length() <= 3u;
+    for (unsigned i = 0; ok && i < raw.length(); ++i) {
+      if (raw[i] < '0' || raw[i] > '9') ok = false;
+      else value = (uint16_t)(value * 10u + (uint16_t)(raw[i] - '0'));
+    }
+    // Reject before the uint8 cast. 256 would become 0 (Chill).
+    if (!ok || (value != (uint16_t)DRIVING_PROFILE_STOCK_PURE && value > 4u)) {
+      server.send(400, "application/json", "{\"error\":\"invalid-profile\"}"); return;
+    }
+    profile = (uint8_t)value;
+  }
+  if ((hasEnabled || hasPercent) && !maxOffsetApplySettings(enabled, percent)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  if (hasDcas && !dcasClearApplySettings(dcas)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  if (hasProfile && !drivingProfileApplySettings(profile)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  server.send(200, "application/json", getMaxOffsetStatsJson());
+}
+
 
 static void httpAutoLaneChangeLabUpdate() {
   if (!httpRequireLab()) return;
@@ -5259,7 +5330,12 @@ static String settingsLiteSnapshotToJson() {
   uint8_t alcModeLocal;
   portENTER_CRITICAL(&lab3f8Mux); alcModeLocal = lab3f8AlcMode; portEXIT_CRITICAL(&lab3f8Mux);
 
-  String j; j.reserve(500);
+  const bool maxOffsetOn = maxOffsetEnabledSnapshot();
+  const uint8_t maxOffsetPercent = maxOffsetPercentSnapshot();
+  const bool dcasClear = dcasClearEnabledSnapshot();
+  const uint8_t drivingProfile = drivingProfileSnapshot();
+
+  String j; j.reserve(800);
   JsonWriterArduino jw(j);
   jw.beginObject("system");
   jw.string("fwVersion", FW_VERSION);
@@ -5280,6 +5356,12 @@ static String settingsLiteSnapshotToJson() {
   jw.endObject();
   jw.beginObject("lab3f8");
   jw.u32("alcMode", alcModeLocal);
+  jw.endObject();
+  jw.beginObject("maxOffset");
+  jw.boolean("enabled", maxOffsetOn);
+  jw.u32("percent", maxOffsetPercent);
+  jw.boolean("dcasClear", dcasClear);
+  jw.u32("profile", drivingProfile);
   jw.endObject();
   jw.finish();
   return j;
@@ -5944,6 +6026,8 @@ static void webTask(void *arg) {
     server.on("/api/lab/auto-lane-change/update", HTTP_POST, httpAutoLaneChangeLabUpdate);
     server.on("/api/vision-control/stats", HTTP_GET, httpVisionControlStats);
     server.on("/api/vision-control/update", HTTP_POST, httpVisionControlUpdate);
+    server.on("/api/max-offset/stats", HTTP_GET, httpMaxOffsetStats);
+    server.on("/api/max-offset/update", HTTP_POST, httpMaxOffsetUpdate);
     server.on("/api/lab/vision-control/stats", HTTP_GET, httpVisionControlStats);
     server.on("/api/lab/vision-control/update", HTTP_POST, httpVisionControlUpdate);
     server.on("/api/country/stats", HTTP_GET, httpCountryOverrideStats);

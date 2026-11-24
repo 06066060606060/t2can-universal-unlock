@@ -487,8 +487,11 @@ static void canTaskMcp(void* arg) {
           visionControlObserveStock(stock, countryRxEpoch, claimed || ulcClaimed, prefetchedRxMs[bi]);
         } else if (mux == 0u) injectTLSSC(stock);
       }
-      if (!activeProfileIsModelS2017() && partyId == 0x3FD && rxf.can_dlc == 8)
+      if (!activeProfileIsModelS2017() && partyId == 0x3FD && rxf.can_dlc == 8) {
         visionControlObserveBody(rxf, countryRxEpoch, prefetchedRxMs[bi]);
+        uiAutopilotMux2ObserveParty(rxf, countryRxEpoch, prefetchedRxMs[bi]);
+        dcasObserveParty(rxf, countryRxEpoch, prefetchedRxMs[bi]);
+      }
       if (activeCanAIsParty()) {
         // Party CAN on CAN A: Nag Killer is topology-gated. Keep YL-only
         // DAS/Summon/visual-debug behavior explicitly model-gated so selecting
@@ -742,7 +745,7 @@ static void canTaskTwai(void* arg) {
               const bool ulcCloneClaimed = injectUlcSnooze3fdMux1(f);
               visionControlObserveStock(f, countryRxEpoch, mux1StockClaimed || ulcCloneClaimed, stockRxMs);
             } else if (mux == 0) injectTLSSC(f);
-            else if (mux == 2) fsdLabEchoMux2(f, countryRxEpoch);
+            else if (mux == 2) uiAutopilotMux2ObserveChassis(f, countryRxEpoch, stockRxMs);
           }
           break;
 

@@ -686,6 +686,7 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="listrow modelSMenuHidden" id="isaSuppressionRow"><div><div class="listkey">ISA Suppression</div><div class="listdesc" id="isaSuppressionDesc">Reduce ISA warning chimes during Autopilot.</div><div class="listdesc" id="isaSuppressionSaveState" aria-live="polite"></div></div><label class="toggle"><input id="isaSuppressionToggle" type="checkbox" disabled/><span class="track"></span></label></div>
 <div class="listrow modelSMenuHidden" id="driverMonitoringRow"><div><div class="listkey">Disable Driver Monitoring</div><div class="listdesc" id="driverMonitoringDesc">Request cabin-camera monitoring off during Autopilot.</div><div class="listdesc" id="driverMonitoringSaveState" aria-live="polite"></div></div><label class="toggle"><input id="driverMonitoringToggle" type="checkbox" disabled/><span class="track"></span></label></div>
 <div class="listrow clickable modelSMenuHidden" data-panel="panelVisionControl"><div><div class="listkey">Visual Speed Control</div><div class="listdesc">Request visual speed control off.</div></div><div class="rowRight"><span class="value" id="visionControlRowState">OFF</span><span class="chev">›</span></div></div>
+<div class="listrow clickable modelSMenuHidden" data-panel="panelMaxOffset"><div><div class="listkey">DCAS / Offset</div><div class="listdesc">Clear DCAS for a driving profile, or leave it off for max offset.</div></div><div class="rowRight"><span class="value" id="maxOffsetRowState">DCAS</span><span class="chev">›</span></div></div>
 <div class="listrow clickable" data-panel="panelBlink" id="blinkSettingsRow"><div><div class="listkey">Auto Blinker</div><div class="listdesc" id="setBlinkDesc">Signal automatically for NOA lane changes.</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelTlssc"><div><div class="listkey">TLSSC</div><div class="listdesc">Request traffic-light and stop-sign control during AP.</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelLabAutoLaneChange"><div><div class="listkey">Auto Lane Change Enable</div><div class="listdesc">Experimental auto lane change for standard AP</div></div><div class="rowRight"><span class="value">EXP</span><span class="chev">›</span></div></div>
@@ -875,6 +876,9 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="r"><span class="rk2">Last forced TX</span><span id="labAutoLcLast">—</span></div>
 </div>
 </section>
+</div></section>
+<section class="panel" id="panelMaxOffset"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">Settings</div></div><div class="panelHero">DCAS / Offset</div><div class="panelSub">Clear DCAS on uses the driving profile. Clear DCAS off uses max offset. Only one applies, and only while Autopilot is active.</div>
+<section class="card"><div class="labControlRow"><div><div class="labControlTitle">Send max offset</div><div class="labControlSub">Used while Clear DCAS is off</div></div><label class="toggle"><input aria-label="Send max offset" id="maxOffsetToggle" type="checkbox" disabled/><span class="track"></span></label></div><div class="labControlRow"><div><div class="labControlTitle">Max offset %</div><div class="labControlSub">0, 5 or 10</div></div><select aria-label="Max offset percent" class="selectArrow labSelect" id="maxOffsetPercent" disabled><option value="0">0%</option><option value="5">5%</option><option selected value="10">10%</option></select></div><div class="labControlRow"><div><div class="labControlTitle">Clear DCAS behavior</div><div class="labControlSub">On: driving profile. Off: max offset.</div></div><label class="toggle"><input aria-label="Clear DCAS behavior" id="dcasToggle" type="checkbox" checked disabled/><span class="track"></span></label></div><div class="labControlRow"><div><div class="labControlTitle">Driving profile</div><div class="labControlSub">Used while Clear DCAS is on · Stock sends nothing</div></div><select aria-label="Driving profile" class="selectArrow labSelect" id="drivingProfile" disabled><option selected value="255">Stock</option><option value="0">Chill</option><option value="1">Normal</option><option value="2">Assertive</option><option value="3">Mad Max</option><option value="4">Conservative</option></select></div><div class="body"><div class="r"><span class="rk2">Request state</span><span id="maxOffsetState">—</span></div><div class="r"><span class="rk2">CAN B stock → target</span><span id="maxOffsetCanB">—</span></div><div class="r"><span class="rk2">CAN A stock → target</span><span id="maxOffsetCanA">—</span></div><div class="r"><span class="rk2">Mux 2 TX OK / FAIL</span><span id="maxOffsetTx">0 / 0</span></div><div class="r"><span class="rk2">DCAS</span><span id="dcasState">—</span></div><div class="r"><span class="rk2">Driving profile</span><span id="drivingProfileState">—</span></div><div class="r"><span class="rk2">DCAS TX OK / FAIL</span><span id="dcasTx">0 / 0</span></div></div><div class="softNote">Max offset is sent only while Clear DCAS is off and Autopilot is active. Presets are 0, 5 and 10. With Clear DCAS on, the percent is left as the car set it.</div><div class="softNote">Clear DCAS stays quiet until Autopilot is already active, then each stock mux 0 frame has UI_applyDCASBehavior (bit 60) set to 0. That is the mode in which the driving profile is applied. Leave it off to use max offset instead. The legacy bit stays as the car sent it.</div><div class="softNote">With Clear DCAS on, a profile other than Stock is written to mux 2 bits 60–62 once Autopilot is active: Chill, Normal, Assertive, Mad Max, Conservative. It is not sent before Autopilot, and it is not sent while Clear DCAS is off.</div><div class="softNote" id="maxOffsetSaveState" role="status">Loading saved settings…</div></section>
 </div></section>
 <section class="panel" id="panelCountry"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">Settings</div></div><div class="panelHero">Country / Map</div><div class="panelSub">All vehicle profiles with a valid CAN topology. Overrides follow fresh stock frames on the same bus while R79 is ACTIVE. Vehicle behavior remains unverified.</div>
 <section class="card">
@@ -1373,6 +1377,47 @@ async function updateVisionControlLab(key='disabled'){
   try{visionControlSaved=await featurePostJson('/api/vision-control/update?'+key+'='+value);$('visionControlSaveState').textContent='Settings ready'}catch(e){try{visionControlSaved=await jget('/api/vision-control/stats')}catch(x){}$('visionControlSaveState').textContent='Save failed · restored saved settings'}finally{visionControlSaving=false;visionControlEpoch++;renderVisionControlLab(visionControlSaved)}
 }
 $('visionControlDisableToggle').onchange=()=>updateVisionControlLab('disabled');$('visionControlBus').onchange=()=>updateVisionControlLab('bus');
+let maxOffsetSaved=null,maxOffsetSaving=false,maxOffsetEpoch=0;
+function drivingProfileName(value){return {0:'Chill',1:'Normal',2:'Assertive',3:'Mad Max',4:'Conservative'}[Number(value)]||''}
+function maxOffsetRowLabel(s){
+  if(!s)return 'OFF';
+  if(s.dcasClear===true){const profile=drivingProfileName(s.profile);return profile?('DCAS · '+profile):'DCAS'}
+  if(s.enabled===true){const p=[0,5,10].includes(Number(s.percent))?Number(s.percent):10;return p+'%'}
+  return 'OFF';
+}
+function lastSeenPair(s,field){
+  const one=bus=>{const n=Number(bus&&bus[field]);return Number.isFinite(n)&&n>=0?String(n):'—'};
+  return 'B '+one(s&&s.canB)+' · A '+one(s&&s.canA);
+}
+function renderMaxOffset(s){
+  if(!s)return;const available=s.supported===true,enabled=s.enabled===true,dcas=s.dcasClear===true,percent=[0,5,10].includes(Number(s.percent))?Number(s.percent):10,profile=[0,1,2,3,4,255].includes(Number(s.profile))?Number(s.profile):255,gate=!dcas&&enabled&&available&&(s.canA?.gateOpen===true||s.canB?.gateOpen===true);
+  $('maxOffsetToggle').disabled=maxOffsetSaving||!available||dcas;$('maxOffsetPercent').disabled=maxOffsetSaving||!available||dcas;$('dcasToggle').disabled=maxOffsetSaving||!available;$('drivingProfile').disabled=maxOffsetSaving||!available||!dcas;
+  if(!maxOffsetSaving){$('maxOffsetToggle').checked=enabled;$('maxOffsetPercent').value=String(percent);$('dcasToggle').checked=dcas;$('drivingProfile').value=String(profile)}
+  $('maxOffsetRowState').textContent=maxOffsetRowLabel(s);
+  $('maxOffsetState').textContent=!available?'UNSUPPORTED':s.state==='IGNORED'?'Not used while DCAS clear is on':!enabled?'OFF · STOCK':s.state==='LISTEN_ONLY'?'Listen-only · not sending':s.state==='WAIT_AP'?'Waiting for Autopilot':gate?'SENDING · each stock frame':'BLOCKED';
+  const busLine=(name,bus)=>{const valid=bus&&bus.valid===true,stock=Number(bus&&bus.stockPercent),age=Number(bus&&bus.rxAgeMs);return name+' '+(valid?stock:'—')+' → '+(valid?percent:'—')+' · '+(valid&&Number.isFinite(age)&&age<999999?fmtMs(age):'—')};
+  $('maxOffsetCanB').textContent=busLine('B',s.canB);$('maxOffsetCanA').textContent=busLine('A',s.canA);
+  $('maxOffsetTx').textContent=(s.txOk||0)+' / '+(s.txFail||0);
+  const dcasText=!available?'UNSUPPORTED':s.dcasState==='CLEARING'?'CLEARING · each mux 0 frame':s.dcasState==='WAIT_AP'?'Waiting for Autopilot':s.dcasState==='LISTEN_ONLY'?'Listen-only · not sending':s.dcasState==='OFF'?'OFF · stock bit stays':(s.dcasState||'—');
+  $('dcasState').textContent=dcasText+' · last '+lastSeenPair(s,'stockDcas');
+  const profileText=!available?'UNSUPPORTED':s.profileState==='IGNORED'?'Not used while DCAS clear is off':s.profileState==='SENDING'?((drivingProfileName(profile)||'Profile')+' · each mux 2 frame'):s.profileState==='WAIT_AP'?'Waiting for Autopilot':s.profileState==='LISTEN_ONLY'?'Listen-only · not sending':s.profileState==='STOCK'?'STOCK · not sending':(s.profileState||'—');
+  $('drivingProfileState').textContent=profileText+' · last '+lastSeenPair(s,'stockProfile');
+  $('dcasTx').textContent=(s.dcasTxOk||0)+' / '+(s.dcasTxFail||0);
+}
+async function fetchMaxOffset(){const epoch=maxOffsetEpoch;try{const s=await jget('/api/max-offset/stats');if(epoch!==maxOffsetEpoch||maxOffsetSaving)return;maxOffsetSaved=s;renderMaxOffset(s);$('maxOffsetSaveState').textContent='Settings ready'}catch(e){if(!maxOffsetSaved)$('maxOffsetSaveState').textContent='Settings unavailable · retrying'}}
+async function updateMaxOffset(key){
+  if(maxOffsetSaving||!maxOffsetSaved||maxOffsetSaved.supported!==true){if(maxOffsetSaved)renderMaxOffset(maxOffsetSaved);return}
+  let value;
+  if(key==='percent')value=Number($('maxOffsetPercent').value);
+  else if(key==='profile')value=Number($('drivingProfile').value);
+  else if(key==='dcas')value=$('dcasToggle').checked?1:0;
+  else value=$('maxOffsetToggle').checked?1:0;
+  if(key==='percent'&&![0,5,10].includes(value)){renderMaxOffset(maxOffsetSaved);return}
+  if(key==='profile'&&![0,1,2,3,4,255].includes(value)){renderMaxOffset(maxOffsetSaved);return}
+  maxOffsetSaving=true;maxOffsetEpoch++;renderMaxOffset(maxOffsetSaved);$('maxOffsetSaveState').textContent='Saving…';
+  try{maxOffsetSaved=await featurePostJson('/api/max-offset/update?'+key+'='+value);$('maxOffsetSaveState').textContent='Settings ready'}catch(e){try{maxOffsetSaved=await jget('/api/max-offset/stats')}catch(x){}$('maxOffsetSaveState').textContent='Save failed · restored saved settings'}finally{maxOffsetSaving=false;maxOffsetEpoch++;renderMaxOffset(maxOffsetSaved)}
+}
+$('maxOffsetToggle').onchange=()=>updateMaxOffset('enabled');$('maxOffsetPercent').onchange=()=>updateMaxOffset('percent');$('dcasToggle').onchange=()=>updateMaxOffset('dcas');$('drivingProfile').onchange=()=>updateMaxOffset('profile');
 async function fetchAutoLaneChangeLab(){try{await fetchLab(await jget('/api/lab/auto-lane-change/stats'))}catch(e){}}
 async function toggleUlcNoConfirm(v){try{const r=await post('/api/ulc/update?confirm='+(v?1:0)),s=await r.json();if(!r.ok)throw new Error(s?.error||'blocked');await fetchLab(s);}catch(e){;fetchLab()}}
 async function updateUlcNoConfirmTiming(v){try{const r=await post('/api/ulc/update?timing='+(v?1:0)),s=await r.json();if(!r.ok)throw new Error(s?.error||'blocked');await fetchLab(s);}catch(e){;fetchLab()}}
@@ -1645,6 +1690,7 @@ function renderSettingsLite(s){
   $('sysFw').textContent=sys.fwVersion||'—';$('profileVersion').textContent='T-2CAN · '+(sys.fwVersion||'—');
   $('setBlinkDesc').textContent="Signal automatically for NOA lane changes.";
   const alcOn=Number(lab.alcMode)===2;syncChecks(['alcSettingsToggle'],alcOn);$('setAlcDesc').textContent="Off-Highway lane change";
+  const mo=s?.maxOffset||{};$('maxOffsetRowState').textContent=maxOffsetRowLabel(mo);
   const btOn=!!sx.bluetoothEnabled;$('wirelessDesc').textContent=(btOn?'Bluetooth ON':'Bluetooth OFF')+' · Auto Connect '+(sx.autoEnabled?'ON':'OFF');
 }
 let homeSlowLast=0;
@@ -2060,7 +2106,7 @@ setInterval(()=>{
   if(preheatSaved&&preheatSaved.packSeen===true)renderPreheatBms(preheatSaved);
 },3000);
 
-const pollLast={preheat:0,serviceMode:0,fsdLab:0,driverMonitoringRecovery:0,isaSuppressionRecovery:0,nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,homeSnap:0,settingsSnap:0,heartbeat:0};
+const pollLast={preheat:0,serviceMode:0,fsdLab:0,driverMonitoringRecovery:0,isaSuppressionRecovery:0,nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,homeSnap:0,settingsSnap:0,heartbeat:0,maxOffset:0};
 function activePanelId(){return document.querySelector('.panel.show')?.id||''}
 function pollDue(k,ms,fn,now,force=false){if(force||now-pollLast[k]>=ms){pollLast[k]=now;fn()}}
 function pollTick(force=false){
@@ -2080,6 +2126,7 @@ function pollTick(force=false){
     else if(p==='panelFsdVisualisation')pollDue('fsdLab',1000,fetchFsdLab,now,force);
     else if(p==='panelContinuousAp')pollDue('continuousAp',800,fetchContinuousAp,now,force);
     else if(p==='panelVisionControl')pollDue('visionControl',800,fetchVisionControlLab,now,force);
+    else if(p==='panelMaxOffset')pollDue('maxOffset',800,fetchMaxOffset,now,force);
     else if(p==='panelR79ApControl')pollDue('r79ApControl',800,fetchR79ApControl,now,force);
     else if(p==='panelCountry')pollDue('country',800,fetchCountryOverrideLab,now,force);
     else if(p==='panelNagModeH')pollDue('humanLab',800,()=>fetchNagHumanLab(force),now,force);

@@ -1,4 +1,5 @@
 #include "tesla_can_fields_pure.h"
+#include "max_offset_pure.h"
 #include "vision_speed_control_pure.h"
 #pragma once
 
@@ -1200,6 +1201,14 @@ struct FsdLabSignal {
 };
 static FsdLabSignal fsdLabSignals[2];
 static bool fsdLabPauseOnAp = false;
+static volatile bool maxOffsetEnabledState = false;
+static volatile uint8_t maxOffsetPercentState = MAX_OFFSET_DEFAULT_PERCENT_PURE;
+static volatile bool dcasClearEnabledState = true;
+static volatile uint8_t drivingProfileState = DRIVING_PROFILE_STOCK_PURE;
+static volatile int8_t dcasStockBit[2] = {-1, -1};
+static MaxOffsetStockPure maxOffsetStock[2] = {};
+static volatile uint32_t maxOffsetTxOk = 0u, maxOffsetTxFail = 0u;
+static volatile uint32_t dcasTxOk = 0u, dcasTxFail = 0u;
 // Called under the TX barrier, before publishing the new visualisation state.
 static bool fsdLabPersistVisualisation(bool enabled, uint8_t value) {
   Preferences p;
@@ -1320,6 +1329,374 @@ static void fsdLabEchoMux2(const twai_message_t &stock, uint32_t epoch) {
   const esp_err_t err = canTxTwaiTransmitValidated(&out, epoch,
       CAN_TX_FRESH_VH, fsdLabValidateEcho, nullptr);
   fsdLabRecordTx(1u, err);
+}
+
+// Model YL 0x3FD helpers. Model S uses 0x3EE and does not get this feature.
+static bool maxOffsetSupported() {
+  return !activeProfileIsModelS2017() && activeCanBIsChassis();
+}
+static bool maxOffsetEnabledSnapshot() {
+  portENTER_CRITICAL(&r79LabMux);
+  const bool enabled = maxOffsetEnabledState;
+  portEXIT_CRITICAL(&r79LabMux);
+  return enabled;
+}
+static uint8_t maxOffsetPercentSnapshot() {
+  portENTER_CRITICAL(&r79LabMux);
+  const uint8_t percent = maxOffsetPercentState;
+  portEXIT_CRITICAL(&r79LabMux);
+  return percent;
+}
+static bool dcasClearEnabledSnapshot() {
+  portENTER_CRITICAL(&r79LabMux);
+  const bool enabled = dcasClearEnabledState;
+  portEXIT_CRITICAL(&r79LabMux);
+  return enabled;
+}
+static bool dcasClearArmed(uint32_t now) {
+  if (canUsbPassive() || !maxOffsetSupported() || !dcasClearEnabledSnapshot()) return false;
+  bool apValid; uint8_t apState; uint32_t apMs;
+  portENTER_CRITICAL(&stateMux);
+  apValid = dasAutopilotStateValid;
+  apState = dasAutopilotState4;
+  apMs = lastDASStatusMillis;
+  portEXIT_CRITICAL(&stateMux);
+  return dcasClearActivePure(true, apValid, apState, now, apMs);
+}
+static uint8_t drivingProfileSnapshot() {
+  portENTER_CRITICAL(&r79LabMux);
+  const uint8_t profile = drivingProfileState;
+  portEXIT_CRITICAL(&r79LabMux);
+  return profile;
+}
+static void maxOffsetCacheStock(uint8_t bus, const uint8_t *raw,
+                                uint32_t epoch, uint32_t receivedMs) {
+  if (bus > 1u || !raw) return;
+  portENTER_CRITICAL(&r79LabMux);
+  MaxOffsetStockPure &stock = maxOffsetStock[bus];
+  stock.valid = true; memcpy(stock.raw, raw, 8u);
+  stock.lastMs = receivedMs; stock.epoch = epoch;
+  stock.profile = activeVehicleProfile; stock.topology = activeVehicleTopology; ++stock.rx;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+static void maxOffsetRecordTx(bool changed, bool ok) {
+  if (!changed) return;
+  portENTER_CRITICAL(&r79LabMux);
+  if (ok) ++maxOffsetTxOk; else ++maxOffsetTxFail;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+static void dcasRecordTx(bool ok) {
+  portENTER_CRITICAL(&r79LabMux);
+  if (ok) ++dcasTxOk; else ++dcasTxFail;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+static void dcasNoteStock(uint8_t bus, const uint8_t *raw) {
+  if (bus > 1u || !raw || readMuxID(raw) != 0u) return;
+  const int8_t bit = (int8_t)((raw[7] >> 4) & 1u);
+  portENTER_CRITICAL(&r79LabMux);
+  dcasStockBit[bus] = bit;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+static void maxOffsetCfgLoad() {
+  Preferences p;
+  bool enabled = false;
+  uint8_t percent = MAX_OFFSET_DEFAULT_PERCENT_PURE;
+  bool dcas = true;
+  uint8_t profile = DRIVING_PROFILE_STOCK_PURE;
+  if (p.begin("labv3fd", true)) {
+    if (p.isKey("maxoff")) {
+      const uint16_t packed = p.getUShort("maxoff", 0u);
+      const uint8_t stored = (uint8_t)(packed >> 8);
+      if ((packed & (uint16_t)~0x3F01u) == 0u) {
+        enabled = (packed & 1u) != 0u;
+        percent = maxOffsetPercentAllowedPure(stored) ? stored : MAX_OFFSET_DEFAULT_PERCENT_PURE;
+      }
+    }
+    if (p.isKey("dcas")) {
+      const uint8_t raw = p.getUChar("dcas", 1u);
+      if (raw <= 1u) dcas = raw == 1u;
+    }
+    if (p.isKey("profile")) {
+      const uint8_t raw = p.getUChar("profile", DRIVING_PROFILE_STOCK_PURE);
+      if (drivingProfileAllowedPure(raw)) profile = raw;
+    }
+    p.end();
+  }
+  portENTER_CRITICAL(&r79LabMux);
+  maxOffsetEnabledState = enabled;
+  maxOffsetPercentState = percent;
+  dcasClearEnabledState = dcas;
+  drivingProfileState = profile;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+static bool maxOffsetApplySettings(bool enabled, uint8_t percent) {
+  if (!maxOffsetPercentAllowedPure(percent) || !maxOffsetSupported()) return false;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (!maxOffsetSupported()) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  Preferences p;
+  if (!p.begin("labv3fd", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  const uint16_t packed = (uint16_t)(enabled ? 1u : 0u) | ((uint16_t)percent << 8);
+  const bool saved = p.putUShort("maxoff", packed) == sizeof(uint16_t);
+  p.end();
+  if (saved) {
+    portENTER_CRITICAL(&r79LabMux);
+    maxOffsetEnabledState = enabled; maxOffsetPercentState = percent;
+    portEXIT_CRITICAL(&r79LabMux);
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return saved;
+}
+static bool dcasClearApplySettings(bool enabled) {
+  if (!maxOffsetSupported()) return false;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (!maxOffsetSupported()) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  Preferences p;
+  if (!p.begin("labv3fd", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  const bool saved = p.putUChar("dcas", enabled ? 1u : 0u) == sizeof(uint8_t);
+  p.end();
+  if (saved) {
+    portENTER_CRITICAL(&r79LabMux);
+    dcasClearEnabledState = enabled;
+    portEXIT_CRITICAL(&r79LabMux);
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return saved;
+}
+static bool drivingProfileApplySettings(uint8_t profile) {
+  if (profile != DRIVING_PROFILE_STOCK_PURE && !drivingProfileAllowedPure(profile)) return false;
+  if (!maxOffsetSupported()) return false;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (!maxOffsetSupported()) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  Preferences p;
+  if (!p.begin("labv3fd", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  const bool saved = p.putUChar("profile", profile) == sizeof(uint8_t);
+  p.end();
+  if (saved) {
+    portENTER_CRITICAL(&r79LabMux);
+    drivingProfileState = profile;
+    portEXIT_CRITICAL(&r79LabMux);
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return saved;
+}
+
+struct UiApMux2Plan {
+  bool sendPercent;
+  bool sendProfile;
+  uint8_t percent;
+  uint8_t profile;
+};
+static UiApMux2Plan uiApMux2Plan(uint32_t now) {
+  UiApMux2Plan plan = {};
+  if (canUsbPassive() || !maxOffsetSupported()) return plan;
+  bool apValid; uint8_t apState; uint32_t apMs;
+  portENTER_CRITICAL(&stateMux);
+  apValid = dasAutopilotStateValid; apState = dasAutopilotState4; apMs = lastDASStatusMillis;
+  portEXIT_CRITICAL(&stateMux);
+  bool enabled, dcasOn; uint8_t percent, profile;
+  portENTER_CRITICAL(&r79LabMux);
+  enabled = maxOffsetEnabledState; percent = maxOffsetPercentState;
+  dcasOn = dcasClearEnabledState; profile = drivingProfileState;
+  portEXIT_CRITICAL(&r79LabMux);
+  const bool apNow = dcasClearActivePure(true, apValid, apState, now, apMs);
+  plan.sendPercent = !dcasOn && maxOffsetActivePure(enabled, apValid, apState, now, apMs);
+  plan.sendProfile = dcasOn && apNow && drivingProfileAllowedPure(profile);
+  plan.percent = percent;
+  plan.profile = profile;
+  return plan;
+}
+static bool uiApMux2Apply(uint8_t *data, const UiApMux2Plan &plan) {
+  bool changed = false;
+  if (plan.sendPercent) {
+    const uint8_t before = data[1];
+    if (maxOffsetApplyPure(data, 8u, true, plan.percent) && data[1] != before) changed = true;
+  }
+  if (plan.sendProfile) {
+    const uint8_t before = data[7];
+    if (drivingProfileApplyPure(data, 8u, plan.profile) && data[7] != before) changed = true;
+  }
+  return changed;
+}
+struct Mux2Carry {
+  UiApMux2Plan plan;
+  bool fsdWants;
+  bool oursChanged;
+  bool fsdApplied;
+};
+static bool mux2FollowValidate(twai_message_t *frame, void *ctx) {
+  Mux2Carry *carry = static_cast<Mux2Carry *>(ctx);
+  if (!twaiNonSummonAdmissionOpen()) return false;
+  carry->oursChanged = uiApMux2Apply(frame->data, carry->plan);
+  if (carry->fsdWants) carry->fsdApplied = fsdLabComposeLocked(*frame);
+  return carry->oursChanged || carry->fsdApplied;
+}
+static bool ui3fdTransmit(uint8_t bus, const uint8_t *payload, uint32_t txEpoch, bool &ok) {
+  ok = false;
+  if (!payload || bus > 1u) return false;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return false;
+  const uint32_t epoch = canTxBarrierState.epoch;
+  if (epoch != txEpoch || canTxAdministrativeHold) {
+    xSemaphoreGive(canTxBarrierMutex);
+    return false;
+  }
+  bool attempted = false;
+  if (bus == 0u && twaiReady && twaiNonSummonAdmissionOpen() &&
+      canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch, CAN_TX_FRESH_VH)) {
+    twai_message_t out = {};
+    out.identifier = 0x3FDu; out.data_length_code = 8u;
+    memcpy(out.data, payload, 8u);
+    const esp_err_t err = twai_transmit(&out, 0);
+    canBTraceRecordTx(&out, err);
+    ok = err == ESP_OK;
+    attempted = true;
+  } else if (bus == 1u && mcpReady &&
+             canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch, CAN_TX_FRESH_PARTY)) {
+    struct can_frame out = {};
+    out.can_id = 0x3FDu; out.can_dlc = 8u;
+    memcpy(out.data, payload, 8u);
+    const MCP2515::ERROR result = Can_A.sendMessage(&out);
+    ok = result == MCP2515::ERROR_OK;
+    canATraceRecordTx(&out, ok ? MCP_TX_OK : MCP_TX_SEND_ERROR, result, CAN_TX_TRACE_SOURCE_DEFAULT);
+    attempted = true;
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return attempted;
+}
+static void uiAutopilotMux2ObserveChassis(const twai_message_t &stock, uint32_t epoch, uint32_t now) {
+  if (stock.extd || stock.rtr || stock.identifier != 0x3FDu || stock.data_length_code != 8u ||
+      readMuxID(stock.data) != 2u || activeProfileIsModelS2017()) return;
+  maxOffsetCacheStock(0u, stock.data, epoch, now);
+  const UiApMux2Plan plan = uiApMux2Plan(now);
+  if (!plan.sendPercent && !plan.sendProfile) {
+    fsdLabEchoMux2(stock, epoch);
+    return;
+  }
+  const bool fsdWants = !plan.sendProfile && fsdLabFrameIndex(stock) == 1 && fsdLabObserveStock(stock);
+  uint8_t preview[8];
+  memcpy(preview, stock.data, 8u);
+  const bool ours = uiApMux2Apply(preview, plan);
+  if (!ours && !fsdWants) return;
+  twai_message_t out = stock;
+  out.flags = 0;
+  Mux2Carry carry = {plan, fsdWants, false, false};
+  const esp_err_t err = canTxTwaiTransmitValidated(&out, epoch, CAN_TX_FRESH_VH, mux2FollowValidate, &carry);
+  if (ours) maxOffsetRecordTx(true, err == ESP_OK);
+  if (fsdWants) fsdLabRecordTx(1u, err);
+}
+static void uiAutopilotMux2ObserveParty(const struct can_frame &src, uint32_t epoch, uint32_t now) {
+  if ((src.can_id & 0xC0000000UL) != 0u || (src.can_id & 0x7FFu) != 0x3FDu ||
+      src.can_dlc != 8u || readMuxID(src.data) != 2u || activeProfileIsModelS2017()) return;
+  maxOffsetCacheStock(1u, src.data, epoch, now);
+  const UiApMux2Plan plan = uiApMux2Plan(now);
+  uint8_t payload[8];
+  memcpy(payload, src.data, 8u);
+  if (!uiApMux2Apply(payload, plan)) return;
+  bool ok = false;
+  if (ui3fdTransmit(1u, payload, epoch, ok)) maxOffsetRecordTx(true, ok);
+}
+static bool dcasPrepareMux0(twai_message_t &out, uint32_t now) {
+  if (activeProfileIsModelS2017()) return false;
+  dcasNoteStock(0u, out.data);
+  if (!dcasClearArmed(now) || out.data_length_code != 8u) return false;
+  return dcasBehaviorClearPure(out.data, out.data_length_code);
+}
+static void dcasObserveParty(const struct can_frame &src, uint32_t txEpoch, uint32_t receivedMs) {
+  (void)receivedMs;
+  if ((src.can_id & 0xC0000000UL) != 0u || (src.can_id & 0x7FFu) != 0x3FDu ||
+      src.can_dlc != 8u || readMuxID(src.data) != 0u || activeProfileIsModelS2017()) return;
+  dcasNoteStock(1u, src.data);
+  if (!dcasClearArmed((uint32_t)millis())) return;
+  uint8_t payload[8];
+  memcpy(payload, src.data, 8u);
+  if (!dcasBehaviorClearPure(payload, 8u)) return;
+  bool ok = false;
+  if (ui3fdTransmit(1u, payload, txEpoch, ok)) dcasRecordTx(ok);
+}
+static void maxOffsetDescribeBus(const MaxOffsetStockPure &stock, bool ready, uint8_t mask,
+                                 uint32_t now, uint32_t epoch, uint8_t freshMask, bool held,
+                                 bool enabled, bool apValid, uint8_t apState, uint32_t apMs,
+                                 bool &valid, bool &gate, int32_t &raw, uint32_t &age) {
+  valid = stock.valid && stock.profile == activeVehicleProfile &&
+      stock.topology == activeVehicleTopology && (stock.raw[0] & 7u) == 2u;
+  age = valid ? (uint32_t)(now - stock.lastMs) : UINT32_MAX;
+  const bool transport = epoch != 0u && !held && ready && (freshMask & mask) == mask;
+  raw = valid ? (int32_t)maxOffsetReadPure(stock.raw) : -1;
+  gate = maxOffsetActivePure(enabled, apValid, apState, now, apMs) && transport;
+}
+static String getMaxOffsetStatsJson() {
+  const uint32_t now = (uint32_t)millis();
+  uint32_t epoch = 0u; uint8_t freshMask = 0u;
+  bool readyB = false, readyA = false, held = true;
+  if (canTxBarrierMutex && xSemaphoreTake(canTxBarrierMutex, 0) == pdTRUE) {
+    epoch = canTxBarrierState.epoch; freshMask = canTxBarrierState.freshMask;
+    readyB = twaiReady; readyA = mcpReady; held = canTxAdministrativeHold;
+    xSemaphoreGive(canTxBarrierMutex);
+  }
+  bool enabled, dcasOn; uint8_t percent, profile;
+  int8_t dcasB = -1, dcasA = -1;
+  MaxOffsetStockPure stockB = {}, stockA = {};
+  uint32_t txOk, txFail, dcasOk, dcasFail;
+  portENTER_CRITICAL(&r79LabMux);
+  enabled = maxOffsetEnabledState; percent = maxOffsetPercentState;
+  dcasOn = dcasClearEnabledState; profile = drivingProfileState;
+  dcasB = dcasStockBit[0]; dcasA = dcasStockBit[1];
+  stockB = maxOffsetStock[0]; stockA = maxOffsetStock[1];
+  txOk = maxOffsetTxOk; txFail = maxOffsetTxFail;
+  dcasOk = dcasTxOk; dcasFail = dcasTxFail;
+  portEXIT_CRITICAL(&r79LabMux);
+  bool apValid; uint8_t apState; uint32_t apMs;
+  portENTER_CRITICAL(&stateMux);
+  apValid = dasAutopilotStateValid; apState = dasAutopilotState4; apMs = lastDASStatusMillis;
+  portEXIT_CRITICAL(&stateMux);
+  const bool supported = maxOffsetSupported();
+  const bool apFresh = apValid && (uint32_t)(now - apMs) <= MAX_OFFSET_FRESH_MS_PURE;
+  const bool apActive = apValid && teslaApStateActivePure(apState);
+  bool validB = false, validA = false, gateB = false, gateA = false;
+  int32_t rawB = -1, rawA = -1; uint32_t ageB = UINT32_MAX, ageA = UINT32_MAX;
+  maxOffsetDescribeBus(stockB, readyB, CAN_TX_FRESH_VH, now, epoch, freshMask, held,
+                       enabled, apValid, apState, apMs, validB, gateB, rawB, ageB);
+  maxOffsetDescribeBus(stockA, readyA, CAN_TX_FRESH_PARTY, now, epoch, freshMask, held,
+                       enabled, apValid, apState, apMs, validA, gateA, rawA, ageA);
+  const bool listenOnly = canUsbPassive();
+  const bool transportB = epoch != 0u && !held && readyB &&
+      (freshMask & CAN_TX_FRESH_VH) == CAN_TX_FRESH_VH;
+  const bool transportA = epoch != 0u && !held && readyA &&
+      (freshMask & CAN_TX_FRESH_PARTY) == CAN_TX_FRESH_PARTY;
+  const bool profileSelected = drivingProfileAllowedPure(profile);
+  const char *state = !supported ? "UNSUPPORTED" : dcasOn ? "IGNORED" : !enabled ? "OFF" :
+      listenOnly ? "LISTEN_ONLY" : !apFresh || !apActive ? "WAIT_AP" :
+      (gateB || gateA) ? "READY" : "BLOCKED";
+  const char *dcasState = !supported ? "UNSUPPORTED" : !dcasOn ? "OFF" :
+      listenOnly ? "LISTEN_ONLY" : !apFresh || !apActive ? "WAIT_AP" :
+      (transportA || transportB) ? "CLEARING" : "BLOCKED";
+  const char *profileState = !supported ? "UNSUPPORTED" : !dcasOn ? "IGNORED" :
+      !profileSelected ? "STOCK" : listenOnly ? "LISTEN_ONLY" :
+      !apFresh || !apActive ? "WAIT_AP" :
+      (transportA || transportB) ? "SENDING" : "BLOCKED";
+  const int32_t profileB = validB ? (int32_t)drivingProfileReadPure(stockB.raw) : -1;
+  const int32_t profileA = validA ? (int32_t)drivingProfileReadPure(stockA.raw) : -1;
+  String json; JsonWriterArduino jw(json);
+  jw.boolean("enabled", enabled); jw.u32("percent", percent);
+  jw.boolean("dcasClear", dcasOn); jw.u32("profile", profile);
+  jw.boolean("supported", supported); jw.boolean("apActive", apActive);
+  jw.boolean("apFresh", apFresh);
+  jw.string("state", state);
+  jw.string("dcasState", dcasState);
+  jw.string("profileState", profileState);
+  jw.u32("txOk", txOk); jw.u32("txFail", txFail);
+  jw.u32("dcasTxOk", dcasOk); jw.u32("dcasTxFail", dcasFail);
+  jw.beginObject("canB");
+  jw.boolean("valid", validB); jw.i32("stockPercent", rawB);
+  jw.i32("stockDcas", dcasB); jw.i32("stockProfile", profileB);
+  jw.boolean("gateOpen", gateB); jw.u32("rxAgeMs", ageB); jw.u32("rxCount", stockB.rx);
+  jw.endObject();
+  jw.beginObject("canA");
+  jw.boolean("valid", validA); jw.i32("stockPercent", rawA);
+  jw.i32("stockDcas", dcasA); jw.i32("stockProfile", profileA);
+  jw.boolean("gateOpen", gateA); jw.u32("rxAgeMs", ageA); jw.u32("rxCount", stockA.rx);
+  jw.endObject();
+  jw.finish();
+  return json;
 }
 
 // Every path that can change R79 authorization takes the TX barrier before
@@ -5036,7 +5413,7 @@ static bool requestTurnSignalPulseFromButton(uint8_t dir, bool apLaneChange) {
 
 // Keep ordinary TLSSC transport admission under the enqueue barrier.
 static esp_err_t tlsscTransmitGuarded(const twai_message_t *out,
-    uint32_t epoch, bool tlsscTx, bool &fsdApplied) {
+    uint32_t epoch, bool tlsscTx, bool &fsdApplied, bool extraTx = false) {
   fsdApplied = false;
   if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, 0) != pdTRUE) return ESP_ERR_INVALID_STATE;
   esp_err_t err = ESP_ERR_INVALID_STATE;
@@ -5045,7 +5422,7 @@ static esp_err_t tlsscTransmitGuarded(const twai_message_t *out,
   fsdApplied = fsdTx;
   const uint8_t freshMask = activeProfileIsModelS2017() ? CAN_TX_FRESH_PARTY
       : tlsscTx ? CAN_TX_FRESH_BOTH : CAN_TX_FRESH_VH;
-  if ((tlsscTx || fsdTx) && !canTxAdministrativeHold && autopilotControlTransportReady() &&
+  if ((tlsscTx || fsdTx || extraTx) && !canTxAdministrativeHold && autopilotControlTransportReady() &&
       canTxBarrierAllowsMaskedPure(canTxBarrierState, epoch, freshMask) &&
       autopilotControlAdmissionOpen()) {
     err = autopilotControlTransmitLocked(&composed, 0);
@@ -5108,16 +5485,19 @@ static void injectTLSSC(const twai_message_t &src) {
       }
     }
 
-    if (!tlsscTx && !fsdTx) return;
+    const bool dcasChanged = dcasPrepareMux0(out, now);
+    if (!tlsscTx && !fsdTx && !dcasChanged) return;
 
     // TLSSC is lower priority than Summon and must never block CAN B RX.
     if (!autopilotControlAdmissionOpen()) {
       if (tlsscTx) sumTxFail++;
       if (fsdTx) fsdLabRecordTx(0u, ESP_ERR_TIMEOUT);
+      if (dcasChanged) dcasRecordTx(false);
       return;
     }
     bool fsdApplied = false;
-    const esp_err_t err = tlsscTransmitGuarded(&out, txEpoch, tlsscTx, fsdApplied);
+    const esp_err_t err = tlsscTransmitGuarded(&out, txEpoch, tlsscTx, fsdApplied, dcasChanged);
+    if (dcasChanged) dcasRecordTx(err == ESP_OK);
     if (fsdTx || fsdApplied) fsdLabRecordTx(0u, fsdApplied ? err : ESP_ERR_INVALID_STATE);
     if (!tlsscTx) return;
     portENTER_CRITICAL(&stateMux);
