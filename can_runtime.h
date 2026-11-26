@@ -948,6 +948,7 @@ static bool recoveryMcpColdInit() {
 
   pinMode(MCP2515_CS, OUTPUT);
   digitalWrite(MCP2515_CS, HIGH);
+#if MCP2515_RST >= 0
   pinMode(MCP2515_RST, OUTPUT);
   digitalWrite(MCP2515_RST, HIGH);
   delay(1);
@@ -955,6 +956,8 @@ static bool recoveryMcpColdInit() {
   delay(2);
   digitalWrite(MCP2515_RST, HIGH);
   delay(2);
+#endif
+  // No reset pin: mcpInitChecked() resets the controller over SPI.
 
   SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
   mcpSpiStarted = true;
@@ -1090,8 +1093,14 @@ static bool prepareCanForMaintenance() {
       !mcpReady && !twaiReady;
   // All CAN owners are parked; reset holds CAN A inactive and discards TX buffers.
   mcpReady = false;
+#if MCP2515_RST >= 0
   pinMode(MCP2515_RST, OUTPUT);
   digitalWrite(MCP2515_RST, LOW);
+#else
+  // No reset pin: the SPI reset leaves the controller in Configuration mode,
+  // off the bus with TX buffers discarded — the same inactive hold.
+  (void)Can_A.reset();
+#endif
   twaiReady = false;
   twai_status_info_t st = {};
   const esp_err_t status = twai_get_status_info(&st);

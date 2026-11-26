@@ -116,12 +116,49 @@ https://discord.gg/euPbYG8Npc
 
 ## 🔧 Hardware Target
 
-This code is adapted for the **LilyGO / T-2Can**.
+This code is adapted for the **LilyGO / T-2Can** and the **Waveshare ESP32-S3-CAN-2CH**.
 
 | Device | CAN Interface | CAN Bus | Function |
 |---|---|---|---| 
 | LilyGO / T-2Can | CAN A — MCP2515 | Body CAN | 
 | LilyGO / T-2Can | CAN B — TWAI | Chassis CAN | 
+| Waveshare ESP32-S3-CAN-2CH | CAN A — XL2515 (`CAN_2` terminal) | Body CAN |
+| Waveshare ESP32-S3-CAN-2CH | CAN B — TWAI (`CAN_1` terminal) | Chassis CAN |
+
+### Waveshare ESP32-S3-CAN-2CH
+
+The [Waveshare ESP32-S3-CAN-2CH](https://docs.waveshare.net/ESP32-S3-CAN-2CH/)
+(onboard-antenna version; the `-U` external-antenna version is the same board)
+is a dual isolated-CAN ESP32-S3 board that maps 1:1 onto the T-2CAN layout:
+
+| Firmware bus | Board terminal | Controller | Pins |
+|---|---|---|---|
+| CAN A | `CAN_2` | XL2515QF20 (MCP2515-compatible, 16 MHz crystal) | CS=17, SCK=21, MOSI=41, MISO=42 |
+| CAN B | `CAN_1` | ESP32-S3 TWAI through the isolator | TX=15, RX=16 |
+
+- The XL2515 has **no reset pin** — every reset (boot, recovery, OTA hold) goes
+  over SPI. Its INT line (GPIO 18) is unused; the driver polls.
+- ESP32-S3R8: 16 MB flash + 8 MB octal PSRAM, USB-CDC on boot — same 16 MB
+  flash / 3 MB app / FAT partition scheme as the T-2CAN build; the Waveshare
+  variant selects OPI PSRAM explicitly.
+- Pins verified against Waveshare's schematic / BSP
+  ([waveshareteam/ESP32-S3-CAN-2CH](https://github.com/waveshareteam/ESP32-S3-CAN-2CH)
+  `HARDWARE_REFERENCE.md`).
+- Both channels are isolated; mind the **120 Ω termination jumpers** (see the
+  hardware note below) and connect the isolated side's ground to the tap.
+- **Not yet confirmed on real hardware.** Start in Listen-Only and check that
+  both buses receive before enabling injection.
+
+Build it with the variant script (Arduino CLI 1.5.1 + ESP32 core 3.3.12,
+`autowp-mcp2515@1.3.1` library):
+
+```powershell
+.\Compile-T2CAN-Variants.ps1 -Board waveshare-s3-can-2ch
+```
+
+The default `-Board t2can` build is unchanged. Waveshare binaries are named
+`*.waveshare-s3-can-2ch.OTA.bin` / `*.waveshare-s3-can-2ch.FULLFLASH.merged.bin`
+(plus `.zh-CN` language variants) in `Final-Build`.
 
 ## 🧩 Main features
 

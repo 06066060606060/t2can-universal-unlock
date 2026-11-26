@@ -4,6 +4,8 @@ param(
     [string]$ArduinoCli = 'arduino-cli',
     [string]$Python = 'python',
     [string]$OutputRoot = '',
+    [ValidateSet('t2can', 'waveshare-s3-can-2ch')]
+    [string]$Board = 't2can',
     [switch]$DryRun,
     [switch]$PrepareOnly
 )
@@ -46,8 +48,18 @@ $firmwareName = $sketchFiles[0].BaseName
 # Exact menu settings from the ESP32S3 Dev Module screenshot. Unspecified
 # options (CPU, flash mode and PSRAM) retain the installed board defaults.
 $options = 'FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,DFUOnBoot=default,MSCOnBoot=default,DebugLevel=none,EraseFlash=none,EventsCore=1,LoopCore=1,JTAGAdapter=default,UploadMode=default'
+$extraFlags = ''
+$boardSuffix = ''
+if ($Board -eq 'waveshare-s3-can-2ch') {
+    # Waveshare ESP32-S3-CAN-2CH: same S3 + 16 MB flash layout; CAN_1 = TWAI
+    # (GPIO 15/16), CAN_2 = XL2515 (MCP2515-compatible, 16 MHz) on SPI. The
+    # board has 8 MB octal PSRAM (ESP32-S3R8), so select OPI explicitly.
+    $options += ',PSRAM=opi'
+    $extraFlags = '-DBOARD_WAVESHARE_S3_CAN_2CH'
+    $boardSuffix = '.waveshare-s3-can-2ch'
+}
 $fqbn = "esp32:esp32:esp32s3:$options"
-$runRoot = Join-Path $output ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+$runRoot = Join-Path $output ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $Board + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
 $failed = @()
 
 # Python receives paths as arguments, never as executable source substitutions.
@@ -74,7 +86,8 @@ print(staged)
 '@
 
 Write-Host "Project: $sketch"
-Write-Host "Board: $fqbn"
+Write-Host "Board: $Board"
+Write-Host "FQBN: $fqbn"
 foreach ($language in @('en', 'zh-CN')) {
     $destination = Join-Path $runRoot $language
     $buildPath = Join-Path $destination 'build'
@@ -82,8 +95,12 @@ foreach ($language in @('en', 'zh-CN')) {
     $log = Join-Path $destination 'compile.log'
     $compileSketch = Join-Path (Join-Path $destination 'work') $firmwareName
     $suffix = if ($language -eq 'zh-CN') { '.zh-CN' } else { '' }
-    $releaseName = "$firmwareName$suffix"
-    $cliArgs = @('compile', '--fqbn', $fqbn, '--build-path', $buildPath, '--output-dir', $artifacts, $compileSketch)
+    $releaseName = "$firmwareName$boardSuffix$suffix"
+    $cliArgs = @('compile', '--fqbn', $fqbn, '--build-path', $buildPath, '--output-dir', $artifacts)
+    if ($extraFlags) {
+        $cliArgs += @('--build-property', "compiler.cpp.extra_flags=$extraFlags")
+    }
+    $cliArgs += $compileSketch
     Write-Host "`n=== $language ==="
     Write-Host "Final OTA: $(Join-Path $finalBuild "$releaseName.OTA.bin")"
     Write-Host "Final fullflash: $(Join-Path $finalBuild "$releaseName.FULLFLASH.merged.bin")"

@@ -249,6 +249,7 @@ void setup() {
 
   // ══ Init CAN A (MCP2515) ══
   T2CAN_SERIAL_PRINTLN("[CAN A] Initializing MCP2515...");
+#if MCP2515_RST >= 0
   pinMode(MCP2515_RST, OUTPUT);
   digitalWrite(MCP2515_RST, HIGH);
   delay(1);
@@ -256,6 +257,8 @@ void setup() {
   delay(2);
   digitalWrite(MCP2515_RST, HIGH);
   delay(2);
+#endif
+  // Boards without a reset pin rely on the SPI reset inside mcpInitChecked().
 
   SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
   mcpSpiStarted = true;
