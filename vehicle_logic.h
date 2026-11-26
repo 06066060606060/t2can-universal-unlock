@@ -5919,3 +5919,5 @@ static const char       *otaStage = "idle";
 static uint8_t           otaUpdateError = 0;
 static uint32_t          otaAttempt = 0;
 static bool              otaUploadEnded = false;
+
+#include "eap_anti_restart.h"

@@ -201,6 +201,7 @@ void setup() {
   nvsSchemaRead();
   (void)(featureConfigMigrateToSchema2() && featureConfigMigrateToSchema3());
   featureCfgLoad();
+  eapNrLoad();
   continuousApControlLoad();
   nagCfgLoad();
   summonCfgLoad();

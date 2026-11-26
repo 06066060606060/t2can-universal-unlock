@@ -710,7 +710,10 @@ static void canTaskTwai(void* arg) {
           }
           break;
         case 0x331:
-          if (activeCanBIsChassis()) doInjectTlsscRestore(f);
+          if (activeCanBIsChassis()) {
+            doInjectTlsscRestore(f);
+            eapNrObserve331(f, stockRxMs);
+          }
           break;
         // Model YL/public-DBC reference: UI_driverAssistMapData road context.
         case 0x238:
@@ -772,6 +775,7 @@ static void canTaskTwai(void* arg) {
     // TX queue. TSL9 input assistance is intentionally lower priority.
     continuousApService(ContApRoute::ChassisB);
     tsl9InputServiceCanB();
+    eapNrTick();
     const uint32_t captureNow = (uint32_t)millis();
     researchCaptureTick(captureNow);
     driverMonitorCaptureTick(captureNow);

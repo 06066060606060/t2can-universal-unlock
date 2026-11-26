@@ -24,6 +24,7 @@ https://discord.gg/euPbYG8Npc
 **v3.30.3 **
 - Restore TLSSC for Model YL
 - Added Chinese Language variant
+- Added cached `0x331` replay for TLSSC Restore on CAN B / Chassis profiles to avoid the MCU reboot timing race (ported from P4can PR #15).
 
 **v3.30.2 **	
 - Added Model S/X MCU2 HW3 profile (Compatibility with HW2.5) 
@@ -113,6 +114,18 @@ https://discord.gg/euPbYG8Npc
 | **Standard Model 3/Y · Party + Chassis** | ✅ | ❌ | ❌ | ✅ |
 
 > Model 3 Highland requires selecting the installed turn-control type during profile setup. Other supported profiles automatically use the Stalk configuration.
+
+### TLSSC Restore anti-restart
+
+For profiles where `0x331` is handled on **CAN B / Chassis**, TLSSC Restore now caches the last observed patched 8-byte frame in NVS (`features/eapFrame`). After CAN B is ready, the cached frame is replayed at 10 Hz for up to 60 seconds or 600 frames, so the MCU can read `SELF_DRIVING` during its own boot instead of waiting for the first stock frame.
+
+- No cached frame means no transmission; the first power cycle still needs to observe a stock `0x331`.
+- Fresh stock `0x331` traffic within 2 seconds makes replay yield to the existing read-modify-retransmit path.
+- Replay uses the existing TX barrier, epoch, administrative-hold, USB-passive and Summon admission gates.
+- Model YL's CAN-A `0x331` route is unchanged and is not covered by this replay fix.
+- Cache and replay counters are available under `eap` in `/api/lab/service-mode/stats`.
+
+This reduces the boot-time race but cannot guarantee recovery if the MCU reads its configuration before this controller's CAN B is ready.
 
 ## 🔧 Hardware Target
 

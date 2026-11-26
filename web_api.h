@@ -3964,6 +3964,7 @@ static void httpServiceModeStats() {
   jw.boolean("available", labMenuEnabled && bus != 0u &&
       !canTxAdministrativeHold && (bus == 1u ? mcpReady : twaiReady));
   jw.string("bus", bus == 1u ? "CAN A" : bus == 2u ? "CAN B" : "Unavailable");
+  eapNrStatsAppend(json);
   jw.finish();
   server.send(200, "application/json", json);
 }

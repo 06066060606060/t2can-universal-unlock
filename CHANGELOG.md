@@ -1,6 +1,7 @@
 # T2CAN Universal v3.30.3
 - Restore TLSSC for Model YL
 - Added Chinese Language variant
+- Added TLSSC Restore anti-restart replay for CAN B / Chassis profiles: cache the last patched 8-byte `0x331` in NVS, replay it at 10 Hz for up to 60 seconds / 600 frames after CAN B is ready, yield on fresh stock traffic, and expose cache/replay diagnostics in `/api/lab/service-mode/stats`. Ported from `06066060606060/P4can-universal-unlock` PR #15; Model YL's CAN-A route is unchanged.
 # T2CAN Universal v3.30.2
 - Added Model S/X MCU2 HW3 profile, tested on model S 2017 HW3 and on model S 2017 HW2.5, (for HW2.5 use TSL9 mode for nag)
 - Fix R79 injection delay after AP disengage 
