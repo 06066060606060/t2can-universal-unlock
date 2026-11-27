@@ -2925,6 +2925,7 @@ static String driverMonitoringControlJson() {
   jw.boolean("enabled", driverMonitoringControlSnapshot());
   jw.boolean("supported", activeProfileDmsNagSupported());
   jw.boolean("active", r79DmsControlActive());
+  fsdCountryWriteJson(jw);
   jw.finish();
   return json;
 }
@@ -2937,6 +2938,10 @@ static void httpDriverMonitoringControlUpdate() {
   bool enabled;
   if (server.args() != 1 || !httpBoolArg("enabled", enabled)) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid enabled\"}");
+    return;
+  }
+  if (enabled && fsdCountryApprovedSnapshot()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"held on an FSD-approved car\"}");
     return;
   }
   if (enabled && !activeProfileDmsNagSupported()) {
@@ -4290,6 +4295,7 @@ static String fsdLabStatsToJson() {
   jw.u32("profileRx", signals[1].rx);
   jw.u32("profileTxOk", signals[1].txOk);
   jw.u32("profileTxFail", signals[1].txFail);
+  fsdCountryWriteJson(jw);
   jw.finish();
   return json;
 }
@@ -4304,6 +4310,10 @@ static void httpFsdLabUpdate() {
       !httpBoolArg("enabled", enabled) ||
       (value != "0" && value != "1" && !(field == "profile" && value == "2"))) {
     server.send(400, "application/json", "{\"error\":\"Invalid FSD field, enabled or value\"}");
+    return;
+  }
+  if (enabled && field != "pauseOnAp" && fsdCountryApprovedSnapshot()) {
+    server.send(409, "application/json", "{\"error\":\"held on an FSD-approved car\"}");
     return;
   }
   if (!fsdLabSupported() || (enabled && !labMenuEnabled)) {
@@ -4799,6 +4809,95 @@ static void httpVisionControlUpdate() {
   server.send(200, "application/json", getVisionControlStatsJson());
 }
 
+static void httpMaxOffsetStats() {
+  server.send(200, "application/json", getMaxOffsetStatsJson());
+}
+
+static void httpMaxOffsetUpdate() {
+  if (!maxOffsetSupported()) {
+    server.send(409, "application/json", "{\"error\":\"unsupported-profile\"}"); return;
+  }
+  const bool hasEnabled = server.hasArg("enabled"), hasPercent = server.hasArg("percent");
+  const bool hasDcas = server.hasArg("dcas"), hasProfile = server.hasArg("profile");
+  const bool hasAddw = server.hasArg("addw");
+  const int expected = (int)hasEnabled + (int)hasPercent + (int)hasDcas + (int)hasProfile + (int)hasAddw;
+  if (expected == 0 || server.args() != expected) {
+    server.send(400, "application/json", "{\"error\":\"enabled-or-percent-only\"}"); return;
+  }
+  bool enabled = maxOffsetEnabledSnapshot();
+  uint8_t percent = maxOffsetPercentSnapshot();
+  bool dcas = dcasClearEnabledSnapshot();
+  uint8_t profile = drivingProfileSnapshot();
+  if (hasEnabled) {
+    const String raw = server.arg("enabled");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"error\":\"invalid-enabled\"}"); return;
+    }
+    enabled = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
+  }
+  if (hasPercent) {
+    const String raw = server.arg("percent");
+    uint16_t value = 0u;
+    bool ok = raw.length() >= 1u && raw.length() <= 2u;
+    for (unsigned i = 0; ok && i < raw.length(); ++i) {
+      if (raw[i] < '0' || raw[i] > '9') ok = false;
+      else value = (uint16_t)(value * 10u + (uint16_t)(raw[i] - '0'));
+    }
+    if (!ok || value > 63u || !maxOffsetPercentAllowedPure((uint8_t)value)) {
+      server.send(400, "application/json", "{\"error\":\"invalid-percent\"}"); return;
+    }
+    percent = (uint8_t)value;
+  }
+  if (hasDcas) {
+    const String raw = server.arg("dcas");
+    if (raw != "0" && raw != "1" && raw != "false" && raw != "true") {
+      server.send(400, "application/json", "{\"error\":\"invalid-dcas\"}"); return;
+    }
+    dcas = httpBoolValue(raw, HttpBoolPolicy::LegacyOneTrue);
+  }
+  if (hasProfile) {
+    const String raw = server.arg("profile");
+    uint16_t value = 0u;
+    bool ok = raw.length() >= 1u && raw.length() <= 3u;
+    for (unsigned i = 0; ok && i < raw.length(); ++i) {
+      if (raw[i] < '0' || raw[i] > '9') ok = false;
+      else value = (uint16_t)(value * 10u + (uint16_t)(raw[i] - '0'));
+    }
+    // Reject before the uint8 cast. 256 would become 0 (Chill).
+    if (!ok || (value != (uint16_t)DRIVING_PROFILE_STOCK_PURE && value > 4u)) {
+      server.send(400, "application/json", "{\"error\":\"invalid-profile\"}"); return;
+    }
+    profile = (uint8_t)value;
+  }
+  uint8_t addw = ADDW_WARNINGS_STOCK_PURE;
+  if (hasAddw) {
+    const String raw = server.arg("addw");
+    uint16_t value = 0u;
+    bool ok = raw.length() >= 1u && raw.length() <= 3u;
+    for (unsigned i = 0; ok && i < raw.length(); ++i) {
+      if (raw[i] < '0' || raw[i] > '9') ok = false;
+      else value = (uint16_t)(value * 10u + (uint16_t)(raw[i] - '0'));
+    }
+    if (!ok || (value != 0u && value != 1u && value != (uint16_t)ADDW_WARNINGS_STOCK_PURE)) {
+      server.send(400, "application/json", "{\"error\":\"invalid-addw\"}"); return;
+    }
+    addw = (uint8_t)value;
+  }
+  if ((hasEnabled || hasPercent) && !maxOffsetApplySettings(enabled, percent)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  if (hasDcas && !dcasClearApplySettings(dcas)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  if (hasProfile && !drivingProfileApplySettings(profile)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  if (hasAddw && !addwApplySettings(addw)) {
+    server.send(503, "application/json", "{\"error\":\"save-failed\"}"); return;
+  }
+  server.send(200, "application/json", getMaxOffsetStatsJson());
+}
+
 
 static void httpAutoLaneChangeLabUpdate() {
   if (!httpRequireLab()) return;
@@ -4908,6 +5007,7 @@ static String countryOverrideStatsToJson() {
       ? 999999UL : (uint32_t)(now - r79StockMs));
   jw.u32("r79StockRx", r79StockRx);
   jw.string("r79StockRaw", r79StockValid ? lab3f8RawHex(r79StockRaw, 8) : String());
+  fsdCountryWriteJson(jw);
   jw.finish();
   return s;
 }
@@ -4939,6 +5039,10 @@ static void httpCountryOverrideUpdate() {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid mapMode\"}"); return;
     }
     map = (uint8_t)arg.toInt();
+  }
+  if (fsdCountryApprovedSnapshot() &&
+      (country != COUNTRY_OVERRIDE_STOCK_PURE || map != MAP_REGION_STOCK_PURE)) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"held on an FSD-approved car\"}"); return;
   }
   if (!countryOverrideApplySelection(country, map)) {
     server.send(503, "application/json", "{\"ok\":false,\"error\":\"settings save failed\"}"); return;
@@ -5259,7 +5363,12 @@ static String settingsLiteSnapshotToJson() {
   uint8_t alcModeLocal;
   portENTER_CRITICAL(&lab3f8Mux); alcModeLocal = lab3f8AlcMode; portEXIT_CRITICAL(&lab3f8Mux);
 
-  String j; j.reserve(500);
+  const bool maxOffsetOn = maxOffsetEnabledSnapshot();
+  const uint8_t maxOffsetPercent = maxOffsetPercentSnapshot();
+  const bool dcasClear = dcasClearEnabledSnapshot();
+  const uint8_t drivingProfile = drivingProfileSnapshot();
+
+  String j; j.reserve(960);
   JsonWriterArduino jw(j);
   jw.beginObject("system");
   jw.string("fwVersion", FW_VERSION);
@@ -5281,6 +5390,13 @@ static String settingsLiteSnapshotToJson() {
   jw.beginObject("lab3f8");
   jw.u32("alcMode", alcModeLocal);
   jw.endObject();
+  jw.beginObject("maxOffset");
+  jw.boolean("enabled", maxOffsetOn);
+  jw.u32("percent", maxOffsetPercent);
+  jw.boolean("dcasClear", dcasClear);
+  jw.u32("profile", drivingProfile);
+  jw.endObject();
+  fsdCountryWriteJson(jw);
   jw.finish();
   return j;
 }
@@ -5944,6 +6060,8 @@ static void webTask(void *arg) {
     server.on("/api/lab/auto-lane-change/update", HTTP_POST, httpAutoLaneChangeLabUpdate);
     server.on("/api/vision-control/stats", HTTP_GET, httpVisionControlStats);
     server.on("/api/vision-control/update", HTTP_POST, httpVisionControlUpdate);
+    server.on("/api/max-offset/stats", HTTP_GET, httpMaxOffsetStats);
+    server.on("/api/max-offset/update", HTTP_POST, httpMaxOffsetUpdate);
     server.on("/api/lab/vision-control/stats", HTTP_GET, httpVisionControlStats);
     server.on("/api/lab/vision-control/update", HTTP_POST, httpVisionControlUpdate);
     server.on("/api/country/stats", HTTP_GET, httpCountryOverrideStats);

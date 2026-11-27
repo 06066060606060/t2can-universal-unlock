@@ -1,5 +1,7 @@
 # T2CAN Universal v3.30.3
 - Restore TLSSC for Model YL
+- FSD Approved Improvements: distraction warnings (UI_applyADDWWarnings) repeat the composed mux 0 frame about every 50 ms while Autopilot is active. An FSD-approved stock country holds Country / Map, Disable Driver Monitoring, and FSD Visualisation, including a saved value. Offset, DCAS, and the driving profile stay available. Model S is unchanged. 0x3AB is shown and not written.
+- Settings: Clear DCAS, driving profile, and max offset on 0x3FD for Model YL. Clear DCAS and the driving profile are sent only while Autopilot is already active. Max offset (0, 5, 10) is sent only while Clear DCAS is off. One mux 2 frame carries the percent and, when the settings profile is Stock, the existing FSD lab echo. Model S is unchanged. USB listen-only mode loads after NVS init and a saved passive capture is kept.
 - Added Chinese Language variant
 # T2CAN Universal v3.30.2
 - Added Model S/X MCU2 HW3 profile, tested on model S 2017 HW3 and on model S 2017 HW2.5, (for HW2.5 use TSL9 mode for nag)

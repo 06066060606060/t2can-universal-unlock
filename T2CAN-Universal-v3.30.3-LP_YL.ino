@@ -87,8 +87,6 @@
 void setup() {
   bootTime = millis();
   Serial.begin(115200);
-  canUsbLoadMode();
-  setCanTxAdministrativeHold(false);
   delay(100); // Boot settle retained for behavior compatibility; CAN startup is not held here
 
   rtcBootCount++;
@@ -168,6 +166,12 @@ void setup() {
     }
   }
 
+  // Load USB listen-only only after NVS is initialized. Preferences cannot
+  // open before that, and a failed open fail-closes to listen-only. A saved
+  // passive capture is left as the operator stored it.
+  canUsbLoadMode();
+  setCanTxAdministrativeHold(false);
+
   canTxBarrierMutex = xSemaphoreCreateMutex();
   if (!canTxBarrierMutex) {
     T2CAN_SERIAL_PRINTLN("CAN TX recovery barrier allocation failed! Rebooting...");
@@ -207,6 +211,7 @@ void setup() {
   ulcCfgLoadAndMigrate();
   retiredLabSpeedSettingsCleanup();
   visionControlCfgLoad();
+  maxOffsetCfgLoad();
   autoLaneChangeLabCfgLoadAndMigrate();
   countryOverrideCfgLoad();
   r79CfgLoad();

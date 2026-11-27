@@ -686,6 +686,7 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 <div class="listrow modelSMenuHidden" id="isaSuppressionRow"><div><div class="listkey">ISA Suppression</div><div class="listdesc" id="isaSuppressionDesc">Reduce ISA warning chimes during Autopilot.</div><div class="listdesc" id="isaSuppressionSaveState" aria-live="polite"></div></div><label class="toggle"><input id="isaSuppressionToggle" type="checkbox" disabled/><span class="track"></span></label></div>
 <div class="listrow modelSMenuHidden" id="driverMonitoringRow"><div><div class="listkey">Disable Driver Monitoring</div><div class="listdesc" id="driverMonitoringDesc">Request cabin-camera monitoring off during Autopilot.</div><div class="listdesc" id="driverMonitoringSaveState" aria-live="polite"></div></div><label class="toggle"><input id="driverMonitoringToggle" type="checkbox" disabled/><span class="track"></span></label></div>
 <div class="listrow clickable modelSMenuHidden" data-panel="panelVisionControl"><div><div class="listkey">Visual Speed Control</div><div class="listdesc">Request visual speed control off.</div></div><div class="rowRight"><span class="value" id="visionControlRowState">OFF</span><span class="chev">›</span></div></div>
+<div class="listrow clickable modelSMenuHidden" data-panel="panelMaxOffset"><div><div class="listkey">FSD Approved Improvements</div><div class="listdesc" id="maxOffsetRowDesc">Driving profile, max offset, and distraction warnings.</div></div><div class="rowRight"><span class="value" id="maxOffsetRowState">DCAS</span><span class="chev">›</span></div></div>
 <div class="listrow clickable" data-panel="panelBlink" id="blinkSettingsRow"><div><div class="listkey">Auto Blinker</div><div class="listdesc" id="setBlinkDesc">Signal automatically for NOA lane changes.</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelTlssc"><div><div class="listkey">TLSSC</div><div class="listdesc">Request traffic-light and stop-sign control during AP.</div></div><span class="chev">›</span></div>
 <div class="listrow clickable" data-panel="panelLabAutoLaneChange"><div><div class="listkey">Auto Lane Change Enable</div><div class="listdesc">Experimental auto lane change for standard AP</div></div><div class="rowRight"><span class="value">EXP</span><span class="chev">›</span></div></div>
@@ -876,7 +877,10 @@ body.t2-2027 .panel{scroll-padding-bottom:calc(100px + env(safe-area-inset-botto
 </div>
 </section>
 </div></section>
-<section class="panel" id="panelCountry"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">Settings</div></div><div class="panelHero">Country / Map</div><div class="panelSub">All vehicle profiles with a valid CAN topology. Overrides follow fresh stock frames on the same bus while R79 is ACTIVE. Vehicle behavior remains unverified.</div>
+<section class="panel" id="panelMaxOffset"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">Settings</div></div><div class="panelHero">FSD Approved Improvements</div><div class="panelSub">Driving profile while Clear DCAS is on. Max offset while it is off. Distraction warnings follow the car until you change them. Sends only while Autopilot is active.</div>
+<section class="card"><div class="labControlRow"><div><div class="labControlTitle">Send max offset</div><div class="labControlSub">Used while Clear DCAS is off</div></div><label class="toggle"><input aria-label="Send max offset" id="maxOffsetToggle" type="checkbox" disabled/><span class="track"></span></label></div><div class="labControlRow"><div><div class="labControlTitle">Max offset %</div><div class="labControlSub">0, 5 or 10</div></div><select aria-label="Max offset percent" class="selectArrow labSelect" id="maxOffsetPercent" disabled><option value="0">0%</option><option value="5">5%</option><option selected value="10">10%</option></select></div><div class="labControlRow"><div><div class="labControlTitle">Clear DCAS behavior</div><div class="labControlSub">On: driving profile. Off: max offset.</div></div><label class="toggle"><input aria-label="Clear DCAS behavior" id="dcasToggle" type="checkbox" checked disabled/><span class="track"></span></label></div><div class="labControlRow"><div><div class="labControlTitle">Driving profile</div><div class="labControlSub">Used while Clear DCAS is on · Stock sends nothing</div></div><select aria-label="Driving profile" class="selectArrow labSelect" id="drivingProfile" disabled><option selected value="255">Stock</option><option value="0">Chill</option><option value="1">Normal</option><option value="2">Assertive</option><option value="3">Mad Max</option><option value="4">Conservative</option></select></div><div class="labControlRow"><div><div class="labControlTitle">Distraction warnings</div><div class="labControlSub">UI_applyADDWWarnings · Stock leaves the car bit</div></div><select aria-label="Distraction warnings" class="selectArrow labSelect" id="addwMode" disabled><option selected value="255">Stock</option><option value="0">Warnings off</option><option value="1">Warnings on</option></select></div><div class="body"><div class="r"><span class="rk2">Request state</span><span id="maxOffsetState">—</span></div><div class="r"><span class="rk2">CAN B stock → target</span><span id="maxOffsetCanB">—</span></div><div class="r"><span class="rk2">CAN A stock → target</span><span id="maxOffsetCanA">—</span></div><div class="r"><span class="rk2">Mux 2 TX OK / FAIL</span><span id="maxOffsetTx">0 / 0</span></div><div class="r"><span class="rk2">DCAS</span><span id="dcasState">—</span></div><div class="r"><span class="rk2">Driving profile</span><span id="drivingProfileState">—</span></div><div class="r"><span class="rk2">DCAS TX OK / FAIL</span><span id="dcasTx">0 / 0</span></div><div class="r"><span class="rk2">FSD country</span><span id="fsdCountryState">Waiting for country</span></div><div class="r"><span class="rk2">ADDW request</span><span id="addwState">—</span></div><div class="r"><span class="rk2">ADDW TX OK / FAIL</span><span id="addwTx">0 / 0</span></div><div class="r"><span class="rk2">Driver monitor</span><span id="appDmState">—</span></div></div><div class="softNote">Max offset is sent only while Clear DCAS is off and Autopilot is active. Presets are 0, 5 and 10. With Clear DCAS on, the percent is left as the car set it.</div><div class="softNote">Clear DCAS stays quiet until Autopilot is already active, then each stock mux 0 frame has UI_applyDCASBehavior (bit 60) set to 0. That is the mode in which the driving profile is applied. Leave it off to use max offset instead. The legacy bit stays as the car sent it.</div><div class="softNote">With Clear DCAS on, a profile other than Stock is written to mux 2 bits 60–62 once Autopilot is active: Chill, Normal, Assertive, Mad Max, Conservative. It is not sent before Autopilot, and it is not sent while Clear DCAS is off.</div><div class="softNote">Distraction warnings follow the car until you pick off or on. While Autopilot is active the corrected frame is repeated about every 50 ms, so the car's own mux 0 frame does not stay the latest. The driver-monitor line is the Autopilot computer report. It is not written.</div><div class="softNote" id="maxOffsetSaveState" role="status">Loading saved settings…</div></section>
+</div></section>
+<section class="panel" id="panelCountry"><div class="panelin"><div class="paneltop"><button aria-label="Back" class="backbtn"><svg aria-hidden="true" class="backIcon" viewbox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button><div class="paneltitle">Settings</div></div><div class="panelHero">Country / Map</div><div class="panelSub" id="countryOverridePanelSub">All vehicle profiles with a valid CAN topology. Overrides follow fresh stock frames on the same bus while R79 is ACTIVE. Vehicle behavior remains unverified.</div>
 <section class="card">
 <div class="labControlRow"><div><div class="labControlTitle">Country preset</div><div class="labControlSub">Applies while R79 is active</div></div><select aria-label="Country preset" class="selectArrow labSelect" id="countryOverrideMode" disabled><option value="0">STOCK</option><option value="1">US</option><option value="2">KOREA</option><option value="3">NEW ZEALAND</option></select></div>
 <div class="labControlRow"><div><div class="labControlTitle">Map region</div><div class="labControlSub">Choose the map region independently of country</div></div><select aria-label="Map region" class="selectArrow labSelect" id="countryMapMode" disabled><option value="0">STOCK</option><option value="1">US · 0</option><option value="2">KOREA · 7</option></select></div><div class="softNote" id="countryOverrideSaveState" role="status">Loading saved settings…</div>
@@ -1291,11 +1295,11 @@ function enabledSettingsResponse(s){if(!s||typeof s.enabled!=='boolean'||typeof 
 function toggleSettingsStatus(id,message){$(id).textContent=message==='Settings ready'||message==='Saved settings reloaded'?'':message}
 function countrySettingsResponse(s){if(!s||typeof s.countrySupported!=='boolean'||!Number.isInteger(s.countryMode)||s.countryMode<0||s.countryMode>3||!Number.isInteger(s.mapMode)||s.mapMode<0||s.mapMode>2)throw new Error('Settings unavailable');return s}
 const countryOverrideControl=createSettingsController({url:'/api/country/stats',validate:countrySettingsResponse,render:renderCountryOverrideLab,status:message=>$('countryOverrideSaveState').textContent=message,settle:()=>{$('countryOverrideMode').blur();$('countryMapMode').blur()}});
-function renderCountryOverrideLab(s){s=s||{};const raw=Number(s.countryMode),mode=raw===1||raw===2||raw===3?raw:0,mapRaw=Number(s.mapMode),map=mapRaw===1||mapRaw===2?mapRaw:0,name=['STOCK','US','KOREA','NEW ZEALAND'][mode],supported=s.countrySupported===true,gate=!countryOverrideControl.uncertain&&supported&&(mode!==0||map!==0)&&(s.gateAllowed===true||s.countryGateOpen===true),sel=$('countryOverrideMode'),mapSel=$('countryMapMode');if(!countryOverrideControl.saving){if(sel&&document.activeElement!==sel)sel.value=String(mode);if(mapSel&&document.activeElement!==mapSel)mapSel.value=String(map)}if(sel)sel.disabled=countryOverrideControl.saving||countryOverrideControl.uncertain||!supported;if(mapSel)mapSel.disabled=countryOverrideControl.saving||countryOverrideControl.uncertain||!supported;$('countryOverrideRowState').textContent=(mode===3?'NZ':name)+' / '+['STOCK','US 0','KR 7'][map];$('countryOverrideGate').textContent=countryOverrideControl.uncertain?'UNAVAILABLE':!supported?'UNSUPPORTED':mode===0&&map===0?'OFF · STOCK':gate?'OPEN · R79 ACTIVE':'BLOCKED';$('countryOverrideGate').className='labValueV '+(gate?'good':mode||map?'warn':'');$('countryOverrideRx').textContent=(s.countryRx238||0)+' / '+(s.countryRx7ffA||0)+' / '+(s.countryRx7ffB||0);$('countryOverrideBlocked').textContent=s.countryBlocked||0;$('countryOverrideTx').textContent=(s.countryTxOk||0)+' / '+(s.countryTxFail||0);const bus=Number(s.countryLastBus)===1?'CAN A'+(s.countryCanAName?' · '+s.countryCanAName:''):Number(s.countryLastBus)===2?'CAN B'+(s.countryCanBName?' · '+s.countryCanBName:''):'UNKNOWN BUS',id=Number(s.countryLastId)===0x238?'0x238':'0x7FF',page=Number(s.countryLastPage)>=0?(' · PAGE '+s.countryLastPage):'',result=s.countryLastResult||'NONE';$('countryOverrideLast').textContent=s.countryLastValid?(result+' · '+bus+' · '+id+page+' · '+(s.countryLastRaw||'—')+' · '+fmtMs(s.countryLastAgeMs)):'—';const stock=!!s.r79StockValid;$('countryR79StockBit19').textContent=stock?String(Number(s.r79StockBit19)?1:0):'—';$('countryR79StockBit47').textContent=stock?String(Number(s.r79StockBit47)?1:0):'—';$('countryR79StockMeta').textContent=stock?('VALID · '+fmtMs(s.r79StockAgeMs)+' · RX '+(s.r79StockRx||0)):'WAITING FOR 0x3FD MUX1';$('countryR79StockRaw').textContent=stock?(s.r79StockRaw||'—'):'—'}
+function renderCountryOverrideLab(s){s=s||{};const raw=Number(s.countryMode),mode=raw===1||raw===2||raw===3?raw:0,mapRaw=Number(s.mapMode),map=mapRaw===1||mapRaw===2?mapRaw:0,name=['STOCK','US','KOREA','NEW ZEALAND'][mode],supported=s.countrySupported===true,gate=!countryOverrideControl.uncertain&&supported&&(mode!==0||map!==0)&&(s.gateAllowed===true||s.countryGateOpen===true),sel=$('countryOverrideMode'),mapSel=$('countryMapMode');if(!countryOverrideControl.saving){if(sel&&document.activeElement!==sel)sel.value=String(mode);if(mapSel&&document.activeElement!==mapSel)mapSel.value=String(map)}const held=!!(s.fsdCountry&&s.fsdCountry.approved===true);if(sel)sel.disabled=held||countryOverrideControl.saving||countryOverrideControl.uncertain||!supported;if(mapSel)mapSel.disabled=held||countryOverrideControl.saving||countryOverrideControl.uncertain||!supported;$('countryOverrideRowState').textContent=held?'FSD COUNTRY':(mode===3?'NZ':name)+' / '+['STOCK','US 0','KR 7'][map];const countrySub=$('countryOverridePanelSub');if(countrySub)countrySub.textContent=held?'This car stock country is FSD-approved, so country and map overrides are not sent.':'All vehicle profiles with a valid CAN topology. Overrides follow fresh stock frames on the same bus while R79 is ACTIVE. Vehicle behavior remains unverified.';$('countryOverrideGate').textContent=countryOverrideControl.uncertain?'UNAVAILABLE':!supported?'UNSUPPORTED':held?'HELD · FSD COUNTRY':mode===0&&map===0?'OFF · STOCK':gate?'OPEN · R79 ACTIVE':'BLOCKED';$('countryOverrideGate').className='labValueV '+(held?'warn':gate?'good':mode||map?'warn':'');$('countryOverrideRx').textContent=(s.countryRx238||0)+' / '+(s.countryRx7ffA||0)+' / '+(s.countryRx7ffB||0);$('countryOverrideBlocked').textContent=s.countryBlocked||0;$('countryOverrideTx').textContent=(s.countryTxOk||0)+' / '+(s.countryTxFail||0);const bus=Number(s.countryLastBus)===1?'CAN A'+(s.countryCanAName?' · '+s.countryCanAName:''):Number(s.countryLastBus)===2?'CAN B'+(s.countryCanBName?' · '+s.countryCanBName:''):'UNKNOWN BUS',id=Number(s.countryLastId)===0x238?'0x238':'0x7FF',page=Number(s.countryLastPage)>=0?(' · PAGE '+s.countryLastPage):'',result=s.countryLastResult||'NONE';$('countryOverrideLast').textContent=s.countryLastValid?(result+' · '+bus+' · '+id+page+' · '+(s.countryLastRaw||'—')+' · '+fmtMs(s.countryLastAgeMs)):'—';const stock=!!s.r79StockValid;$('countryR79StockBit19').textContent=stock?String(Number(s.r79StockBit19)?1:0):'—';$('countryR79StockBit47').textContent=stock?String(Number(s.r79StockBit47)?1:0):'—';$('countryR79StockMeta').textContent=stock?('VALID · '+fmtMs(s.r79StockAgeMs)+' · RX '+(s.r79StockRx||0)):'WAITING FOR 0x3FD MUX1';$('countryR79StockRaw').textContent=stock?(s.r79StockRaw||'—'):'—'}
 async function fetchCountryOverrideLab(){await countryOverrideControl.refresh()}
 async function updateCountryOverrideMode(key='countryMode'){
   const state=countryOverrideControl;
-  if(state.saving||state.uncertain||!state.saved||state.saved.countrySupported!==true){renderCountryOverrideLab(state.saved);return}
+  if(state.saving||state.uncertain||!state.saved||state.saved.countrySupported!==true||(state.saved.fsdCountry&&state.saved.fsdCountry.approved===true)){renderCountryOverrideLab(state.saved);return}
   if(key!=='countryMode'&&key!=='mapMode')return;
   const sel=$(key==='mapMode'?'countryMapMode':'countryOverrideMode'),value=Number(sel.value);
   if(!Number.isInteger(value)||value<0||value>(key==='mapMode'?2:3))return;
@@ -1303,13 +1307,15 @@ async function updateCountryOverrideMode(key='countryMode'){
 }
 const driverMonitoringControl=createSettingsController({url:'/api/driver-monitoring/config',validate:enabledSettingsResponse,render:renderDriverMonitoringControl,status:message=>toggleSettingsStatus('driverMonitoringSaveState',message)});
 function renderDriverMonitoringControl(s){
-  const toggle=$('driverMonitoringToggle');toggle.checked=s?.enabled===true;toggle.disabled=driverMonitoringControl.saving||driverMonitoringControl.uncertain||s?.supported!==true;
-  $('driverMonitoringDesc').textContent="Request cabin-camera monitoring off during Autopilot.";
+  const held=s?.fsdCountry?.approved===true;
+  const toggle=$('driverMonitoringToggle');toggle.checked=held?false:s?.enabled===true;toggle.disabled=held||driverMonitoringControl.saving||driverMonitoringControl.uncertain||s?.supported!==true;
+  $('driverMonitoringDesc').textContent=held?"Held off on an FSD-approved car. Cabin-camera monitoring stays as the car set it.":"Request cabin-camera monitoring off during Autopilot.";
+  noteFsdCountry(s?.fsdCountry);
 }
 async function fetchDriverMonitoringControl(){await driverMonitoringControl.refresh()}
 async function updateDriverMonitoringControl(){
   const state=driverMonitoringControl;
-  if(state.saving||state.uncertain||state.saved?.supported!==true){renderDriverMonitoringControl(state.saved);return}
+  if(state.saving||state.uncertain||state.saved?.supported!==true||state.saved?.fsdCountry?.approved===true){renderDriverMonitoringControl(state.saved);return}
   const enabled=$('driverMonitoringToggle').checked;
   await state.save('/api/driver-monitoring/config?enabled='+(enabled?1:0));
 }
@@ -1373,6 +1379,92 @@ async function updateVisionControlLab(key='disabled'){
   try{visionControlSaved=await featurePostJson('/api/vision-control/update?'+key+'='+value);$('visionControlSaveState').textContent='Settings ready'}catch(e){try{visionControlSaved=await jget('/api/vision-control/stats')}catch(x){}$('visionControlSaveState').textContent='Save failed · restored saved settings'}finally{visionControlSaving=false;visionControlEpoch++;renderVisionControlLab(visionControlSaved)}
 }
 $('visionControlDisableToggle').onchange=()=>updateVisionControlLab('disabled');$('visionControlBus').onchange=()=>updateVisionControlLab('bus');
+let maxOffsetSaved=null,maxOffsetSaving=false,maxOffsetEpoch=0;
+function drivingProfileName(value){return {0:'Chill',1:'Normal',2:'Assertive',3:'Mad Max',4:'Conservative'}[Number(value)]||''}
+function maxOffsetRowLabel(s){
+  if(!s)return 'OFF';
+  if(s.dcasClear===true){const profile=drivingProfileName(s.profile);return profile?('Profile · '+profile):'Profile'}
+  if(s.enabled===true){const p=[0,5,10].includes(Number(s.percent))?Number(s.percent):10;return p+'%'}
+  return 'OFF';
+}
+let fsdCountryVerdict=0;
+function fsdCountryStatusText(fsd){
+  const verdict=Number(fsd&&fsd.verdict);
+  if(verdict!==1&&verdict!==2)return '';
+  const letters=fsd.letters?String(fsd.letters):'';
+  const code=Number(fsd.code);
+  const id=[letters,Number.isInteger(code)&&code>=0?String(code):''].filter(Boolean).join(' ');
+  return (verdict===2?'FSD country':'Not an FSD country')+(id?' · '+id:'');
+}
+function noteFsdCountry(fsd){
+  if(!fsd||!Number.isInteger(Number(fsd.verdict)))return;
+  fsdCountryVerdict=Number(fsd.verdict);
+  const held=fsd.approved===true;
+  const desc=$('maxOffsetRowDesc');
+  if(desc){
+    const status=fsdCountryStatusText(fsd);
+    desc.textContent=status?('Driving profile, max offset, and distraction warnings. '+status):'Driving profile, max offset, and distraction warnings.';
+  }
+  const fsdDesc=document.querySelector('#fsdLabSection .listdesc');
+  if(fsdDesc)fsdDesc.textContent=held?'Held off on an FSD-approved car.':'Experimental';
+  const echo=$('fsdEnableEcho');
+  if(held&&echo){echo.disabled=true;echo.checked=false}
+  if(!held)return;
+  const dm=$('driverMonitoringToggle');
+  if(dm){dm.disabled=true;dm.checked=false}
+  $('driverMonitoringDesc').textContent='Held off on an FSD-approved car. Cabin-camera monitoring stays as the car set it.';
+  const countryDesc=document.querySelector('#countryOverrideSettingsRow .listdesc');
+  if(countryDesc)countryDesc.textContent='Held off. This car stock country is FSD-approved.';
+  $('countryOverrideRowState').textContent='FSD COUNTRY';
+}
+function appDmLabel(dm){
+  if(!dm||dm.valid!==true)return 'Waiting for 0x3AB';
+  const addw=['inactive','active','warn','faulted'][Number(dm.addwStatus)]||'—';
+  const src=['torque','selfie','torque + selfie','torque, ignore selfie','','','','SNA'][Number(dm.handsSource)]||String(dm.handsSource);
+  const age=Number(dm.ageMs);
+  return 'ADDW '+addw+' · attention '+(Number(dm.attnOn)?'on':'off')+' · hands '+(Number(dm.handsOn)?'on':'off')+' · '+src+(Number.isFinite(age)&&age<999999?' · '+fmtMs(age):'');
+}
+function lastSeenPair(s,field){
+  const one=bus=>{const n=Number(bus&&bus[field]);return Number.isFinite(n)&&n>=0?String(n):'—'};
+  return 'B '+one(s&&s.canB)+' · A '+one(s&&s.canA);
+}
+function renderMaxOffset(s){
+  if(!s)return;const available=s.supported===true,enabled=s.enabled===true,dcas=s.dcasClear===true,percent=[0,5,10].includes(Number(s.percent))?Number(s.percent):10,profile=[0,1,2,3,4,255].includes(Number(s.profile))?Number(s.profile):255,addw=[0,1,255].includes(Number(s.addw))?Number(s.addw):255,gate=!dcas&&enabled&&available&&(s.canA?.gateOpen===true||s.canB?.gateOpen===true);
+  $('maxOffsetToggle').disabled=maxOffsetSaving||!available||dcas;$('maxOffsetPercent').disabled=maxOffsetSaving||!available||dcas;$('dcasToggle').disabled=maxOffsetSaving||!available;$('drivingProfile').disabled=maxOffsetSaving||!available||!dcas;$('addwMode').disabled=maxOffsetSaving||!available;
+  if(!maxOffsetSaving){$('maxOffsetToggle').checked=enabled;$('maxOffsetPercent').value=String(percent);$('dcasToggle').checked=dcas;$('drivingProfile').value=String(profile);$('addwMode').value=String(addw)}
+  $('maxOffsetRowState').textContent=maxOffsetRowLabel(s);
+  $('maxOffsetState').textContent=!available?'UNSUPPORTED':s.state==='IGNORED'?'Not used while DCAS clear is on':!enabled?'OFF · STOCK':s.state==='LISTEN_ONLY'?'Listen-only · not sending':s.state==='WAIT_AP'?'Waiting for Autopilot':gate?'SENDING · each stock frame':'BLOCKED';
+  const busLine=(name,bus)=>{const valid=bus&&bus.valid===true,stock=Number(bus&&bus.stockPercent),age=Number(bus&&bus.rxAgeMs);return name+' '+(valid?stock:'—')+' → '+(valid?percent:'—')+' · '+(valid&&Number.isFinite(age)&&age<999999?fmtMs(age):'—')};
+  $('maxOffsetCanB').textContent=busLine('B',s.canB);$('maxOffsetCanA').textContent=busLine('A',s.canA);
+  $('maxOffsetTx').textContent=(s.txOk||0)+' / '+(s.txFail||0);
+  const dcasText=!available?'UNSUPPORTED':s.dcasState==='CLEARING'?'CLEARING · each mux 0 frame':s.dcasState==='WAIT_AP'?'Waiting for Autopilot':s.dcasState==='LISTEN_ONLY'?'Listen-only · not sending':s.dcasState==='OFF'?'OFF · stock bit stays':(s.dcasState||'—');
+  $('dcasState').textContent=dcasText+' · last '+lastSeenPair(s,'stockDcas');
+  const profileText=!available?'UNSUPPORTED':s.profileState==='IGNORED'?'Not used while DCAS clear is off':s.profileState==='SENDING'?((drivingProfileName(profile)||'Profile')+' · each mux 2 frame'):s.profileState==='WAIT_AP'?'Waiting for Autopilot':s.profileState==='LISTEN_ONLY'?'Listen-only · not sending':s.profileState==='STOCK'?'STOCK · not sending':(s.profileState||'—');
+  $('drivingProfileState').textContent=profileText+' · last '+lastSeenPair(s,'stockProfile');
+  $('dcasTx').textContent=(s.dcasTxOk||0)+' / '+(s.dcasTxFail||0);
+  const addwText=!available?'UNSUPPORTED':s.addwState==='SENDING'?(addw===0?'Warnings off':'Warnings on')+' · repeated':s.addwState==='WAIT_AP'?'Waiting for Autopilot':s.addwState==='LISTEN_ONLY'?'Listen-only · not sending':s.addwState==='STOCK'?'STOCK · car bit stays':(s.addwState||'—');
+  $('addwState').textContent=addwText+' · last '+lastSeenPair(s,'stockAddw');
+  $('addwTx').textContent=(s.addwTxOk||0)+' / '+(s.addwTxFail||0);
+  $('fsdCountryState').textContent=fsdCountryStatusText(s.fsdCountry)||'Waiting for country';
+  $('appDmState').textContent=appDmLabel(s.driverMonitor);
+  noteFsdCountry(s.fsdCountry);
+}
+async function fetchMaxOffset(){const epoch=maxOffsetEpoch;try{const s=await jget('/api/max-offset/stats');if(epoch!==maxOffsetEpoch||maxOffsetSaving)return;maxOffsetSaved=s;renderMaxOffset(s);$('maxOffsetSaveState').textContent='Settings ready'}catch(e){if(!maxOffsetSaved)$('maxOffsetSaveState').textContent='Settings unavailable · retrying'}}
+async function updateMaxOffset(key){
+  if(maxOffsetSaving||!maxOffsetSaved||maxOffsetSaved.supported!==true){if(maxOffsetSaved)renderMaxOffset(maxOffsetSaved);return}
+  let value;
+  if(key==='percent')value=Number($('maxOffsetPercent').value);
+  else if(key==='profile')value=Number($('drivingProfile').value);
+  else if(key==='addw')value=Number($('addwMode').value);
+  else if(key==='dcas')value=$('dcasToggle').checked?1:0;
+  else value=$('maxOffsetToggle').checked?1:0;
+  if(key==='percent'&&![0,5,10].includes(value)){renderMaxOffset(maxOffsetSaved);return}
+  if(key==='profile'&&![0,1,2,3,4,255].includes(value)){renderMaxOffset(maxOffsetSaved);return}
+  if(key==='addw'&&![0,1,255].includes(value)){renderMaxOffset(maxOffsetSaved);return}
+  maxOffsetSaving=true;maxOffsetEpoch++;renderMaxOffset(maxOffsetSaved);$('maxOffsetSaveState').textContent='Saving…';
+  try{maxOffsetSaved=await featurePostJson('/api/max-offset/update?'+key+'='+value);$('maxOffsetSaveState').textContent='Settings ready'}catch(e){try{maxOffsetSaved=await jget('/api/max-offset/stats')}catch(x){}$('maxOffsetSaveState').textContent='Save failed · restored saved settings'}finally{maxOffsetSaving=false;maxOffsetEpoch++;renderMaxOffset(maxOffsetSaved)}
+}
+$('maxOffsetToggle').onchange=()=>updateMaxOffset('enabled');$('maxOffsetPercent').onchange=()=>updateMaxOffset('percent');$('dcasToggle').onchange=()=>updateMaxOffset('dcas');$('drivingProfile').onchange=()=>updateMaxOffset('profile');$('addwMode').onchange=()=>updateMaxOffset('addw');
 async function fetchAutoLaneChangeLab(){try{await fetchLab(await jget('/api/lab/auto-lane-change/stats'))}catch(e){}}
 async function toggleUlcNoConfirm(v){try{const r=await post('/api/ulc/update?confirm='+(v?1:0)),s=await r.json();if(!r.ok)throw new Error(s?.error||'blocked');await fetchLab(s);}catch(e){;fetchLab()}}
 async function updateUlcNoConfirmTiming(v){try{const r=await post('/api/ulc/update?timing='+(v?1:0)),s=await r.json();if(!r.ok)throw new Error(s?.error||'blocked');await fetchLab(s);}catch(e){;fetchLab()}}
@@ -1645,6 +1737,8 @@ function renderSettingsLite(s){
   $('sysFw').textContent=sys.fwVersion||'—';$('profileVersion').textContent='T-2CAN · '+(sys.fwVersion||'—');
   $('setBlinkDesc').textContent="Signal automatically for NOA lane changes.";
   const alcOn=Number(lab.alcMode)===2;syncChecks(['alcSettingsToggle'],alcOn);$('setAlcDesc').textContent="Off-Highway lane change";
+  const mo=s?.maxOffset||{};$('maxOffsetRowState').textContent=maxOffsetRowLabel(mo);
+  noteFsdCountry(s?.fsdCountry);
   const btOn=!!sx.bluetoothEnabled;$('wirelessDesc').textContent=(btOn?'Bluetooth ON':'Bluetooth OFF')+' · Auto Connect '+(sx.autoEnabled?'ON':'OFF');
 }
 let homeSlowLast=0;
@@ -1678,13 +1772,16 @@ $('serviceModeEnter').onclick=()=>sendServiceMode(true);
 
 
 let fsdLabBusy=false,fsdLabSeq=0,fsdLabState=null;
-function fsdLabStatusText(s){return s.apBlocked?'Paused · AP active':s.pauseOnAp?'Saved visualisation · pause during AP enabled':'Saved visualisation · no AP gate';}
+function fsdLabStatusText(s){if(s.fsdCountry&&s.fsdCountry.approved===true)return 'Held off on an FSD-approved car.';return s.apBlocked?'Paused · AP active':s.pauseOnAp?'Saved visualisation · pause during AP enabled':'Saved visualisation · no AP gate';}
 function renderFsdLab(s){
   fsdLabState=s;
+  const held=!!(s.fsdCountry&&s.fsdCountry.approved===true);
   const allowed=!!s.supported;
   $('fsdLabSection').classList.toggle('hiddenByProfile',!s.supported);
-  $('fsdEnableEcho').checked=!!s.enableEcho;
-  $('fsdEnableEcho').disabled=fsdLabBusy||!allowed;
+  $('fsdEnableEcho').checked=held?false:!!s.enableEcho;
+  $('fsdEnableEcho').disabled=fsdLabBusy||!allowed||held;
+  const fsdDesc=document.querySelector('#fsdLabSection .listdesc');
+  if(fsdDesc)fsdDesc.textContent=held?'Held off on an FSD-approved car.':'Experimental';
   $('fsdPauseOnAp').checked=!!s.pauseOnAp;
   $('fsdPauseOnAp').disabled=fsdLabBusy||!allowed;
   const raw=Number(s.enableOriginal),age=Number(s.enableAgeMs);
@@ -1699,6 +1796,8 @@ async function fetchFsdLab(){
 }
 async function updateFsdLab(key){
   if(fsdLabBusy)return;
+  const held=!!(fsdLabState&&fsdLabState.fsdCountry&&fsdLabState.fsdCountry.approved===true);
+  if(key==='enable'&&held&&$('fsdEnableEcho').checked){renderFsdLab(fsdLabState);$('fsdLabStatus').textContent='Held off on an FSD-approved car.';return}
   const enabled=key==='pauseOnAp'?$('fsdPauseOnAp').checked:$('fsdEnableEcho').checked,value=key==='pauseOnAp'?'0':'1';
   fsdLabBusy=true;fsdLabSeq++;
   for(const id of ['fsdEnableEcho','fsdPauseOnAp'])$(id).disabled=true;
@@ -2060,7 +2159,7 @@ setInterval(()=>{
   if(preheatSaved&&preheatSaved.packSeen===true)renderPreheatBms(preheatSaved);
 },3000);
 
-const pollLast={preheat:0,serviceMode:0,fsdLab:0,driverMonitoringRecovery:0,isaSuppressionRecovery:0,nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,homeSnap:0,settingsSnap:0,heartbeat:0};
+const pollLast={preheat:0,serviceMode:0,fsdLab:0,driverMonitoringRecovery:0,isaSuppressionRecovery:0,nag:0,blink:0,sum:0,sys:0,s3:0,ulc:0,autoLc:0,country:0,r79:0,humanLab:0,pedalMap:0,homeSnap:0,settingsSnap:0,heartbeat:0,maxOffset:0};
 function activePanelId(){return document.querySelector('.panel.show')?.id||''}
 function pollDue(k,ms,fn,now,force=false){if(force||now-pollLast[k]>=ms){pollLast[k]=now;fn()}}
 function pollTick(force=false){
@@ -2080,6 +2179,7 @@ function pollTick(force=false){
     else if(p==='panelFsdVisualisation')pollDue('fsdLab',1000,fetchFsdLab,now,force);
     else if(p==='panelContinuousAp')pollDue('continuousAp',800,fetchContinuousAp,now,force);
     else if(p==='panelVisionControl')pollDue('visionControl',800,fetchVisionControlLab,now,force);
+    else if(p==='panelMaxOffset')pollDue('maxOffset',800,fetchMaxOffset,now,force);
     else if(p==='panelR79ApControl')pollDue('r79ApControl',800,fetchR79ApControl,now,force);
     else if(p==='panelCountry')pollDue('country',800,fetchCountryOverrideLab,now,force);
     else if(p==='panelNagModeH')pollDue('humanLab',800,()=>fetchNagHumanLab(force),now,force);
@@ -2095,7 +2195,7 @@ function pollTick(force=false){
   }else if(currentPage==='devices'){
     pollDue('s3',900,fetchS3,now,force);
   }else{
-    if(force||!settingsLiteValid)pollDue('settingsSnap',500,fetchSettingsSnapshot,now,force);
+    if(force||!settingsLiteValid||fsdCountryVerdict===0)pollDue('settingsSnap',fsdCountryVerdict===0&&settingsLiteValid?2000:500,fetchSettingsSnapshot,now,force);
     else pollDue('heartbeat',3000,fetchHeartbeat,now,false);
     if(driverMonitoringControl.uncertain)pollDue('driverMonitoringRecovery',1500,fetchDriverMonitoringControl,now,false);
     if(isaSuppressionControl.uncertain)pollDue('isaSuppressionRecovery',1500,fetchIsaSuppressionControl,now,false);
