@@ -1,9 +1,11 @@
 #include "tesla_can_fields_pure.h"
 #include "max_offset_pure.h"
+#include "fsd_assist_pure.h"
 #include "vision_speed_control_pure.h"
 #pragma once
 
 static bool r79DmsApplyFinal(uint8_t *data);
+static bool fsdCountryApprovedSnapshot();
 
 // VEHICLE FEATURE LOGIC / R79 / SUMMON / ALC / VH RECORDER
 // Kept in the same translation unit to preserve proven runtime behavior.
@@ -272,6 +274,7 @@ static bool isaSuppressionControlActive() {
 }
 
 static bool r79DmsControlActive() {
+  if (fsdCountryApprovedSnapshot()) return false;
   bool apValid, apActive;
   nagApGateSnapshot(apValid, apActive);
   return driverMonitoringDisablePolicyActivePure(
@@ -1152,6 +1155,73 @@ static volatile uint8_t countryOverrideLastPage = 0xFF; // 0xFF = 0x238
 static volatile uint16_t countryOverrideLastId = 0;
 static volatile uint32_t countryOverrideLastMs = 0;
 static uint8_t countryOverrideLastRaw[8] = {};
+// Stock country, captured before a country-override rewrite. Fail open
+// until one of the two stock sources has been seen.
+static volatile bool fsdCountryNumericSeen = false;
+static volatile uint16_t fsdCountryNumeric = 0;
+static volatile bool fsdCountryLettersSeen = false;
+static volatile uint8_t fsdCountryLetter0 = 0;
+static volatile uint8_t fsdCountryLetter1 = 0;
+
+// countryOverrideMux is already held. Do not take it again.
+static void fsdCountryNote238Locked(const uint8_t *data, uint8_t len) {
+  const uint16_t code = countryOverrideRead238CountryPure(data, len);
+  if (code == 0u || code > 999u || code == 1023u) return;
+  fsdCountryNumeric = code;
+  fsdCountryNumericSeen = true;
+}
+
+static void fsdCountryNote7ffLocked(const uint8_t *data, uint8_t len) {
+  if (data == nullptr || len < 4u || data[0] != 0x01u) return;
+  if (data[2] < (uint8_t)'A' || data[2] > (uint8_t)'Z' ||
+      data[3] < (uint8_t)'A' || data[3] > (uint8_t)'Z') return;
+  fsdCountryLetter0 = data[2];
+  fsdCountryLetter1 = data[3];
+  fsdCountryLettersSeen = true;
+}
+
+static uint8_t fsdCountryVerdictSnapshot() {
+  bool numericSeen, lettersSeen;
+  uint16_t numeric;
+  uint8_t a, b;
+  portENTER_CRITICAL(&countryOverrideMux);
+  numericSeen = fsdCountryNumericSeen;
+  numeric = fsdCountryNumeric;
+  lettersSeen = fsdCountryLettersSeen;
+  a = fsdCountryLetter0;
+  b = fsdCountryLetter1;
+  portEXIT_CRITICAL(&countryOverrideMux);
+  return fsdCountryVerdictPure(numericSeen, numeric, lettersSeen, a, b);
+}
+
+static bool fsdCountryApprovedSnapshot() {
+  return fsdCountryVerdictSnapshot() == FSD_COUNTRY_APPROVED_PURE;
+}
+
+static void fsdCountryWriteJson(JsonWriterArduino &jw) {
+  bool numericSeen, lettersSeen;
+  uint16_t numeric;
+  uint8_t a, b;
+  portENTER_CRITICAL(&countryOverrideMux);
+  numericSeen = fsdCountryNumericSeen;
+  numeric = fsdCountryNumeric;
+  lettersSeen = fsdCountryLettersSeen;
+  a = fsdCountryLetter0;
+  b = fsdCountryLetter1;
+  portEXIT_CRITICAL(&countryOverrideMux);
+  const uint8_t verdict = fsdCountryVerdictPure(numericSeen, numeric, lettersSeen, a, b);
+  char letters[3] = {};
+  if (lettersSeen) {
+    letters[0] = (char)a;
+    letters[1] = (char)b;
+  }
+  jw.beginObject("fsdCountry");
+  jw.u32("verdict", verdict);
+  jw.boolean("approved", verdict == FSD_COUNTRY_APPROVED_PURE);
+  jw.i32("code", numericSeen ? (int32_t)numeric : -1);
+  jw.string("letters", letters);
+  jw.endObject();
+}
 
 static bool countryOverrideSetModeWithBarrier(uint8_t mode, uint8_t mapMode = 0xFFu) {
   if (!countryOverrideModeValidPure(mode) ||
@@ -1205,7 +1275,23 @@ static volatile bool maxOffsetEnabledState = false;
 static volatile uint8_t maxOffsetPercentState = MAX_OFFSET_DEFAULT_PERCENT_PURE;
 static volatile bool dcasClearEnabledState = true;
 static volatile uint8_t drivingProfileState = DRIVING_PROFILE_STOCK_PURE;
+static volatile uint8_t addwModeState = ADDW_WARNINGS_STOCK_PURE;
 static volatile int8_t dcasStockBit[2] = {-1, -1};
+static volatile int8_t addwStockBit[2] = {-1, -1};
+static volatile uint32_t addwTxOk = 0u, addwTxFail = 0u;
+// Last composed mux 0 clone per bus. The repeater sends this, not a fresh
+// copy of the car's frame. Chassis copies are taken after FSD compose.
+struct AddwRepeatSlot {
+  uint8_t raw[8];
+  uint32_t stockMs;
+  uint32_t lastTxMs;
+  bool valid;
+};
+static AddwRepeatSlot addwRepeatSlot[2] = {};
+static uint8_t appDmRaw[4] = {};
+static volatile bool appDmValid = false;
+static volatile uint32_t appDmLastMs = 0u;
+static volatile uint32_t appDmRx = 0u;
 static MaxOffsetStockPure maxOffsetStock[2] = {};
 static volatile uint32_t maxOffsetTxOk = 0u, maxOffsetTxFail = 0u;
 static volatile uint32_t dcasTxOk = 0u, dcasTxFail = 0u;
@@ -1261,10 +1347,14 @@ static bool fsdLabObserveStock(const twai_message_t &frame) {
   signal.rx++;
   const bool enabled = signal.enabled;
   portEXIT_CRITICAL(&fsdLabMux);
+  // A saved visualisation must not transmit on an FSD-approved car.
+  // The stock value is already recorded above.
+  if (fsdCountryApprovedSnapshot()) return false;
   return labMenuEnabled && enabled && !fsdLabApBlocked();
 }
 // Called only under the TX barrier: disabling a toggle cancels future echoes.
 static bool fsdLabComposeLocked(twai_message_t &frame) {
+  if (fsdCountryApprovedSnapshot()) return false;
   const int index = fsdLabFrameIndex(frame);
   if (index < 0 || !fsdLabSupported() || !labMenuEnabled) return false;
   portENTER_CRITICAL(&fsdLabMux);
@@ -1284,7 +1374,12 @@ static void fsdLabRecordTx(uint8_t index, esp_err_t err) {
 }
 static bool fsdLabApply(uint8_t index, bool enabled, uint8_t value) {
   if (index > 1u || value > (index == 0u ? 1u : 2u) || !canTxBarrierMutex) return false;
+  if (enabled && fsdCountryApprovedSnapshot()) return false;
   if (xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (enabled && fsdCountryApprovedSnapshot()) {
+    xSemaphoreGive(canTxBarrierMutex);
+    return false;
+  }
   bool allowed = !enabled || (fsdLabSupported() && labMenuEnabled);
   if (allowed && index == 0u) allowed = fsdLabPersistVisualisation(enabled, value);
   if (allowed) {
@@ -1304,6 +1399,12 @@ static bool fsdLabToggleFromButton(bool visualisationOnly = false) {
   const bool enabled = !(fsdLabSignals[0].enabled ||
       (!visualisationOnly && fsdLabSignals[1].enabled));
   portEXIT_CRITICAL(&fsdLabMux);
+  // The button stays available so an already-on visualisation can be turned
+  // off. Enabling it on an FSD-approved car is refused before NVS is written.
+  if (enabled && fsdCountryApprovedSnapshot()) {
+    xSemaphoreGive(canTxBarrierMutex);
+    return false;
+  }
   const bool allowed = (!enabled || (fsdLabSupported() && labMenuEnabled)) &&
       fsdLabPersistVisualisation(enabled, 1u);
   if (allowed) {
@@ -1369,6 +1470,23 @@ static uint8_t drivingProfileSnapshot() {
   portEXIT_CRITICAL(&r79LabMux);
   return profile;
 }
+static uint8_t addwModeSnapshot() {
+  portENTER_CRITICAL(&r79LabMux);
+  const uint8_t mode = addwModeState;
+  portEXIT_CRITICAL(&r79LabMux);
+  return mode;
+}
+// Same Autopilot gate as the DCAS clear. Stock mode never arms.
+static bool addwArmed(uint32_t now, uint8_t mode) {
+  if (canUsbPassive() || !maxOffsetSupported() || (mode != 0u && mode != 1u)) return false;
+  bool apValid; uint8_t apState; uint32_t apMs;
+  portENTER_CRITICAL(&stateMux);
+  apValid = dasAutopilotStateValid;
+  apState = dasAutopilotState4;
+  apMs = lastDASStatusMillis;
+  portEXIT_CRITICAL(&stateMux);
+  return dcasClearActivePure(true, apValid, apState, now, apMs);
+}
 static void maxOffsetCacheStock(uint8_t bus, const uint8_t *raw,
                                 uint32_t epoch, uint32_t receivedMs) {
   if (bus > 1u || !raw) return;
@@ -1392,9 +1510,11 @@ static void dcasRecordTx(bool ok) {
 }
 static void dcasNoteStock(uint8_t bus, const uint8_t *raw) {
   if (bus > 1u || !raw || readMuxID(raw) != 0u) return;
-  const int8_t bit = (int8_t)((raw[7] >> 4) & 1u);
+  const int8_t dcasBit = (int8_t)((raw[7] >> 4) & 1u);
+  const int8_t addwBit = addwWarningsReadPure(raw);
   portENTER_CRITICAL(&r79LabMux);
-  dcasStockBit[bus] = bit;
+  dcasStockBit[bus] = dcasBit;
+  addwStockBit[bus] = addwBit;
   portEXIT_CRITICAL(&r79LabMux);
 }
 static void maxOffsetCfgLoad() {
@@ -1403,6 +1523,7 @@ static void maxOffsetCfgLoad() {
   uint8_t percent = MAX_OFFSET_DEFAULT_PERCENT_PURE;
   bool dcas = true;
   uint8_t profile = DRIVING_PROFILE_STOCK_PURE;
+  uint8_t addw = ADDW_WARNINGS_STOCK_PURE;
   if (p.begin("labv3fd", true)) {
     if (p.isKey("maxoff")) {
       const uint16_t packed = p.getUShort("maxoff", 0u);
@@ -1420,6 +1541,10 @@ static void maxOffsetCfgLoad() {
       const uint8_t raw = p.getUChar("profile", DRIVING_PROFILE_STOCK_PURE);
       if (drivingProfileAllowedPure(raw)) profile = raw;
     }
+    if (p.isKey("addw")) {
+      const uint8_t raw = p.getUChar("addw", ADDW_WARNINGS_STOCK_PURE);
+      if (raw == 0u || raw == 1u) addw = raw;
+    }
     p.end();
   }
   portENTER_CRITICAL(&r79LabMux);
@@ -1427,6 +1552,7 @@ static void maxOffsetCfgLoad() {
   maxOffsetPercentState = percent;
   dcasClearEnabledState = dcas;
   drivingProfileState = profile;
+  addwModeState = addw;
   portEXIT_CRITICAL(&r79LabMux);
 }
 static bool maxOffsetApplySettings(bool enabled, uint8_t percent) {
@@ -1474,6 +1600,23 @@ static bool drivingProfileApplySettings(uint8_t profile) {
   if (saved) {
     portENTER_CRITICAL(&r79LabMux);
     drivingProfileState = profile;
+    portEXIT_CRITICAL(&r79LabMux);
+  }
+  xSemaphoreGive(canTxBarrierMutex);
+  return saved;
+}
+static bool addwApplySettings(uint8_t mode) {
+  if (mode != ADDW_WARNINGS_STOCK_PURE && mode != 0u && mode != 1u) return false;
+  if (!maxOffsetSupported()) return false;
+  if (!canTxBarrierMutex || xSemaphoreTake(canTxBarrierMutex, portMAX_DELAY) != pdTRUE) return false;
+  if (!maxOffsetSupported()) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  Preferences p;
+  if (!p.begin("labv3fd", false)) { xSemaphoreGive(canTxBarrierMutex); return false; }
+  const bool saved = p.putUChar("addw", mode) == sizeof(uint8_t);
+  p.end();
+  if (saved) {
+    portENTER_CRITICAL(&r79LabMux);
+    addwModeState = mode;
     portEXIT_CRITICAL(&r79LabMux);
   }
   xSemaphoreGive(canTxBarrierMutex);
@@ -1600,17 +1743,99 @@ static bool dcasPrepareMux0(twai_message_t &out, uint32_t now) {
   if (!dcasClearArmed(now) || out.data_length_code != 8u) return false;
   return dcasBehaviorClearPure(out.data, out.data_length_code);
 }
+static void addwRecordTx(bool ok) {
+  portENTER_CRITICAL(&r79LabMux);
+  if (ok) ++addwTxOk; else ++addwTxFail;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+// Remember the composed clone. lastTxMs stays put: an echoed copy of our own
+// frame must not look like a fresh send, or the bus fills with clones.
+static void addwStoreClone(uint8_t bus, const uint8_t *payload, uint32_t now) {
+  if (bus > 1u || !payload) return;
+  portENTER_CRITICAL(&r79LabMux);
+  AddwRepeatSlot &slot = addwRepeatSlot[bus];
+  memcpy(slot.raw, payload, 8u);
+  slot.stockMs = now;
+  slot.valid = true;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+static void addwMarkTx(uint8_t bus, uint32_t now) {
+  if (bus > 1u) return;
+  portENTER_CRITICAL(&r79LabMux);
+  addwRepeatSlot[bus].lastTxMs = now;
+  portEXIT_CRITICAL(&r79LabMux);
+}
+static bool addwCloneDue(uint8_t bus, uint32_t now) {
+  if (bus > 1u) return false;
+  portENTER_CRITICAL(&r79LabMux);
+  const AddwRepeatSlot &slot = addwRepeatSlot[bus];
+  const bool due = addwRepeatDuePure(slot.valid, now, slot.stockMs, slot.lastTxMs);
+  portEXIT_CRITICAL(&r79LabMux);
+  return due;
+}
+static void appDriverMonitorObserve(const uint8_t *data, uint8_t dlc, uint32_t now) {
+  if (!data || dlc < 4u) return;
+  portENTER_CRITICAL(&r79LabMux);
+  memcpy(appDmRaw, data, 4u);
+  appDmValid = true;
+  appDmLastMs = now;
+  ++appDmRx;
+  portEXIT_CRITICAL(&r79LabMux);
+}
 static void dcasObserveParty(const struct can_frame &src, uint32_t txEpoch, uint32_t receivedMs) {
   (void)receivedMs;
   if ((src.can_id & 0xC0000000UL) != 0u || (src.can_id & 0x7FFu) != 0x3FDu ||
       src.can_dlc != 8u || readMuxID(src.data) != 0u || activeProfileIsModelS2017()) return;
   dcasNoteStock(1u, src.data);
-  if (!dcasClearArmed((uint32_t)millis())) return;
+  const uint32_t now = (uint32_t)millis();
+  const uint8_t addwMode = addwModeSnapshot();
+  const bool clearDcas = dcasClearArmed(now);
+  const bool writeAddw = addwArmed(now, addwMode);
+  if (!clearDcas && !writeAddw) return;
   uint8_t payload[8];
   memcpy(payload, src.data, 8u);
-  if (!dcasBehaviorClearPure(payload, 8u)) return;
+  const bool dcasChanged = clearDcas && dcasBehaviorClearPure(payload, 8u);
+  const bool addwChanged = writeAddw && addwWarningsApplyPure(payload, 8u, addwMode);
+  if (writeAddw) addwStoreClone(1u, payload, now);
+  // A matching bit still needs a clone, but not on every echo of our own
+  // frame. The interval keeps the correction newer than the car's frame.
+  const bool addwDue = writeAddw && addwCloneDue(1u, now);
+  if (!dcasChanged && !addwChanged && !addwDue) return;
+  if (writeAddw) addwMarkTx(1u, now);
   bool ok = false;
-  if (ui3fdTransmit(1u, payload, txEpoch, ok)) dcasRecordTx(ok);
+  if (ui3fdTransmit(1u, payload, txEpoch, ok)) {
+    if (dcasChanged) dcasRecordTx(ok);
+    if (writeAddw) addwRecordTx(ok);
+  }
+}
+// Chassis calls this for bus 0 and the party task for bus 1. One call per
+// bus, from the task that transmits on that bus. The repeater re-stamps only
+// the distraction-warning bit. It does not clear the car's own FSD bit.
+static void addwRepeatTick(uint8_t bus) {
+  if (bus > 1u) return;
+  const uint32_t now = (uint32_t)millis();
+  const uint8_t mode = addwModeSnapshot();
+  if (!addwArmed(now, mode)) return;
+  uint8_t payload[8];
+  portENTER_CRITICAL(&r79LabMux);
+  AddwRepeatSlot &slot = addwRepeatSlot[bus];
+  const bool due = addwRepeatDuePure(slot.valid, now, slot.stockMs, slot.lastTxMs);
+  if (due) {
+    memcpy(payload, slot.raw, 8u);
+    slot.lastTxMs = now;
+  }
+  portEXIT_CRITICAL(&r79LabMux);
+  if (!due) return;
+  if ((payload[0] & 7u) != 0u) return;
+  if (addwWarningsApplyPure(payload, 8u, mode)) {
+    portENTER_CRITICAL(&r79LabMux);
+    memcpy(addwRepeatSlot[bus].raw, payload, 8u);
+    portEXIT_CRITICAL(&r79LabMux);
+  } else if (addwWarningsReadPure(payload) != (int8_t)mode) {
+    return;
+  }
+  bool ok = false;
+  if (ui3fdTransmit(bus, payload, canTxEpochSnapshot(), ok)) addwRecordTx(ok);
 }
 static void maxOffsetDescribeBus(const MaxOffsetStockPure &stock, bool ready, uint8_t mask,
                                  uint32_t now, uint32_t epoch, uint8_t freshMask, bool held,
@@ -1632,17 +1857,27 @@ static String getMaxOffsetStatsJson() {
     readyB = twaiReady; readyA = mcpReady; held = canTxAdministrativeHold;
     xSemaphoreGive(canTxBarrierMutex);
   }
-  bool enabled, dcasOn; uint8_t percent, profile;
-  int8_t dcasB = -1, dcasA = -1;
+  bool enabled, dcasOn; uint8_t percent, profile, addwMode;
+  int8_t dcasB = -1, dcasA = -1, addwB = -1, addwA = -1;
   MaxOffsetStockPure stockB = {}, stockA = {};
-  uint32_t txOk, txFail, dcasOk, dcasFail;
+  uint32_t txOk, txFail, dcasOk, dcasFail, addwOk, addwFail;
+  bool dmValid = false;
+  uint8_t dmRaw[4] = {};
+  uint32_t dmLast = 0u, dmRx = 0u;
   portENTER_CRITICAL(&r79LabMux);
   enabled = maxOffsetEnabledState; percent = maxOffsetPercentState;
   dcasOn = dcasClearEnabledState; profile = drivingProfileState;
+  addwMode = addwModeState;
   dcasB = dcasStockBit[0]; dcasA = dcasStockBit[1];
+  addwB = addwStockBit[0]; addwA = addwStockBit[1];
   stockB = maxOffsetStock[0]; stockA = maxOffsetStock[1];
   txOk = maxOffsetTxOk; txFail = maxOffsetTxFail;
   dcasOk = dcasTxOk; dcasFail = dcasTxFail;
+  addwOk = addwTxOk; addwFail = addwTxFail;
+  dmValid = appDmValid;
+  if (dmValid) memcpy(dmRaw, appDmRaw, sizeof(dmRaw));
+  dmLast = appDmLastMs;
+  dmRx = appDmRx;
   portEXIT_CRITICAL(&r79LabMux);
   bool apValid; uint8_t apState; uint32_t apMs;
   portENTER_CRITICAL(&stateMux);
@@ -1673,11 +1908,16 @@ static String getMaxOffsetStatsJson() {
       !profileSelected ? "STOCK" : listenOnly ? "LISTEN_ONLY" :
       !apFresh || !apActive ? "WAIT_AP" :
       (transportA || transportB) ? "SENDING" : "BLOCKED";
+  const bool addwSelected = addwMode == 0u || addwMode == 1u;
+  const char *addwStateName = !supported ? "UNSUPPORTED" : !addwSelected ? "STOCK" :
+      listenOnly ? "LISTEN_ONLY" : !apFresh || !apActive ? "WAIT_AP" :
+      (transportA || transportB) ? "SENDING" : "BLOCKED";
   const int32_t profileB = validB ? (int32_t)drivingProfileReadPure(stockB.raw) : -1;
   const int32_t profileA = validA ? (int32_t)drivingProfileReadPure(stockA.raw) : -1;
   String json; JsonWriterArduino jw(json);
   jw.boolean("enabled", enabled); jw.u32("percent", percent);
   jw.boolean("dcasClear", dcasOn); jw.u32("profile", profile);
+  jw.u32("addw", addwMode); jw.string("addwState", addwStateName);
   jw.boolean("supported", supported); jw.boolean("apActive", apActive);
   jw.boolean("apFresh", apFresh);
   jw.string("state", state);
@@ -1685,15 +1925,32 @@ static String getMaxOffsetStatsJson() {
   jw.string("profileState", profileState);
   jw.u32("txOk", txOk); jw.u32("txFail", txFail);
   jw.u32("dcasTxOk", dcasOk); jw.u32("dcasTxFail", dcasFail);
+  jw.u32("addwTxOk", addwOk); jw.u32("addwTxFail", addwFail);
   jw.beginObject("canB");
   jw.boolean("valid", validB); jw.i32("stockPercent", rawB);
   jw.i32("stockDcas", dcasB); jw.i32("stockProfile", profileB);
+  jw.i32("stockAddw", addwB);
   jw.boolean("gateOpen", gateB); jw.u32("rxAgeMs", ageB); jw.u32("rxCount", stockB.rx);
   jw.endObject();
   jw.beginObject("canA");
   jw.boolean("valid", validA); jw.i32("stockPercent", rawA);
   jw.i32("stockDcas", dcasA); jw.i32("stockProfile", profileA);
+  jw.i32("stockAddw", addwA);
   jw.boolean("gateOpen", gateA); jw.u32("rxAgeMs", ageA); jw.u32("rxCount", stockA.rx);
+  jw.endObject();
+  fsdCountryWriteJson(jw);
+  AppDmStatusPure dm = {};
+  const bool dmDecoded = dmValid && appDmStatusDecodePure(dmRaw, 4u, &dm);
+  jw.beginObject("driverMonitor");
+  jw.boolean("valid", dmDecoded);
+  jw.u32("ageMs", dmDecoded ? (uint32_t)(now - dmLast) : 999999UL);
+  jw.i32("addwStatus", dmDecoded ? (int32_t)dm.addwStatus : -1);
+  jw.i32("attnOn", dmDecoded ? (int32_t)dm.attnOn : -1);
+  jw.i32("handsOn", dmDecoded ? (int32_t)dm.handsOn : -1);
+  jw.i32("handsSource", dmDecoded ? (int32_t)dm.handsSource : -1);
+  jw.i32("handsNotReady", dmDecoded ? (int32_t)dm.handsNotReady : -1);
+  jw.i32("handsInputRequired", dmDecoded ? (int32_t)dm.handsInputRequired : -1);
+  jw.u32("rxCount", dmRx);
   jw.endObject();
   jw.finish();
   return json;
@@ -3934,7 +4191,9 @@ static void countryOverrideObserve238CanB(const twai_message_t &src, uint32_t tx
     const uint8_t mode = countryOverrideModeSnapshot();
     portENTER_CRITICAL(&countryOverrideMux);
     countryOverrideRx238++;
+    fsdCountryNote238Locked(src.data, src.data_length_code);
     portEXIT_CRITICAL(&countryOverrideMux);
+    if (fsdCountryApprovedSnapshot()) return;
     twai_message_t out = src;
     if (!countryOverrideApply238Pure(out.data, out.data_length_code, mode)) return;
     if (!countryOverrideGateOpen()) {
@@ -3974,7 +4233,9 @@ static void countryOverrideObserve7ffCanA(const struct can_frame &src, uint32_t 
     const uint8_t mode = countryOverrideModeSnapshot();
     portENTER_CRITICAL(&countryOverrideMux);
     countryOverrideRx7ffA++;
+    fsdCountryNote7ffLocked(src.data, src.can_dlc);
     portEXIT_CRITICAL(&countryOverrideMux);
+    if (fsdCountryApprovedSnapshot()) return;
     struct can_frame out = src;
     if (!countryOverrideApply7ffPure(out.data, out.can_dlc, mode, countryOverrideMapModeSnapshot())) return;
     if (!countryOverrideGateOpen()) {
@@ -4008,7 +4269,9 @@ static void countryOverrideObserve7ffCanB(const twai_message_t &src, uint32_t tx
     const uint8_t mode = countryOverrideModeSnapshot();
     portENTER_CRITICAL(&countryOverrideMux);
     countryOverrideRx7ffB++;
+    fsdCountryNote7ffLocked(src.data, src.data_length_code);
     portEXIT_CRITICAL(&countryOverrideMux);
+    if (fsdCountryApprovedSnapshot()) return;
     twai_message_t out = src;
     if (!countryOverrideApply7ffPure(out.data, out.data_length_code, mode, countryOverrideMapModeSnapshot())) return;
     if (!countryOverrideGateOpen()) {
@@ -4048,7 +4311,9 @@ static void countryOverrideObserve238CanA(const struct can_frame &src, uint32_t 
     const uint8_t mode = countryOverrideModeSnapshot();
     portENTER_CRITICAL(&countryOverrideMux);
     countryOverrideRx238++;
+    fsdCountryNote238Locked(src.data, src.can_dlc);
     portEXIT_CRITICAL(&countryOverrideMux);
+    if (fsdCountryApprovedSnapshot()) return;
     struct can_frame out = src;
     if (!countryOverrideApply238Pure(out.data, out.can_dlc, mode)) return;
     if (!countryOverrideGateOpen()) {
@@ -5486,18 +5751,41 @@ static void injectTLSSC(const twai_message_t &src) {
     }
 
     const bool dcasChanged = dcasPrepareMux0(out, now);
-    if (!tlsscTx && !fsdTx && !dcasChanged) return;
+    bool writeAddw = false;
+    bool addwChanged = false;
+    bool addwDue = false;
+    // Model S keeps the existing mux 0 path. The remembered template is the
+    // post-compose copy, so a 50 ms repeat does not clear visualisation on a
+    // car where that echo is allowed. An approved country makes compose a
+    // no-op, and the repeater does not clear the car's own bit 46.
+    if (!activeProfileIsModelS2017() && out.data_length_code == 8u) {
+      const uint8_t addwMode = addwModeSnapshot();
+      writeAddw = addwArmed(now, addwMode);
+      if (writeAddw)
+        addwChanged = addwWarningsApplyPure(out.data, out.data_length_code, addwMode);
+      if (writeAddw) {
+        twai_message_t composed = out;
+        fsdLabComposeLocked(composed);
+        addwStoreClone(0u, composed.data, now);
+        addwDue = addwCloneDue(0u, now);
+      }
+    }
+    if (!tlsscTx && !fsdTx && !dcasChanged && !addwChanged && !addwDue) return;
+    if (writeAddw) addwMarkTx(0u, now);
 
     // TLSSC is lower priority than Summon and must never block CAN B RX.
     if (!autopilotControlAdmissionOpen()) {
       if (tlsscTx) sumTxFail++;
       if (fsdTx) fsdLabRecordTx(0u, ESP_ERR_TIMEOUT);
       if (dcasChanged) dcasRecordTx(false);
+      if (writeAddw) addwRecordTx(false);
       return;
     }
     bool fsdApplied = false;
-    const esp_err_t err = tlsscTransmitGuarded(&out, txEpoch, tlsscTx, fsdApplied, dcasChanged);
+    const bool assistTx = dcasChanged || addwChanged || addwDue;
+    const esp_err_t err = tlsscTransmitGuarded(&out, txEpoch, tlsscTx, fsdApplied, assistTx);
     if (dcasChanged) dcasRecordTx(err == ESP_OK);
+    if (writeAddw) addwRecordTx(err == ESP_OK);
     if (fsdTx || fsdApplied) fsdLabRecordTx(0u, fsdApplied ? err : ESP_ERR_INVALID_STATE);
     if (!tlsscTx) return;
     portENTER_CRITICAL(&stateMux);

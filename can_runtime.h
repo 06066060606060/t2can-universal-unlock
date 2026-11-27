@@ -492,6 +492,8 @@ static void canTaskMcp(void* arg) {
         uiAutopilotMux2ObserveParty(rxf, countryRxEpoch, prefetchedRxMs[bi]);
         dcasObserveParty(rxf, countryRxEpoch, prefetchedRxMs[bi]);
       }
+      if (partyId == 0x3AB && rxf.can_dlc >= 4)
+        appDriverMonitorObserve(rxf.data, rxf.can_dlc, prefetchedRxMs[bi]);
       if (activeCanAIsParty()) {
         // Party CAN on CAN A: Nag Killer is topology-gated. Keep YL-only
         // DAS/Summon/visual-debug behavior explicitly model-gated so selecting
@@ -534,6 +536,7 @@ static void canTaskMcp(void* arg) {
                                      (uint32_t)millis());
     if (activeProfileIsModelS2017()) r79TransportTick();
     continuousApService(ContApRoute::BodyA);
+    addwRepeatTick(1u);
     tsl9InputServiceCanA();
 
     // ── STATUS CHECK / RECOVERY (1 Hz) ──
@@ -727,6 +730,10 @@ static void canTaskTwai(void* arg) {
         case 0x7FF:
           countryOverrideObserve7ffCanB(f, countryRxEpoch);
           break;
+        case 0x3AB:
+          if (f.data_length_code >= 4)
+            appDriverMonitorObserve(f.data, f.data_length_code, stockRxMs);
+          break;
 
         // 1016 (SPR) is read on CAN B for both models.
         case DRIVER_ASSIST_ID:
@@ -771,6 +778,7 @@ static void canTaskTwai(void* arg) {
     driverWindowLabServiceTick();
     preheatRuntimeTick();
     if (!activeProfileIsModelS2017()) r79TransportTick();
+    addwRepeatTick(0u);
     // R79 immediate/retry/periodic work always gets first access to the CAN-B
     // TX queue. TSL9 input assistance is intentionally lower priority.
     continuousApService(ContApRoute::ChassisB);
